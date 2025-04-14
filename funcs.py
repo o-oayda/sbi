@@ -2,18 +2,19 @@ import numpy as np
 import healpy as hp
 from scipy.stats import poisson
 import torch
+import emcee
+import dynesty
 
-def simulation(Theta):
-    nside = 64
-    Nbar = 50.0
+def simulation(Theta, Nbar=50.0, nside=64):
+    poisson_mean = dipole_signal(Theta, Nbar, nside)
+    return poisson.rvs(mu=poisson_mean)
+
+def dipole_signal(Theta, Nbar=50.0, nside=64):
     D, phi, theta = Theta
-
     pixel_indices = np.arange(hp.nside2npix(nside))
     pixel_vectors = hp.pix2vec(nside, pixel_indices)
     dipole_vector = D * hp.ang2vec(theta, phi)
     poisson_mean = Nbar * (1 + np.dot(dipole_vector, pixel_vectors))
-    # dmap = poisson.rvs(mu=poisson_mean)
-    print(poisson_mean)
     return poisson_mean
 
 class PolarPrior:
@@ -64,3 +65,86 @@ class PolarPrior:
             values = torch.as_tensor(values)
         log_probs = self.polar_logpdf(values)
         return log_probs.numpy() if self.return_numpy else log_probs
+    
+class Inference:
+    def __init__(self):
+        pass
+    
+    def run_mcmc(self, nwalkers=32, n_steps=2000, burn_in=100):
+        
+        def log_prob(Theta):
+            log_prior = self.log_prior_likelihood(Theta)
+            if not np.isfinite(log_prior):
+                return -np.inf
+            return log_prior + self.log_likelihood(Theta)        
+        
+        pos = np.zeros((nwalkers, self.ndim))
+        for i in range(0, nwalkers):
+            unifs = np.random.rand(self.ndim)
+            pos[i, :] = self.prior_transform(unifs)
+        
+        self.sampler = emcee.EnsembleSampler(nwalkers, self.ndim, log_prob)
+        self.sampler.run_mcmc(pos, n_steps, progress=True)
+        self.samples = self.sampler.get_chain(discard=burn_in, flat=True)
+
+    def run_dynesty(self,
+        sample_method: str = 'auto',
+        print_info: bool = True,
+        **kwargs
+    ):
+        '''Begin the nested sampling process and return the results upon
+        completion.'''
+        dsampler = dynesty.NestedSampler(
+            self.log_likelihood,
+            self.prior_transform,
+            **{
+                'ndim': self.ndim,
+               'sample': sample_method,
+               **kwargs
+            }
+        )
+        
+        dsampler.run_nested(print_progress=print_info)
+        self.model_evidence = dsampler.results.logz[-1]
+        print('Model evidence: {:.2f}'.format(self.model_evidence))
+        self.dresults = dsampler.results
+
+class DipolePoisson(Inference):
+    def __init__(self, density_map, amplitude_high=0.1, mean_count_high=100):
+        super().__init__()
+        self.amplitude_high = amplitude_high
+        self.mean_count_high = mean_count_high
+        self.density_map = density_map
+        self.ndim = 4
+    
+    def prior_transform(self, uTheta):
+        u_mean_count, u_amplitude, u_longitude, u_colatitude = uTheta
+        mean_count = self.mean_count_high * u_mean_count
+        amplitude = self.amplitude_high * u_amplitude
+        longitude = 2 * np.pi * u_longitude
+        latitude = np.arccos(1 - 2 * u_colatitude)
+        return mean_count, amplitude, longitude, latitude
+
+    def log_prior_likelihood(self, Theta):
+        mean_count, amplitude, longitude, latitude = Theta
+        conditions = [
+            0 < mean_count < self.mean_count_high,
+            0 < amplitude < self.amplitude_high,
+            0 < longitude < 2 * np.pi,
+            0 < latitude < np.pi
+        ]
+        if not all(conditions):
+            return -np.inf
+        else:        
+            P_mean_count = np.log( 1 / self.mean_count_high )
+            P_amplitude = np.log( 1 / self.amplitude_high )
+            P_longitude = np.log( 1 / (2 * np.pi) )
+            P_colatitude = np.log( 0.5 * np.sin(latitude) )
+            return P_mean_count + P_amplitude + P_longitude + P_colatitude
+    
+    def log_likelihood(self, Theta):
+        mean_count = Theta[0]
+        signal = dipole_signal(Theta[1:], Nbar=mean_count)
+        return np.sum(
+            poisson.logpmf(k=self.density_map, mu=signal)
+        )

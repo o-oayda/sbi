@@ -2,7 +2,7 @@
 import healpy as hp
 import numpy as np
 import matplotlib.pyplot as plt
-from funcs import simulation, PolarPrior
+from funcs import simulation, PolarPrior, DipolePoisson
 from sbi.inference import NPE, NLE, simulate_for_sbi
 from sbi.utils.user_input_checks import (
     check_sbi_inputs,
@@ -15,8 +15,8 @@ from sbi.analysis import pairplot
 from corner import corner
 # %%
 
-D = 0.5
-PHI = 3
+D = 0.05
+PHI =  5
 THETA = 1
 
 dmap = simulation([D, PHI, THETA])
@@ -30,7 +30,7 @@ prior_theta = BoxUniform(
     # theta_low=0 * torch.ones(1), theta_high=torch.pi * torch.ones(1)
 # )
 prior_d = BoxUniform(
-    low=0 * torch.ones(1), high=1 * torch.ones(1)
+    low=0 * torch.ones(1), high=0.1 * torch.ones(1)
 )
 prior_phi = BoxUniform(
     low=0 * torch.ones(1), high=2 * torch.pi * torch.ones(1)
