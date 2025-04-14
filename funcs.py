@@ -4,13 +4,20 @@ from scipy.stats import poisson
 import torch
 import emcee
 import dynesty
+from sbi.utils.user_input_checks import (
+    check_sbi_inputs,
+    process_prior,
+    process_simulator,
+)
+from sbi.utils import BoxUniform
+from sbi.inference import NPE, simulate_for_sbi
 
-def simulation(Theta, Nbar=50.0, nside=64):
-    poisson_mean = dipole_signal(Theta, Nbar, nside)
+def simulation(Theta, nside=64):
+    poisson_mean = dipole_signal(Theta, nside)
     return poisson.rvs(mu=poisson_mean)
 
-def dipole_signal(Theta, Nbar=50.0, nside=64):
-    D, phi, theta = Theta
+def dipole_signal(Theta, nside=64):
+    Nbar, D, phi, theta = Theta
     pixel_indices = np.arange(hp.nside2npix(nside))
     pixel_vectors = hp.pix2vec(nside, pixel_indices)
     dipole_vector = D * hp.ang2vec(theta, phi)
@@ -108,6 +115,44 @@ class Inference:
         self.model_evidence = dsampler.results.logz[-1]
         print('Model evidence: {:.2f}'.format(self.model_evidence))
         self.dresults = dsampler.results
+    
+    def run_sbi(self):
+        prior_nbar = BoxUniform(
+            low=0*torch.ones(1), high=100*torch.ones(1)
+        )
+        prior_d = BoxUniform(
+            low=0*torch.ones(1), high=0.1*torch.ones(1)
+        )
+        prior_phi = BoxUniform(
+            low=0*torch.ones(1), high=2*torch.pi*torch.ones(1)
+        )
+        prior_theta = PolarPrior(
+            theta_low=0*torch.ones(1), theta_high=torch.pi*torch.ones(1)
+        )
+        prior, num_parameters, prior_returns_numpy = process_prior(
+            [prior_nbar, prior_d, prior_phi, prior_theta],
+        )
+        
+        simulator = process_simulator(simulation, prior, prior_returns_numpy)
+        check_sbi_inputs(simulator, prior)
+        inference = NPE(prior=prior)
+
+        n_workers = 32
+        n_simulations = 2000
+        theta, x = simulate_for_sbi(
+            simulator,
+            proposal=prior, num_simulations=n_simulations, num_workers=n_workers,
+            show_progress_bar=True
+        )
+
+        inference = inference.append_simulations(theta, x)
+        density_estimator = inference.train()
+        posterior = inference.build_posterior(density_estimator)
+        print(posterior)
+
+        self.samples = posterior.sample(
+            (10000,), x=self.density_map
+        ).cpu().detach().numpy()
 
 class DipolePoisson(Inference):
     def __init__(self, density_map, amplitude_high=0.1, mean_count_high=100):
@@ -143,8 +188,7 @@ class DipolePoisson(Inference):
             return P_mean_count + P_amplitude + P_longitude + P_colatitude
     
     def log_likelihood(self, Theta):
-        mean_count = Theta[0]
-        signal = dipole_signal(Theta[1:], Nbar=mean_count)
+        signal = dipole_signal(Theta)
         return np.sum(
             poisson.logpmf(k=self.density_map, mu=signal)
         )
