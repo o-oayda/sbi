@@ -5,12 +5,18 @@ from scipy.stats import poisson as sp_poisson
 import torch
 import emcee
 import dynesty
+from sbi.neural_nets import posterior_nn
+from sbi.neural_nets.embedding_nets import (
+    FCEmbedding,
+    CNNEmbedding,
+    PermutationInvariantEmbedding
+)
 from sbi.utils.user_input_checks import (
     check_sbi_inputs,
     process_prior,
     process_simulator,
 )
-from sbi.utils import BoxUniform
+from sbi.utils import BoxUniform, MultipleIndependent
 from sbi.inference import NPE, simulate_for_sbi, DirectPosterior, NLE
 
 def sph2cart(theta_phi, device='cpu'):
@@ -42,6 +48,95 @@ def dipole_signal(Theta, nside=32, device='cpu'):
     poisson_mean = Nbar * (1 + torch.einsum('i,i...', dipole_vector, pixel_vectors))
     return poisson_mean
 
+class DipolePrior:
+    def __init__(self,
+            mean_count_range: list[float] = [0, 100],
+            amplitude_range: list[float] = [0.0, 0.1],
+            longitude_range: list[float] = [0, 2*torch.pi],
+            latitude_range: list[float] = [0, torch.pi],
+            return_numpy: bool = False
+    ) -> None:
+        self.return_numpy = return_numpy
+
+        self.mean_count_range = mean_count_range
+        self.amplitude_range = amplitude_range
+        self.longitude_range = longitude_range
+        self.latitude_range = latitude_range
+        
+        self.mean_count_dist = BoxUniform(
+            low=mean_count_range[0]*torch.ones(1),
+            high=mean_count_range[1]*torch.ones(1)
+        )
+        self.amplitude_dist = BoxUniform(
+            low=amplitude_range[0]*torch.ones(1),
+            high=amplitude_range[1]*torch.ones(1)
+        )
+        self.longitude_dist = BoxUniform(
+            low=longitude_range[0]*torch.ones(1),
+            high=longitude_range[1]*torch.ones(1)
+        )
+        self.latitude_dist = PolarPrior(
+            theta_low=latitude_range[0]*torch.ones(1),
+            theta_high=latitude_range[1]*torch.ones(1)
+        )
+        
+        self.dimension = 4
+    
+    def sample(self, sample_size=torch.Size([])):
+        count_samples = self.mean_count_dist.sample(sample_size).flatten()
+        amplitude_samples = self.amplitude_dist.sample(sample_size).flatten()
+        longitude_samples = self.longitude_dist.sample(sample_size).flatten()
+        latitude_samples = self.latitude_dist.sample(sample_size).flatten()
+        return torch.stack(
+            [
+                count_samples, amplitude_samples,
+                longitude_samples, latitude_samples
+            ],
+            dim=1
+        )
+    
+    def mean_count_log_prob(self, mean_count):
+        return self.mean_count_dist.log_prob(mean_count)
+    
+    def amplitude_log_prob(self, amplitude):
+        return self.amplitude_dist.log_prob(amplitude)
+    
+    def longitude_log_prob(self, longitude):
+        return self.longitude_dist.log_prob(longitude)
+    
+    def latitude_log_prob(self, latitude):
+        return self.latitude_dist.polar_logpdf(latitude)
+
+    def log_prob(self, values):
+        if self.return_numpy:
+            values = torch.as_tensor(values)
+        log_probs = (
+             self.mean_count_log_prob(values[:, 0])
+           + self.amplitude_log_prob (values[:, 1])
+           + self.longitude_log_prob (values[:, 2])
+           + self.latitude_log_prob  (values[:, 3])
+        )
+        return log_probs.numpy() if self.return_numpy else log_probs
+    
+    def to(self, device: str) -> None:
+        self.mean_count_dist.to(device)
+        self.amplitude_dist.to(device)
+        self.longitude_dist.to(device)
+        self.latitude_dist.to(device)
+        self.device = device
+
+    def get_low_ranges(self) -> list:
+        return [
+            self.mean_count_range[0], self.amplitude_range[0],
+            self.longitude_range[0], self.latitude_range[0]   
+        ]
+
+    def get_high_ranges(self) -> list:
+        return [
+            self.mean_count_range[1], self.amplitude_range[1],
+            self.longitude_range[1], self.latitude_range[1]   
+        ]
+
 class PolarPrior:
     def __init__(self,
             theta_low, theta_high, return_numpy: bool = False
@@ -50,6 +145,7 @@ class PolarPrior:
         self.theta_low = theta_low
         self.theta_high = theta_high
         self.ndim = len(theta_low)
+        self.device = 'cpu'
 
     def sample(self, sample_shape=torch.Size([])):
         '''
@@ -67,7 +163,7 @@ class PolarPrior:
         - theta in [theta_low, theta_high], subdomain of [0, pi]
         '''
         # assert shape[-1] == 1
-        u = torch.rand(shape)
+        u = torch.rand(shape, device=self.device)
         unif_theta = torch.arccos(
             torch.cos(self.theta_low)
             + u * (torch.cos(self.theta_high) - torch.cos(self.theta_low))
@@ -90,6 +186,11 @@ class PolarPrior:
             values = torch.as_tensor(values)
         log_probs = self.polar_logpdf(values)
         return log_probs.numpy() if self.return_numpy else log_probs
+    
+    def to(self, device: str) -> None:
+        self.theta_low = self.theta_low.to(device)
+        self.theta_high = self.theta_high.to(device)
+        self.device = device
     
 class Inference:
     def __init__(self):
@@ -138,51 +239,72 @@ class Inference:
             n_simulations: int = 2000,
             posterior_device: str = 'cpu'
     ) -> None:
-        prior_full = BoxUniform(
-            low=torch.as_tensor([0,0,0,self.latitude_low]),
-            high=torch.as_tensor(
-                [
-                    self.mean_count_high, self.amplitude_high,
-                    self.longitude_high, self.latitude_high
-                ]
-            )
-        )
-        prior_full.to(device=self.device)
+        prior = DipolePrior()
+        prior.to(self.device)
+        # prior_full = BoxUniform(
+            # low=torch.as_tensor([0,0,0,self.latitude_low]),
+            # high=torch.as_tensor(
+                # [
+                    # self.mean_count_high, self.amplitude_high,
+                    # self.longitude_high, self.latitude_high
+                # ]
+            # )
+        # )
+        # prior_full.to(device=self.device)
 
         # prior_nbar = BoxUniform(
         #     low=0*torch.ones(1), high=self.mean_count_high*torch.ones(1)
-        # ).to(device=self.device)
+        # )
         # prior_d = BoxUniform(
         #     low=0*torch.ones(1), high=self.amplitude_high*torch.ones(1)
-        # ).to(device=self.device)
+        # )
         # prior_phi = BoxUniform(
         #     low=0*torch.ones(1), high=self.longitude_high*torch.ones(1)
-        # ).to(device=self.device)
-        # prior_theta = BoxUniform(
-        #     low=self.latitude_low*torch.ones(1), high=self.latitude_high*torch.ones(1)
-        # ).to(device=self.device)
+        # )
         # prior_theta = PolarPrior(
-            # theta_low=self.latitude_low*torch.ones(1), theta_high=self.latitude_high*torch.ones(1)
+        #     theta_low=self.latitude_low*torch.ones(1), theta_high=self.latitude_high*torch.ones(1)
         # )
-        prior, num_parameters, prior_returns_numpy = process_prior(prior_full)
-        # prior, num_parameters, prior_returns_numpy = process_prior(
-            # [prior_nbar, prior_d, prior_phi, prior_theta],
-            # custom_prior_wrapper_kwargs={
-                # 'lower_bound': torch.as_tensor([0,0,0,self.latitude_low]),
-                # 'upper_bound': torch.as_tensor(
-                    # [
-                        # self.mean_count_high, self.amplitude_high,
-                        # self.longitude_high, self.latitude_high
-                    # ]
-                # )
-            # }
+        # prior_theta, *_ = process_prior(prior_theta,
+        #     custom_prior_wrapper_kwargs={
+        #         'lower_bound': self.latitude_low*torch.ones(1),
+        #         'upper_bound': self.latitude_high*torch.ones(1)
+        #     }
         # )
-        
+
+        # prior_list = [prior_nbar, prior_d, prior_phi, prior_theta]
+        # if self.device != 'cpu':
+            # for p in prior_list:
+                # p.to(device=self.device)
+
+        # proposal = MultipleIndependent(prior_list, device=self.device)
+
+        # prior, num_parameters, prior_returns_numpy = process_prior(prior_full)
+        prior, num_parameters, prior_returns_numpy = process_prior(
+            prior,
+            custom_prior_wrapper_kwargs={
+                'lower_bound': torch.as_tensor(
+                    prior.get_low_ranges(), device=prior.device
+                ),
+                'upper_bound': torch.as_tensor(
+                    prior.get_high_ranges(), device=prior.device
+                )
+            }
+        )
+
         # do the training on the gpu but not the simulation
         # simulation_device = lambda x: simulation(x, device=self.device)
         simulator = process_simulator(simulation, prior, prior_returns_numpy)
         check_sbi_inputs(simulator, prior)
-        inference = NPE(prior=prior, device=self.device)
+
+        # choose which type of pre-configured embedding net to use (e.g. CNN)
+        embedding_net = FCEmbedding(input_dim=self.npix)
+        # embedding_net = CNNEmbedding(
+            # input_shape=(self.npix,), kernel_size=20, output_dim=100
+        # )
+        # instantiate the conditional neural density estimator
+        neural_posterior = posterior_nn(model="maf", embedding_net=embedding_net)
+        inference = NPE(prior=prior, density_estimator=neural_posterior, device=self.device)
+        # inference = NPE(prior=prior, device=self.device)
 
         n_workers = 32
         self.theta, self.x = simulate_for_sbi(
@@ -199,7 +321,7 @@ class Inference:
             # direct_sampling_parameters={"enable_transform": True}
         )
         print(self.posterior)
-        self.posterior.to(device=posterior_device)
+        # self.posterior.to(device=posterior_device)
 
         self.samples = self.posterior.sample(
             (10000,), x=self.density_map, # num_chains=20
@@ -219,6 +341,8 @@ class DipolePoisson(Inference):
         self.amplitude_high = amplitude_high
         self.mean_count_high = mean_count_high
         self.density_map = density_map
+        self.npix = len(density_map)
+        self.nside = hp.npix2nside(self.npix)
         self.longitude_high = longitude_high
         self.latitude_high = latitude_high
         self.latitude_low = latitude_low
