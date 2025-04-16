@@ -2,32 +2,26 @@
 import healpy as hp
 import numpy as np
 import matplotlib.pyplot as plt
-from funcs import simulation, PolarPrior, DipolePoisson
-from sbi.inference import NPE, NLE, simulate_for_sbi
-from sbi.utils.user_input_checks import (
-    check_sbi_inputs,
-    process_prior,
-    process_simulator,
-)
-from sbi.utils import BoxUniform
-import torch
-from sbi.analysis import pairplot
+from funcs import simulation, DipolePoisson
 from corner import corner
-# %%
+
 D = 0.05
 PHI =  5
 THETA = 1
 NBAR = 50
+truths = [NBAR, D, PHI, THETA]
 
-dmap = simulation([NBAR, D, PHI, THETA])
-hp.projview(dmap)
+dmap = simulation(truths)
+hp.projview(dmap.numpy())
 plt.show()
 # %%
-model = DipolePoisson(dmap)
+model = DipolePoisson(dmap, device='gpu')
+# %%
 model.run_dynesty()
-corner(model.dresults.samples_equal())
+corner(model.dresults.samples_equal(), truths=truths)
 plt.show()
-
-model.run_sbi()
-corner(model.samples)
+# %%
+model.run_sbi(n_simulations=20000, posterior_device='cpu')
+corner(model.samples, truths=truths)
 plt.show()
+# %%
