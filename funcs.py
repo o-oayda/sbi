@@ -6,7 +6,7 @@ import torch
 import emcee
 import dynesty
 from sbi.neural_nets import posterior_nn
-from sbi.neural_nets.embedding_nets import FCEmbedding
+from sbi.neural_nets.embedding_nets import hpCNNEmbedding
 from sbi.utils.user_input_checks import (
     check_sbi_inputs,
     process_prior,
@@ -56,7 +56,7 @@ def dipole_signal(Theta, nside=32, device='cpu'):
     pixel_indices = torch.arange(hp.nside2npix(nside))
     pixel_vectors = torch.as_tensor(
         torch.stack(
-            hp.pix2vec(nside, pixel_indices)
+            hp.pix2vec(nside, pixel_indices, nest=True)
         ),
         device=device
     )
@@ -111,7 +111,12 @@ class Inference:
             n_simulations: int = 2000,
             posterior_device: str = 'cpu'
     ) -> None:
-        prior = DipolePrior()
+        prior = DipolePrior(
+            mean_count_range=self.mean_count_range,
+            amplitude_range=self.amplitude_range,
+            longitude_range=self.longitude_range,
+            latitude_range=self.latitude_range
+        )
         prior.to(self.device)
         prior, num_parameters, prior_returns_numpy = process_prior(
             prior,
@@ -124,16 +129,17 @@ class Inference:
                 )
             }
         )
-
         # do the training on the gpu but not the simulation
         # simulation_device = lambda x: simulation(x, device=self.device)
         simulator = process_simulator(simulation, prior, prior_returns_numpy)
         check_sbi_inputs(simulator, prior)
 
         # choose which type of pre-configured embedding net to use (e.g. CNN)
-        embedding_net = FCEmbedding(input_dim=self.npix)
+        # must be nested healpix ordering!!!
+        embedding_net = hpCNNEmbedding(nside=self.nside) 
 
         # instantiate the conditional neural density estimator
+        # maf, maf_rqs 
         neural_posterior = posterior_nn(
             model="maf", embedding_net=embedding_net
         )
@@ -155,10 +161,9 @@ class Inference:
         )
         print(self.posterior)
         # self.posterior.to(device=posterior_device)
-
-        self.samples = self.posterior.sample(
-            (10000,), x=self.density_map
-        ).cpu().detach().numpy()
+    
+    def sample_amortized_posterior(self, x_obs, n_samps: int = 10_000):
+        return self.posterior.sample((n_samps,), x=x_obs).cpu().detach().numpy()
 
 class DipolePoisson(Inference):
     def __init__(self,
