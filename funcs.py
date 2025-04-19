@@ -14,6 +14,7 @@ from sbi.utils.user_input_checks import (
 )
 from sbi.inference import NPE, simulate_for_sbi
 from priors import DipolePrior
+from torch.types import Tensor
 
 def sph2cart(theta_phi, device='cpu'):
     '''
@@ -25,7 +26,8 @@ def sph2cart(theta_phi, device='cpu'):
     x = torch.sin(theta_phi[0]) * torch.cos(theta_phi[1])
     y = torch.sin(theta_phi[0]) * torch.sin(theta_phi[1])
     z = torch.cos(theta_phi[0])
-    return torch.as_tensor((x, y, z), device=device)
+    xyz = torch.stack([x, y, z], dim=1)
+    return xyz.to(device=device)
 
 def sample_unif(unif: float, low_high: list[float]) -> float:
     '''
@@ -63,7 +65,123 @@ def dipole_signal(Theta, nside=32, device='cpu'):
     dipole_vector = D * sph2cart((theta, phi), device=device)
     poisson_mean = Nbar * (1 + torch.einsum('i,i...', dipole_vector, pixel_vectors))
     return poisson_mean
+
+class SkyMap:
+    def __init__(self, nside: int = 32, device: str = 'cpu'):
+        self.nside = nside
+        self.device = device
+        self.mask = Mask(self.nside)
+        self.mask_map = torch.zeros(self.mask.npix)
     
+    def generate_dipole(self, Theta: Tensor) -> None:
+        poisson_mean = self.dipole_signal(Theta)
+        self._density_map = poisson(poisson_mean)
+
+    # def dipole_signal(self, Theta) -> Tensor:
+    #     Nbar, D, phi, theta = torch.as_tensor(
+    #         Theta, device=self.device, dtype=torch.float64
+    #     )
+    #     pixel_indices = torch.arange(hp.nside2npix(self.nside))
+    #     pixel_vectors = torch.as_tensor(
+    #         torch.stack(
+    #             hp.pix2vec(self.nside, pixel_indices, nest=True)
+    #         ),
+    #         device=self.device
+    #     )
+    #     dipole_vector = D * sph2cart((theta, phi), device=self.device)
+    #     poisson_mean = Nbar * (1 + torch.einsum('i,i...', dipole_vector, pixel_vectors))
+    #     return poisson_mean
+    
+    def dipole_signal(self, Theta: Tensor) -> Tensor:
+        if Theta.shape == (4,):
+            Theta = Theta.reshape(1,4)
+        
+        n_batches = Theta.shape[0]
+        pixel_indices = torch.arange(hp.nside2npix(self.nside))
+        pixel_vectors = torch.as_tensor(
+            torch.stack(
+                hp.pix2vec(self.nside, pixel_indices, nest=True)
+            ),
+            device=self.device
+        ).to(torch.float32)
+        mean_count = Theta[:, 0]
+        dipole_amplitude = Theta[:, 1]
+        dipole_longitude = Theta[:, 2]
+        dipole_latitude = Theta[:, 3]
+        dipole_vector = dipole_amplitude.reshape((n_batches,1)) * sph2cart(
+            (dipole_latitude, dipole_longitude),
+            device=self.device
+        )
+        poisson_mean = mean_count.reshape((n_batches,1)) * (
+            1 + torch.einsum('ij,jk', dipole_vector, pixel_vectors)
+        )
+        # poisson_mean = mean_count * (
+            # 1 + torch.einsum('ik,ji->jk', dipole_vector, pixel_vectors.T)
+        # )
+        if n_batches == 1:
+            return poisson_mean.flatten()
+        else:
+            return poisson_mean
+
+    def mask_pixels(self, fill_value = None, **kwargs) -> None:
+        self.kwarg_to_mask = {'equator_mask': self.mask.equator_mask}
+        for key, val in kwargs.items():
+            masked_pixel_indices = self.kwarg_to_mask[key](val)
+            self.mask_map[masked_pixel_indices] = 1
+        
+        if fill_value == None:
+            self.fill_value = torch.nan
+        else:
+            self.fill_value = fill_value
+
+    @property
+    def density_map(self):
+        out = self._density_map
+        out[self.mask_map == 1] = self.fill_value
+        return out
+    
+    def batch_simulator(self,
+            proposal_distribution,
+            n_samples: int,
+            mask_fill_value = None,
+            **mask_kwargs
+    ) -> tuple[Tensor]:
+        Theta = proposal_distribution.sample((n_samples,))
+        poisson_mean = self.dipole_signal(Theta)
+        self.batch_density_maps = poisson(poisson_mean)
+
+        if mask_fill_value == None:
+            fill_value = torch.nan
+        else:
+            fill_value = mask_fill_value
+        
+        self.mask_pixels(**mask_kwargs)
+        self.batch_mask_maps = self.mask_map.repeat((n_samples, 1))
+        self.batch_mask_maps[self.batch_mask_maps == 1] = fill_value
+
+        return (Theta, self.batch_density_maps)
+
+class Mask:
+    def __init__(self, nside: int = 32):
+        self.nside = nside
+        self.npix = hp.nside2npix(self.nside)
+        self.all_pixel_indices = set(np.arange(self.npix))
+    
+    def equator_mask(self, mask_angle: float) -> list:
+        south_pole_vec = hp.ang2vec(0, -90, lonlat=True)
+        north_pole_vec = hp.ang2vec(0, 90, lonlat=True)
+        north_pole_indices = hp.query_disc(
+            self.nside, north_pole_vec, radius=np.deg2rad(90 - mask_angle)
+        )
+        south_pole_indices = hp.query_disc(
+            self.nside, south_pole_vec, radius=np.deg2rad(90 - mask_angle)
+        )
+        masked_pixel_indices = (
+            self.all_pixel_indices
+            - set([*north_pole_indices, *south_pole_indices])
+        )
+        return list(masked_pixel_indices)
+
 class Inference:
     def __init__(self):
         pass
@@ -109,7 +227,7 @@ class Inference:
     
     def run_sbi(self,
             n_simulations: int = 2000,
-            posterior_device: str = 'cpu'
+            device: str = 'cpu'
     ) -> None:
         prior = DipolePrior(
             mean_count_range=self.mean_count_range,
@@ -117,7 +235,14 @@ class Inference:
             longitude_range=self.longitude_range,
             latitude_range=self.latitude_range
         )
-        prior.to(self.device)
+        self.theta, self.x = SkyMap().batch_simulator(
+            prior, n_samples=n_simulations
+        )
+        
+        # do the training on the gpu but not the simulation
+        self.theta = self.theta.to(device); self.x = self.x.to(device)
+        prior.to(device)
+        
         prior, num_parameters, prior_returns_numpy = process_prior(
             prior,
             custom_prior_wrapper_kwargs={
@@ -129,11 +254,6 @@ class Inference:
                 )
             }
         )
-        # do the training on the gpu but not the simulation
-        # simulation_device = lambda x: simulation(x, device=self.device)
-        simulator = process_simulator(simulation, prior, prior_returns_numpy)
-        check_sbi_inputs(simulator, prior)
-
         # choose which type of pre-configured embedding net to use (e.g. CNN)
         # must be nested healpix ordering!!!
         embedding_net = hpCNNEmbedding(nside=self.nside) 
@@ -144,14 +264,7 @@ class Inference:
             model="maf", embedding_net=embedding_net
         )
         inference = NPE(
-            prior=prior, density_estimator=neural_posterior, device=self.device
-        )
-
-        n_workers = 32
-        self.theta, self.x = simulate_for_sbi(
-            simulator,
-            proposal=prior, num_simulations=n_simulations,
-            num_workers=n_workers, show_progress_bar=True
+            prior=prior, density_estimator=neural_posterior, device=device
         )
 
         inference = inference.append_simulations(self.theta, self.x)
@@ -160,7 +273,6 @@ class Inference:
             density_estimator, prior=prior,
         )
         print(self.posterior)
-        # self.posterior.to(device=posterior_device)
     
     def sample_amortized_posterior(self, x_obs, n_samps: int = 10_000):
         return self.posterior.sample((n_samps,), x=x_obs).cpu().detach().numpy()
@@ -180,6 +292,7 @@ class DipolePoisson(Inference):
         self.nside = hp.npix2nside(self.npix)
         self.ndim = 4
         self.device = device
+        self.sky_map = SkyMap(self.nside, device=self.device)
         self.mean_count_range = mean_count_range
         self.amplitude_range = amplitude_range
         self.longitude_range = longitude_range
@@ -211,7 +324,9 @@ class DipolePoisson(Inference):
             return P_mean_count + P_amplitude + P_longitude + P_colatitude
     
     def log_likelihood(self, Theta):
-        signal = dipole_signal(Theta)
+        signal = self.sky_map.dipole_signal(
+            torch.as_tensor(Theta).to(torch.float32)
+        )
         return np.sum(
             sp_poisson.logpmf(k=self.density_map, mu=signal)
         )
