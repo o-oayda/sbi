@@ -15,10 +15,12 @@ class Mask:
         south_pole_vec = hp.ang2vec(0, -90, lonlat=True)
         north_pole_vec = hp.ang2vec(0, 90, lonlat=True)
         north_pole_indices = hp.query_disc(
-            self.nside, north_pole_vec, radius=np.deg2rad(90 - mask_angle)
+            self.nside, north_pole_vec, radius=np.deg2rad(90 - mask_angle),
+            nest=True
         )
         south_pole_indices = hp.query_disc(
-            self.nside, south_pole_vec, radius=np.deg2rad(90 - mask_angle)
+            self.nside, south_pole_vec, radius=np.deg2rad(90 - mask_angle),
+            nest=True
         )
         masked_pixel_indices = (
             self.all_pixel_indices
@@ -99,6 +101,6 @@ class SkyMap:
 
         self.mask_pixels(**mask_kwargs)
         self.batch_mask_maps = self.mask_map.repeat((n_samples, 1))
-        self.batch_mask_maps[self.batch_mask_maps == 1] = fill_value
+        self.batch_density_maps[self.batch_mask_maps == 1] = fill_value
 
         return (Theta, self.batch_density_maps)

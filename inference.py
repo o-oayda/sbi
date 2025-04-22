@@ -65,7 +65,8 @@ class Inference:
             longitude_range=self.longitude_range,
             latitude_range=self.latitude_range
         )
-        self.theta, self.x = SkyMap().batch_simulator(
+        self.simulation = SkyMap()
+        self.theta, self.x = self.simulation.batch_simulator(
             prior, n_samples=n_simulations, **mask_kwargs
         )
 
