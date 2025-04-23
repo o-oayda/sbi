@@ -1,5 +1,5 @@
 import numpy as np
-from utils import sph2cart
+from tools.utils import sph2cart
 import healpy as hp
 import torch
 from torch import poisson

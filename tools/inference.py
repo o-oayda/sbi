@@ -1,5 +1,5 @@
-from maps import SkyMap
-from priors import DipolePrior
+from tools.maps import SkyMap
+from tools.priors import DipolePrior
 import dynesty
 import emcee
 import numpy as np

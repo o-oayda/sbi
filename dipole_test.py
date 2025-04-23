@@ -1,11 +1,11 @@
 # %%
 import healpy as hp
 import matplotlib.pyplot as plt
-from maps import SkyMap
-from models import DipolePoisson
+from tools.maps import SkyMap
+from tools.models import DipolePoisson
 from corner import corner
 import torch
-from utils import new_make_sky_proj
+from tools.utils import new_make_sky_proj
 # %%
 D = 0.025
 PHI =  5
@@ -41,7 +41,7 @@ plt.show()
 # %%
 from contextlib import contextmanager
 import torch
-from utils import new_make_sky_proj
+from tools.utils import new_make_sky_proj
 @contextmanager
 def open_samples(file_path):
     try:
