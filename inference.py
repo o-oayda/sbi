@@ -8,6 +8,7 @@ from sbi.inference import NPE
 from sbi.neural_nets import posterior_nn
 from sbi.neural_nets.embedding_nets import hpCNNEmbedding
 from sbi.utils.user_input_checks import process_prior
+import pickle
 
 class Inference:
     def __init__(self):
@@ -104,6 +105,16 @@ class Inference:
             density_estimator, prior=prior,
         )
         print(self.posterior)
+    
+    def save_posterior(self, file_path: str) -> None:
+        print(f'Saving to {file_path}...')
+        with open(file_path, "wb") as handle:
+            pickle.dump(self.posterior, handle)
+    
+    def load_posterior(self, file_path: str) -> None:
+        print(f'Opening {file_path}...')
+        with open(file_path, "rb") as handle:
+            self.posterior = pickle.load(handle)
 
     def sample_amortized_posterior(self, x_obs, n_samps: int = 10_000):
         return self.posterior.sample((n_samps,), x=x_obs).cpu().detach().numpy()

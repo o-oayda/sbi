@@ -7,32 +7,32 @@ from corner import corner
 import torch
 from utils import new_make_sky_proj
 # %%
-D = 0.007
+D = 0.025
 PHI =  5
 THETA = 1
-NBAR = 50
+NBAR = 200
 truths = [NBAR, D, PHI, THETA]
 
 simulation_class = SkyMap()
 simulation_class.generate_dipole(torch.as_tensor(truths))
-simulation_class.mask_pixels(fill_value=0)
+simulation_class.mask_pixels(fill_value=0, equator_mask=30)
 dmap = simulation_class.density_map
 hp.projview(dmap.numpy(), nest=True)
 plt.show()
 # %%
 model = DipolePoisson(
-    dmap, amplitude_range=[0, 0.1], mean_count_range=[0.8*NBAR, 1.2*NBAR]
+    dmap, amplitude_range=[0, 0.05], mean_count_range=[0.8*NBAR, 1.2*NBAR]
 )
 # %%
 model.run_sbi(
-    n_simulations=20_000, device='cuda', # mask_fill_value=0, equator_mask=30
+    n_simulations=500, device='cuda', mask_fill_value=0, equator_mask=30
 )
 # %%
 labels = [r'$\bar{N}$', r'$\mathcal{D}$', r'$\phi$', r'$\theta$']
 samples = model.sample_amortized_posterior(x_obs=dmap.to('cuda'))
 corner(samples, truths=truths, labels=labels, label_kwargs={'size': 15})
 plt.show()
-new_make_sky_proj(samples)
+new_make_sky_proj(samples, smooth=0.1, truth_star=[PHI, THETA])
  # %%
 model.density_map = dmap
 model.run_dynesty()

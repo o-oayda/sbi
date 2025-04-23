@@ -3,3 +3,4 @@ sbi-logs*
 __pycache__*
 launch.json
 *.pt
+*.pkl
