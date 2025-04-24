@@ -1,16 +1,9 @@
 import torch
 from torch.types import Tensor
-import numba as nb
-import numpy as np
 from astropy.modeling.rotations import (
     RotateCelestial2Native, RotateNative2Celestial
 )
 import astropy.units as u
-
-# def sample_spherical_points(npoints, ndim: int = 3) -> Tensor:
-    # xyz = torch.normal(mean=0, std=1, size=(npoints, ndim))
-    # xyz /= torch.linalg.norm(xyz, axis=1)[:, None]
-    # return xyz
 
 
 def sample_spherical_points(n_points) -> Tensor:

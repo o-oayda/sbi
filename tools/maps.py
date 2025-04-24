@@ -7,7 +7,7 @@ from torch.types import Tensor
 from tools.utils import check_vectorised_input, spherical_to_cartesian
 from tools.physics import ellis_baldwin_amplitude
 from typing import Literal
-from sbi.inference import NPE, simulate_for_sbi
+from sbi.inference import simulate_for_sbi
 from sbi.utils.user_input_checks import (
     check_sbi_inputs,
     process_simulator,

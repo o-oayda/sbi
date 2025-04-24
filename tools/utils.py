@@ -3,7 +3,6 @@ import numpy as np
 import torch
 from torch import poisson
 from torch.types import Tensor
-from typing import Literal
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 import matplotlib
