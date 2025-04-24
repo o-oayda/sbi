@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 import matplotlib
 
-def sph2cart(theta_phi, device='cpu'):
+def spherical_to_cartesian(theta_phi, device='cpu'):
     '''
     Transform spherical coordinates in the form (theta, phi) to Cartesian
     coordinates given r = 1. Theta is the polar angle and phi the azimuthal
@@ -50,13 +50,18 @@ def dipole_signal(Theta, nside=32, device='cpu'):
         ),
         device=device
     )
-    dipole_vector = D * sph2cart((theta, phi), device=device)
+    dipole_vector = D * spherical_to_cartesian((theta, phi), device=device)
     poisson_mean = Nbar * (1 + torch.einsum('i,i...', dipole_vector, pixel_vectors))
     return poisson_mean
 
 def simulation(Theta, nside=32, device='cpu'):
     poisson_mean = dipole_signal(Theta, nside, device)
     return poisson(poisson_mean)
+
+def check_vectorised_input(Theta: Tensor, ndim: int) -> Tensor:
+        if Theta.shape == (ndim,):
+            Theta = Theta.reshape(1, ndim)
+        return Theta
 
 def convert_to_l_dash(l):
     '''When plotting the dynesty histogram on top of the healpy projection

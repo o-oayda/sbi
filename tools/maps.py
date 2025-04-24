@@ -1,9 +1,10 @@
 import numpy as np
-from tools.utils import sph2cart
+from points import sample_points_with_flux, boost_points_with_flux, flux_cut
 import healpy as hp
 import torch
 from torch import poisson
 from torch.types import Tensor
+from utils import check_vectorised_input, spherical_to_cartesian
 
 class Mask:
     def __init__(self, nside: int = 32):
@@ -40,8 +41,7 @@ class SkyMap:
         self._density_map = poisson(poisson_mean)
 
     def dipole_signal(self, Theta: Tensor) -> Tensor:
-        if Theta.shape == (4,):
-            Theta = Theta.reshape(1,4)
+        check_vectorised_input(Theta, ndim=4)
 
         n_batches = Theta.shape[0]
         pixel_indices = torch.arange(hp.nside2npix(self.nside))
@@ -55,7 +55,7 @@ class SkyMap:
         dipole_amplitude = Theta[:, 1]
         dipole_longitude = Theta[:, 2]
         dipole_latitude = Theta[:, 3]
-        dipole_vector = dipole_amplitude.reshape((n_batches,1)) * sph2cart(
+        dipole_vector = dipole_amplitude.reshape((n_batches,1)) * spherical_to_cartesian(
             (dipole_latitude, dipole_longitude),
             device=self.device
         )
@@ -66,6 +66,70 @@ class SkyMap:
             return poisson_mean.flatten()
         else:
             return poisson_mean
+
+    def generate_dipole_from_base(self,
+            observer_direction: tuple[float],
+            n_initial_points: int,
+            observer_speed: float = 0.00123,
+            luminosity_function_index: int = 2,
+            mean_spectral_index: float = 0.8,
+            sigma_spectral_index: float = 0.5,
+            flux_percentage_noise: float = 0.1,
+            minimum_flux_cut: float = 5
+        ) -> None:
+        '''
+        Probably cannot be vectorised.
+        '''
+        dipole_longitude_rad, dipole_colatitude_rad = torch.as_tensor(
+            observer_direction
+        )
+        
+        dipole_longitude = torch.rad2deg(dipole_longitude_rad)
+        dipole_latitude = torch.rad2deg( torch.pi / 2 - dipole_colatitude_rad )
+
+        longitudes_deg, latitudes_deg,\
+        rest_fluxes, spectral_indices = sample_points_with_flux(
+            n_initial_points=n_initial_points,
+            luminosity_function_index=luminosity_function_index,
+            mean_spectral_index=mean_spectral_index,
+            sigma_spectral_index=sigma_spectral_index
+        )
+
+        boosted_longitudes_deg, boosted_latitudes_deg,\
+        boosted_fluxes = boost_points_with_flux(
+            longitudes_deg=longitudes_deg,
+            latitudes_deg=latitudes_deg,
+            rest_fluxes=rest_fluxes,
+            spectral_indices=spectral_indices,
+            observer_direction=(dipole_longitude, dipole_latitude),
+            observer_speed=observer_speed
+        )
+
+        boosted_fluxes += torch.normal(
+            mean=0,
+            std=flux_percentage_noise * boosted_fluxes
+        )
+
+        cut_boosted_longitudes_deg, cut_boosted_latitudes_deg,\
+        cut_boosted_fluxes = flux_cut(
+            minimum_flux=minimum_flux_cut,
+            longitudes=boosted_longitudes_deg,
+            latitudes=boosted_latitudes_deg,
+            fluxes=boosted_fluxes
+        )
+
+        self._density_map = self.make_density_map(
+            cut_boosted_longitudes_deg, cut_boosted_latitudes_deg
+        )
+        self._fluxes = cut_boosted_fluxes
+
+    def make_density_map(self, longitudes: Tensor, latitudes: Tensor) -> None:
+        source_indices = hp.ang2pix(
+            self.nside, longitudes, latitudes, lonlat=True
+        )
+        return torch.bincount(
+            source_indices, minlength=hp.nside2npix(self.nside)
+        )
 
     def mask_pixels(self, fill_value = None, **kwargs) -> None:
         self.kwarg_to_mask = {'equator_mask': self.mask.equator_mask}

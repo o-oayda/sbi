@@ -12,6 +12,7 @@ PHI =  5
 THETA = 1
 NBAR = 200
 truths = [NBAR, D, PHI, THETA]
+DEVICE = 'cpu'
 
 simulation_class = SkyMap()
 simulation_class.generate_dipole(torch.as_tensor(truths))
@@ -25,11 +26,11 @@ model = DipolePoisson(
 )
 # %%
 model.run_sbi(
-    n_simulations=500, device='cuda', mask_fill_value=0, equator_mask=30
+    n_simulations=50_000, device=DEVICE, mask_fill_value=0, equator_mask=30
 )
 # %%
 labels = [r'$\bar{N}$', r'$\mathcal{D}$', r'$\phi$', r'$\theta$']
-samples = model.sample_amortized_posterior(x_obs=dmap.to('cuda'))
+samples = model.sample_amortized_posterior(x_obs=dmap.to(DEVICE))
 corner(samples, truths=truths, labels=labels, label_kwargs={'size': 15})
 plt.show()
 new_make_sky_proj(samples, smooth=0.1, truth_star=[PHI, THETA])
