@@ -1,6 +1,6 @@
-from tools.maps import SkyMap
-from tools.inference import Inference
-from tools.utils import polar_pdf, sample_polar, sample_unif, unif_pdf
+from maps import SkyMap
+from inference import Inference
+from utils import polar_pdf, sample_polar, sample_unif, unif_pdf
 import healpy as hp
 import numpy as np
 import torch

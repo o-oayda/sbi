@@ -159,3 +159,13 @@ def compute_boosted_angles(
             / (observer_speed * torch.cos(source_frame_angles) + 1)
         )
     )
+
+
+def ellis_baldwin_amplitude(
+        observer_speed: float,
+        mean_spectral_index: float,
+        luminosity_function_slope: float
+    ) -> float:
+    return ( 
+        2 + luminosity_function_slope * ( 1 + mean_spectral_index )
+    ) * observer_speed

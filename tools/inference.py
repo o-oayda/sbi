@@ -1,5 +1,5 @@
-from tools.maps import SkyMap
-from tools.priors import DipolePrior
+from maps import SkyMap
+from priors import DipolePrior
 import dynesty
 import emcee
 import numpy as np
@@ -9,6 +9,7 @@ from sbi.neural_nets import posterior_nn
 from sbi.neural_nets.embedding_nets import hpCNNEmbedding
 from sbi.utils.user_input_checks import process_prior
 import pickle
+from typing import Literal
 
 class Inference:
     def __init__(self):
@@ -58,6 +59,7 @@ class Inference:
     def run_sbi(self,
             n_simulations: int = 2000,
             device: str = 'cpu',
+            dipole_method: Literal['base', 'poisson'] = 'poisson',
             **mask_kwargs
     ) -> None:
         prior = DipolePrior(
@@ -66,15 +68,7 @@ class Inference:
             longitude_range=self.longitude_range,
             latitude_range=self.latitude_range
         )
-        self.simulation = SkyMap()
-        self.theta, self.x = self.simulation.batch_simulator(
-            prior, n_samples=n_simulations, **mask_kwargs
-        )
-
-        # do the training on the gpu but not the simulation
-        self.theta = self.theta.to(device); self.x = self.x.to(device)
         prior.to(device)
-
         prior, num_parameters, prior_returns_numpy = process_prior(
             prior,
             custom_prior_wrapper_kwargs={
@@ -86,6 +80,19 @@ class Inference:
                 )
             }
         )
+
+        self.simulation = SkyMap()
+        self.theta, self.x = self.simulation.batch_simulator(
+            prior,
+            n_samples=n_simulations,
+            dipole_method=dipole_method,
+            prior_returns_numpy=prior_returns_numpy,
+            **mask_kwargs
+        )
+
+        # do the training on the gpu but not the simulation
+        self.theta = self.theta.to(device); self.x = self.x.to(device)
+
         # choose which type of pre-configured embedding net to use (e.g. CNN)
         # must be nested healpix ordering!!!
         embedding_net = hpCNNEmbedding(nside=self.nside)

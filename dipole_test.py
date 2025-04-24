@@ -5,7 +5,7 @@ from tools.maps import SkyMap
 from tools.models import DipolePoisson
 from corner import corner
 import torch
-from tools.utils import new_make_sky_proj
+from tools.utils import sky_probability
 # %%
 D = 0.025
 PHI =  5
@@ -33,7 +33,7 @@ labels = [r'$\bar{N}$', r'$\mathcal{D}$', r'$\phi$', r'$\theta$']
 samples = model.sample_amortized_posterior(x_obs=dmap.to(DEVICE))
 corner(samples, truths=truths, labels=labels, label_kwargs={'size': 15})
 plt.show()
-new_make_sky_proj(samples, smooth=0.1, truth_star=[PHI, THETA])
+sky_probability(samples, smooth=0.1, truth_star=[PHI, THETA])
  # %%
 model.density_map = dmap
 model.run_dynesty()
@@ -42,7 +42,7 @@ plt.show()
 # %%
 from contextlib import contextmanager
 import torch
-from tools.utils import new_make_sky_proj
+from tools.utils import sky_probability
 @contextmanager
 def open_samples(file_path):
     try:
@@ -56,6 +56,6 @@ with (
     open_samples('ns_samples.pt') as ns_samples
 ):
     # Use sbi_samples and ns_samples here
-    new_make_sky_proj(sbi_samples, smooth=0.1, truth_star=[5,1])
-    new_make_sky_proj(ns_samples, smooth=0.12, truth_star=[5,1])
+    sky_probability(sbi_samples, smooth=0.1, truth_star=[5,1])
+    sky_probability(ns_samples, smooth=0.12, truth_star=[5,1])
 # %%

@@ -5,6 +5,14 @@ import torch
 from torch import poisson
 from torch.types import Tensor
 from utils import check_vectorised_input, spherical_to_cartesian
+from physics import ellis_baldwin_amplitude
+from typing import Literal
+from sbi.inference import NPE, simulate_for_sbi
+from sbi.utils.user_input_checks import (
+    check_sbi_inputs,
+    process_prior,
+    process_simulator,
+)
 
 class Mask:
     def __init__(self, nside: int = 32):
@@ -35,13 +43,14 @@ class SkyMap:
         self.device = device
         self.mask = Mask(self.nside)
         self.mask_map = torch.zeros(self.mask.npix)
+        self.nest = True
 
     def generate_dipole(self, Theta: Tensor) -> None:
         poisson_mean = self.dipole_signal(Theta)
         self._density_map = poisson(poisson_mean)
 
     def dipole_signal(self, Theta: Tensor) -> Tensor:
-        check_vectorised_input(Theta, ndim=4)
+        Theta = check_vectorised_input(Theta, ndim=4)
 
         n_batches = Theta.shape[0]
         pixel_indices = torch.arange(hp.nside2npix(self.nside))
@@ -76,7 +85,7 @@ class SkyMap:
             sigma_spectral_index: float = 0.5,
             flux_percentage_noise: float = 0.1,
             minimum_flux_cut: float = 5
-        ) -> None:
+        ) -> Tensor:
         '''
         Probably cannot be vectorised.
         '''
@@ -121,11 +130,16 @@ class SkyMap:
         self._density_map = self.make_density_map(
             cut_boosted_longitudes_deg, cut_boosted_latitudes_deg
         )
-        self._fluxes = cut_boosted_fluxes
+        self.expected_amplitude = ellis_baldwin_amplitude(
+            observer_speed=observer_speed,
+            mean_spectral_index=mean_spectral_index,
+            luminosity_function_slope=luminosity_function_index
+        )
+        return self._density_map
 
     def make_density_map(self, longitudes: Tensor, latitudes: Tensor) -> None:
         source_indices = hp.ang2pix(
-            self.nside, longitudes, latitudes, lonlat=True
+            self.nside, longitudes, latitudes, lonlat=True, nest=self.nest
         )
         return torch.bincount(
             source_indices, minlength=hp.nside2npix(self.nside)
@@ -150,14 +164,44 @@ class SkyMap:
 
     def batch_simulator(self,
             proposal_distribution,
+            prior_returns_numpy: bool,
             n_samples: int,
             mask_fill_value = None,
+            dipole_method: Literal['base', 'poisson'] = 'poisson',
             **mask_kwargs
     ) -> tuple[Tensor]:
-        Theta = proposal_distribution.sample((n_samples,))
-        poisson_mean = self.dipole_signal(Theta)
-        self.batch_density_maps = poisson(poisson_mean)
+        if dipole_method == 'poisson':
+            Theta, self.batch_density_maps = self.poisson_batches(
+                proposal_distribution=proposal_distribution,
+                n_samples=n_samples
+            )
+        elif dipole_method == 'base':
+            
+            def simulator(Theta):
+                N, v = Theta[0], Theta[1]
+                phi, theta = Theta[2], Theta[3]
+                int_N = N.to(torch.int32).item()
 
+                density_map = self.generate_dipole_from_base(
+                    observer_direction=(phi, theta),
+                    n_initial_points=int_N,
+                    observer_speed=v
+                )
+                return density_map
+            
+            simulator = process_simulator(
+                simulator, proposal_distribution, prior_returns_numpy
+            )
+            check_sbi_inputs(simulator=simulator, prior=proposal_distribution)
+            Theta, self.batch_density_maps = simulate_for_sbi(
+                simulator=simulator,
+                proposal=proposal_distribution,
+                num_workers=32,
+                num_simulations=n_samples
+            )
+        else:
+            raise Exception('Method not recognised.')
+        
         if mask_fill_value == None:
             fill_value = torch.nan
         else:
@@ -168,3 +212,12 @@ class SkyMap:
         self.batch_density_maps[self.batch_mask_maps == 1] = fill_value
 
         return (Theta, self.batch_density_maps)
+    
+    def poisson_batches(self,
+            proposal_distribution,
+            n_samples: int
+    ) -> tuple[Tensor]:
+        Theta = proposal_distribution.sample((n_samples,))
+        poisson_mean = self.dipole_signal(Theta)
+        batch_density_maps = poisson(poisson_mean)
+        return (Theta, batch_density_maps)

@@ -174,7 +174,7 @@ def samples_to_hpmap(
     else:
         return sample_pdensity_map
 
-def new_make_sky_proj(
+def sky_probability(
     X: Tensor,
     lonlat: bool = False,
     nside: int = 256,
