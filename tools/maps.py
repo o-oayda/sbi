@@ -1,16 +1,15 @@
 import numpy as np
-from points import sample_points_with_flux, boost_points_with_flux, flux_cut
+from tools.points import sample_points_with_flux, boost_points_with_flux, flux_cut
 import healpy as hp
 import torch
 from torch import poisson
 from torch.types import Tensor
-from utils import check_vectorised_input, spherical_to_cartesian
-from physics import ellis_baldwin_amplitude
+from tools.utils import check_vectorised_input, spherical_to_cartesian
+from tools.physics import ellis_baldwin_amplitude
 from typing import Literal
 from sbi.inference import NPE, simulate_for_sbi
 from sbi.utils.user_input_checks import (
     check_sbi_inputs,
-    process_prior,
     process_simulator,
 )
 
@@ -166,6 +165,7 @@ class SkyMap:
             proposal_distribution,
             prior_returns_numpy: bool,
             n_samples: int,
+            n_workers: int = 32,
             mask_fill_value = None,
             dipole_method: Literal['base', 'poisson'] = 'poisson',
             **mask_kwargs
@@ -196,7 +196,7 @@ class SkyMap:
             Theta, self.batch_density_maps = simulate_for_sbi(
                 simulator=simulator,
                 proposal=proposal_distribution,
-                num_workers=32,
+                num_workers=n_workers,
                 num_simulations=n_samples
             )
         else:

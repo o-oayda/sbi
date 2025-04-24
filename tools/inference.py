@@ -1,5 +1,5 @@
-from maps import SkyMap
-from priors import DipolePrior
+from tools.maps import SkyMap
+from tools.priors import DipolePrior
 import dynesty
 import emcee
 import numpy as np
@@ -58,6 +58,7 @@ class Inference:
 
     def run_sbi(self,
             n_simulations: int = 2000,
+            n_workers: int = 32,
             device: str = 'cpu',
             dipole_method: Literal['base', 'poisson'] = 'poisson',
             **mask_kwargs
@@ -85,6 +86,7 @@ class Inference:
         self.theta, self.x = self.simulation.batch_simulator(
             prior,
             n_samples=n_simulations,
+            n_workers=n_workers,
             dipole_method=dipole_method,
             prior_returns_numpy=prior_returns_numpy,
             **mask_kwargs

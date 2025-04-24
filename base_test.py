@@ -1,14 +1,14 @@
 # %%
-from maps import SkyMap
+from tools.maps import SkyMap
 import torch
 import healpy as hp
-from models import DipolePoisson
+from tools.models import DipolePoisson
 import corner
 import matplotlib.pyplot as plt
-from utils import sky_probability
+from tools.utils import sky_probability
 # %%
 N, V, PHI, THETA = [10_000_000, 0.009, 5, 1]
-N_SIM = 20_000
+N_SIM = 2000
 
 sim = SkyMap()
 sim.generate_dipole_from_base(
@@ -40,7 +40,7 @@ model = DipolePoisson(
     mean_count_range=[8_000_000, 12_000_000],
     amplitude_range=[0, 0.01]
 )
-model.run_sbi(dipole_method='base', n_simulations=N_SIM)
+model.run_sbi(dipole_method='base', n_simulations=N_SIM, n_workers=32)
 model.save_posterior(f'based_posterior_N{N_SIM}.pkl')
 # %%
 # labels = [r'$\bar{N}$', r'$\mathcal{D}$', r'$\phi$', r'$\theta$']
