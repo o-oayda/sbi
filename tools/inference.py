@@ -1,5 +1,6 @@
 from tools.maps import SkyMap
 from tools.priors import DipolePrior
+from tools.utils import save_simulation, load_simulation
 import dynesty
 import emcee
 import numpy as np
@@ -10,6 +11,7 @@ from sbi.neural_nets.embedding_nets import hpCNNEmbedding
 from sbi.utils.user_input_checks import process_prior
 import pickle
 from typing import Literal
+import healpy as hp
 
 class Inference:
     def __init__(self):
@@ -56,35 +58,35 @@ class Inference:
         print('Model evidence: {:.2f}'.format(self.model_evidence))
         self.dresults = dsampler.results
 
-    def run_sbi(self,
+    def make_batch_simulations(self,
             n_simulations: int = 2000,
             n_workers: int = 32,
             device: str = 'cpu',
             dipole_method: Literal['base', 'poisson'] = 'poisson',
+            save: bool = False,
             **mask_kwargs
     ) -> None:
-        prior = DipolePrior(
+        self.prior = DipolePrior(
             mean_count_range=self.mean_count_range,
             amplitude_range=self.amplitude_range,
             longitude_range=self.longitude_range,
             latitude_range=self.latitude_range
         )
-        prior.to(device)
-        prior, num_parameters, prior_returns_numpy = process_prior(
-            prior,
+        self.prior.to(device)
+        self.prior, num_parameters, prior_returns_numpy = process_prior(
+            self.prior,
             custom_prior_wrapper_kwargs={
                 'lower_bound': torch.as_tensor(
-                    prior.get_low_ranges(), device=prior.device
+                    self.prior.get_low_ranges(), device=self.prior.device
                 ),
                 'upper_bound': torch.as_tensor(
-                    prior.get_high_ranges(), device=prior.device
+                    self.prior.get_high_ranges(), device=self.prior.device
                 )
             }
         )
-
         self.simulation = SkyMap()
         self.theta, self.x = self.simulation.batch_simulator(
-            prior,
+            self.prior,
             n_samples=n_simulations,
             n_workers=n_workers,
             dipole_method=dipole_method,
@@ -92,26 +94,42 @@ class Inference:
             **mask_kwargs
         )
 
+        if save:
+            save_simulation(self.theta, self.x, self.prior)
+            
+    def run_sbi(self,
+            sim_dir: str | None,
+            device: str = 'cpu',
+    ) -> None:
+        if sim_dir is not None:
+            self.theta, self.x, self.prior = load_simulation(sim_dir)
+
         # do the training on the gpu but not the simulation
         self.theta = self.theta.to(device); self.x = self.x.to(device)
 
         # choose which type of pre-configured embedding net to use (e.g. CNN)
         # must be nested healpix ordering!!!
+        if not hasattr(self, 'nside'):
+            self.nside = hp.npix2nside(self.x.shape[-1])
         embedding_net = hpCNNEmbedding(nside=self.nside)
 
         # instantiate the conditional neural density estimator
         # maf, maf_rqs 
         neural_posterior = posterior_nn(
-            model="maf", embedding_net=embedding_net
+            model="maf",
+            embedding_net=embedding_net
         )
         inference = NPE(
-            prior=prior, density_estimator=neural_posterior, device=device
+            prior=self.prior,
+            density_estimator=neural_posterior,
+            device=device
         )
 
         inference = inference.append_simulations(self.theta, self.x)
         density_estimator = inference.train(show_train_summary=True)
         self.posterior = inference.build_posterior(
-            density_estimator, prior=prior,
+            density_estimator,
+            prior=self.prior,
         )
         print(self.posterior)
     

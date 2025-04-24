@@ -6,6 +6,8 @@ from torch.types import Tensor
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 import matplotlib
+import os
+import pickle
 
 def spherical_to_cartesian(theta_phi, device='cpu'):
     '''
@@ -295,3 +297,36 @@ def sky_probability(
         plt.show()
     
     return proj_map
+
+def save_simulation(theta: Tensor, x: Tensor, prior) -> None:
+    if not os.path.exists('simulations/'):
+        os.makedirs('simulations/')
+    i = 1
+    while os.path.exists(f'simulations/sim{i}/'):
+        i += 1
+    base_path = f'simulations/sim{i}'
+    os.makedirs(f'{base_path}/')
+    simulation_path = f'{base_path}/theta_and_x.pt'
+    prior_path = f'{base_path}/prior.pkl'
+
+    print(f'Saving theta and x to {simulation_path}...')
+    torch.save([theta, x], simulation_path)
+
+    print(f'Saving prior to {prior_path}...')
+    with open(prior_path, "wb") as handle:
+        pickle.dump(prior, handle)
+
+def load_simulation(sim_dir: str) -> tuple:
+    if not os.path.exists(f'simulations/{sim_dir}/'):
+        raise FileNotFoundError(f'Cannot find {sim_dir}.')
+    
+    print(f'Opening {sim_dir}...')
+    sim_path = f'simulations/{sim_dir}/theta_and_x.pt'
+    theta, x = torch.load(sim_path)
+    
+    prior_path = f'simulations/{sim_dir}/prior.pkl'
+    print(f'Opening {prior_path}...')
+    with open(prior_path, "rb") as handle:
+        prior = pickle.load(handle)
+    
+    return theta, x, prior

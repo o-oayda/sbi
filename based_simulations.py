@@ -11,7 +11,7 @@ parser.add_argument(
 args = parser.parse_args()
 
 N, V, PHI, THETA = [10_000_000, 0.009, 5, 1]
-N_SIM = 2000
+N_SIM = 50
 N_WORKERS = args.n_workers
 
 # generate example sky map
@@ -29,9 +29,9 @@ model = DipolePoisson(
     mean_count_range=[8_000_000, 12_000_000],
     amplitude_range=[0, 0.01]
 )
-model.run_sbi(
-    dipole_method='base',
+model.make_batch_simulations(
     n_simulations=N_SIM,
-    n_workers=N_WORKERS
+    n_workers=N_WORKERS,
+    dipole_method='base',
+    save=True
 )
-model.save_posterior(f'based_posterior_N{N_SIM}.pkl')
