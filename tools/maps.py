@@ -1,17 +1,25 @@
 import numpy as np
-from tools.points import sample_points_with_flux, boost_points_with_flux, flux_cut
+from tools.points import (
+    sample_points_with_flux, boost_points_with_flux, flux_cut,
+    add_noise_to_fluxes
+)
 import healpy as hp
 import torch
 from torch import poisson
 from torch.types import Tensor
-from tools.utils import check_vectorised_input, spherical_to_cartesian
+from tools.utils import (
+    check_vectorised_input, spherical_to_cartesian, omega_to_theta,
+    equatorial_to_ecliptic
+)
 from tools.physics import ellis_baldwin_amplitude
-from typing import Literal
+from typing import Literal, Callable
 from sbi.inference import simulate_for_sbi
 from sbi.utils.user_input_checks import (
     check_sbi_inputs,
     process_simulator,
 )
+from tools.noise_models import parse_noise_model
+from tools.noise_models import ecliptic_noise
 
 class Mask:
     def __init__(self, nside: int = 32):
@@ -82,8 +90,9 @@ class SkyMap:
             luminosity_function_index: int = 2,
             mean_spectral_index: float = 0.8,
             sigma_spectral_index: float = 0.5,
-            flux_percentage_noise: float = 0.1,
-            minimum_flux_cut: float = 5
+            flux_percentage_noise: float | str = 0.1,
+            minimum_flux_cut: float = 5,
+            noise_model_kwargs: dict = {}
         ) -> Tensor:
         '''
         Probably cannot be vectorised.
@@ -103,7 +112,7 @@ class SkyMap:
             sigma_spectral_index=sigma_spectral_index
         )
 
-        boosted_longitudes_deg, boosted_latitudes_deg,\
+        self.boosted_longitudes_deg, self.boosted_latitudes_deg,\
         boosted_fluxes = boost_points_with_flux(
             longitudes_deg=longitudes_deg,
             latitudes_deg=latitudes_deg,
@@ -113,16 +122,20 @@ class SkyMap:
             observer_speed=observer_speed
         )
 
-        boosted_fluxes += torch.normal(
-            mean=0,
-            std=flux_percentage_noise * boosted_fluxes
+        noise_model = parse_noise_model(flux_percentage_noise)
+        noise_parameter = self.get_needed_noise_parameter(noise_model)
+        boosted_fluxes = add_noise_to_fluxes(
+            fluxes=boosted_fluxes,
+            noise_model=noise_model,
+            noise_scaling_parameter=noise_parameter,
+            **noise_model_kwargs
         )
 
         cut_boosted_longitudes_deg, cut_boosted_latitudes_deg,\
         cut_boosted_fluxes = flux_cut(
             minimum_flux=minimum_flux_cut,
-            longitudes=boosted_longitudes_deg,
-            latitudes=boosted_latitudes_deg,
+            longitudes=self.boosted_longitudes_deg,
+            latitudes=self.boosted_latitudes_deg,
             fluxes=boosted_fluxes
         )
 
@@ -135,6 +148,26 @@ class SkyMap:
             luminosity_function_slope=luminosity_function_index
         )
         return self._density_map
+
+    def get_needed_noise_parameter(self, noise_model: Callable) -> Tensor:
+        if type(noise_model) is float:
+            return None
+        else:
+            model_to_parameter = {
+                ecliptic_noise: self.get_ecliptic_latitudes()
+            }
+            return model_to_parameter[noise_model]
+    
+    def get_ecliptic_latitudes(self) -> Tensor:
+        _, boosted_ecliptic_latitudes_deg = equatorial_to_ecliptic(
+            ra=self.boosted_longitudes_deg.numpy(),
+            dec=self.boosted_latitudes_deg.numpy(),
+            output_unit='degrees'
+        )
+        return torch.as_tensor(
+            boosted_ecliptic_latitudes_deg,
+            dtype=torch.float32
+        )
 
     def make_density_map(self, longitudes: Tensor, latitudes: Tensor) -> None:
         source_indices = hp.ang2pix(
@@ -221,3 +254,27 @@ class SkyMap:
         poisson_mean = self.dipole_signal(Theta)
         batch_density_maps = poisson(poisson_mean)
         return (Theta, batch_density_maps)
+
+def average_smooth_map(
+        healpy_map: Tensor,
+        weights: Tensor | None = Tensor,
+        angle_scale: float = 1.
+    ) -> Tensor:
+    '''
+    Smooth a healpy map using a moving average.
+    '''
+    included_pixels = torch.where(~torch.isnan(healpy_map))[0]
+    smoothed_map = torch.empty_like(healpy_map).to(dtype=torch.float64)
+    smoothed_map.fill_(torch.nan)
+    nside = hp.get_nside(healpy_map)
+    
+    if type(weights) != Tensor:
+        weights = torch.ones_like(healpy_map).to(dtype=torch.float32)
+
+    smoothing_radius = omega_to_theta(torch.as_tensor(angle_scale))
+    for p_index in included_pixels:
+        vec = hp.pix2vec(nside, p_index, nest=True)
+        disc = hp.query_disc(nside, vec, smoothing_radius, nest=True)
+        smoothed_map[p_index] = torch.nanmean(healpy_map[disc] * weights[disc])
+
+    return smoothed_map

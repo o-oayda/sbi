@@ -87,7 +87,10 @@ def dipole_to_native_frame(
         lon_pole=pole_longitude * u.degree
     )
     new_long, new_lat = rotator(point_longitudes, point_latitudes)
-    return torch.as_tensor(new_long), torch.as_tensor(new_lat)
+    return (
+        torch.as_tensor(new_long, dtype=torch.float32),
+        torch.as_tensor(new_lat, dtype=torch.float32)
+    )
 
 
 def aberrate_points(

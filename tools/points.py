@@ -3,6 +3,7 @@ from tools.physics import (
     aberrate_points, boost_fluxes
 )
 from torch.types import Tensor
+from torch import normal
 
 def sample_points_with_flux(
         n_initial_points: int,
@@ -66,3 +67,27 @@ def flux_cut(
     ) -> tuple[Tensor]:
     cut = fluxes > minimum_flux
     return longitudes[cut], latitudes[cut], fluxes[cut]
+
+def add_noise_to_fluxes(
+        fluxes: Tensor,
+        noise_model: float | str,
+        noise_scaling_parameter: None | Tensor = None,
+        **noise_model_kwargs
+    ) -> Tensor:
+    if type(noise_model) is float:
+        return fluxes + normal(
+            mean=0,
+            std=noise_model * fluxes
+        )
+    elif callable(noise_model):
+        assert type(noise_scaling_parameter) is not None, (
+            'Flux percentage noise is a callable,'
+            'pass Tensor to flux scaling paramater.'
+        )
+        return fluxes + noise_model(
+            fluxes,
+            noise_scaling_parameter,
+            **noise_model_kwargs
+        )
+    else:
+        raise TypeError('Type of flux percentage noise not recognised.')
