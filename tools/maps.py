@@ -52,6 +52,18 @@ class SkyMap:
         self.mask_map = torch.zeros(self.mask.npix)
         self.nest = True
 
+    def configure(self,
+            dipole_method: Literal['base', 'poisson'],
+            dipole_hyperparameters: dict = {},
+            mask_kwargs: dict | None = None
+        ) -> None:
+        self.dipole_method = dipole_method
+        self.dipole_hyperparameters = dipole_hyperparameters
+        if mask_kwargs is None:
+            self.mask_kwargs = {'mask_fill_value': None}
+        else:
+            self.mask_kwargs = mask_kwargs
+
     def generate_dipole(self, Theta: Tensor) -> None:
         poisson_mean = self.dipole_signal(Theta)
         self._density_map = poisson(poisson_mean)
@@ -198,17 +210,17 @@ class SkyMap:
             proposal_distribution,
             prior_returns_numpy: bool,
             n_samples: int,
-            n_workers: int = 32,
-            mask_fill_value = None,
-            dipole_method: Literal['base', 'poisson'] = 'poisson',
-            **mask_kwargs
+            n_workers: int = 32
     ) -> tuple[Tensor]:
-        if dipole_method == 'poisson':
+        self.n_samples = n_samples
+
+        if self.dipole_method == 'poisson':
             Theta, self.batch_density_maps = self.poisson_batches(
                 proposal_distribution=proposal_distribution,
                 n_samples=n_samples
             )
-        elif dipole_method == 'base':
+        
+        elif self.dipole_method == 'base':
             
             def simulator(Theta):
                 N, v = Theta[0], Theta[1]
@@ -218,7 +230,8 @@ class SkyMap:
                 density_map = self.generate_dipole_from_base(
                     observer_direction=(phi, theta),
                     n_initial_points=int_N,
-                    observer_speed=v
+                    observer_speed=v,
+                    **self.dipole_hyperparameters
                 )
                 return density_map
             
@@ -235,16 +248,19 @@ class SkyMap:
         else:
             raise Exception('Method not recognised.')
         
+        self.batchwise_mask(**self.mask_kwargs)
+
+        return (Theta, self.batch_density_maps)
+
+    def batchwise_mask(self, mask_fill_value, **mask_kwargs) -> None:
         if mask_fill_value == None:
             fill_value = torch.nan
         else:
             fill_value = mask_fill_value
 
         self.mask_pixels(**mask_kwargs)
-        self.batch_mask_maps = self.mask_map.repeat((n_samples, 1))
+        self.batch_mask_maps = self.mask_map.repeat((self.n_samples, 1))
         self.batch_density_maps[self.batch_mask_maps == 1] = fill_value
-
-        return (Theta, self.batch_density_maps)
     
     def poisson_batches(self,
             proposal_distribution,

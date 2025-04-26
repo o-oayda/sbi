@@ -5,7 +5,7 @@ from tools.maps import SkyMap
 from tools.models import DipolePoisson
 from corner import corner
 import torch
-from tools.utils import sky_probability
+from tools.plotting import sky_probability
 # %%
 D = 0.025
 PHI =  5
@@ -42,7 +42,7 @@ plt.show()
 # %%
 from contextlib import contextmanager
 import torch
-from tools.utils import sky_probability
+from tools.plotting import sky_probability
 @contextmanager
 def open_samples(file_path):
     try:

@@ -14,10 +14,18 @@ from typing import Literal
 import healpy as hp
 
 class Inference:
-    def __init__(self):
-        pass
+    def __init__(self, prior=None, model=None):
+        self.prior = prior
+        self.model = model
 
-    def run_mcmc(self, nwalkers=32, n_steps=2000, burn_in=100):
+    def run_mcmc(self,
+        nwalkers: int = 32,
+        n_steps: int = 2000,
+        burn_in: int = 100
+    ) -> None:
+        '''
+        Run MCMC with emcee and save posterior in samples attribute.
+        '''
 
         def log_prob(Theta):
             log_prior = self.log_prior_likelihood(Theta)
@@ -40,8 +48,7 @@ class Inference:
         **kwargs
     ):
         '''
-        Begin the nested sampling process and return the results upon
-        completion.
+        Begin the nested sampling process and save results in dresults attribute.
         '''
         dsampler = dynesty.NestedSampler(
             self.log_likelihood,
@@ -62,16 +69,8 @@ class Inference:
             n_simulations: int = 2000,
             n_workers: int = 32,
             device: str = 'cpu',
-            dipole_method: Literal['base', 'poisson'] = 'poisson',
-            save: bool = False,
-            **mask_kwargs
+            save: bool = False
     ) -> None:
-        self.prior = DipolePrior(
-            mean_count_range=self.mean_count_range,
-            amplitude_range=self.amplitude_range,
-            longitude_range=self.longitude_range,
-            latitude_range=self.latitude_range
-        )
         self.prior.to(device)
         self.prior, num_parameters, prior_returns_numpy = process_prior(
             self.prior,
@@ -84,18 +83,17 @@ class Inference:
                 )
             }
         )
-        self.simulation = SkyMap()
-        self.theta, self.x = self.simulation.batch_simulator(
+        self.theta, self.x = self.model.batch_simulator(
             self.prior,
             n_samples=n_simulations,
             n_workers=n_workers,
-            dipole_method=dipole_method,
             prior_returns_numpy=prior_returns_numpy,
-            **mask_kwargs
         )
 
         if save:
             save_simulation(self.theta, self.x, self.prior)
+        
+        return (self.theta, self.x)
             
     def run_sbi(self,
             sim_dir: str | None,

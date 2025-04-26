@@ -5,7 +5,7 @@ import healpy as hp
 from tools.models import DipolePoisson
 import corner
 import matplotlib.pyplot as plt
-from tools.utils import sky_probability
+from tools.plotting import sky_probability
 # %%
 N, V, PHI, THETA = [10_000_000, 0.009, 5, 1]
 N_SIM = 2000

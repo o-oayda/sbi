@@ -1,6 +1,7 @@
 from tools.maps import SkyMap
-from tools.models import DipolePoisson
+from tools.priors import DipolePrior
 import argparse
+from tools.inference import Inference
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -10,28 +11,26 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-N, V, PHI, THETA = [10_000_000, 0.009, 5, 1]
-N_SIM = 50
+N, V, PHI, THETA = [10_000_000, 0.00123, 2.93, 1.69]
+N_SIM = 20
 N_WORKERS = args.n_workers
 
-# generate example sky map
 sim = SkyMap()
-sim.generate_dipole_from_base(
-    observer_direction=(PHI, THETA),
-    n_initial_points=N,
-    observer_speed=V
+sim.configure(
+    dipole_method='base',
+    dipole_hyperparameters={
+        'flux_percentage_noise': 'ecliptic',
+        'minimum_flux_cut': 3
+    }
 )
-sim.mask_pixels(fill_value=0)
-
-# instantiate model and run simulation
-model = DipolePoisson(
-    sim.density_map,
+prior = DipolePrior(
     mean_count_range=[8_000_000, 12_000_000],
     amplitude_range=[0, 0.01]
 )
-model.make_batch_simulations(
+
+inferer = Inference(prior, sim)
+inferer.make_batch_simulations(
     n_simulations=N_SIM,
     n_workers=N_WORKERS,
-    dipole_method='base',
     save=True
 )
