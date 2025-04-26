@@ -211,7 +211,8 @@ def sky_probability(
     :param top_quad: if save_path has been specified, specifying top_quad
         to true creates a bounding box which restricts the saved figure
         to the top right quadrant of the Mollweide Axes
-    :param cmb_star: add star indicating direction of CMB dipole
+    :param truth_star: add star indicating direction of true dipole, accepts
+        list [phi, theta] in longtiude and colatitude in radians
     :param only_nth_direction: for a model with n directions, choose to
         plot only the nth directional posterior
     :param **kwargs: kwargs to be passed to hp.projview blank axes
@@ -272,7 +273,7 @@ def sky_probability(
         colors=['tomato'], zorder=1, extend='both'
     )
     if truth_star is not None:
-        phi_star, theta_star = truth_star[0], truth_star[1]
+        phi_star, theta_star = truth_star[0], np.pi/2 - truth_star[1]
 
         plt.scatter(
             convert_to_l_dash(phi_star),
