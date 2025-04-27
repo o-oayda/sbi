@@ -1,6 +1,4 @@
-from tools.maps import SkyMap
-from tools.priors import DipolePrior
-from tools.utils import save_simulation, load_simulation
+from tools.utils import save_simulation
 import dynesty
 import emcee
 import numpy as np
@@ -10,8 +8,8 @@ from sbi.neural_nets import posterior_nn
 from sbi.neural_nets.embedding_nets import hpCNNEmbedding
 from sbi.utils.user_input_checks import process_prior
 import pickle
-from typing import Literal
 import healpy as hp
+import os
 
 class Inference:
     def __init__(self, prior=None, model=None):
@@ -69,7 +67,8 @@ class Inference:
             n_simulations: int = 2000,
             n_workers: int = 32,
             device: str = 'cpu',
-            save: bool = False
+            save: bool = False,
+            custom_save_dir: str | None = None
     ) -> None:
         self.prior.to(device)
         self.prior, num_parameters, prior_returns_numpy = process_prior(
@@ -91,7 +90,12 @@ class Inference:
         )
 
         if save:
-            save_simulation(self.theta, self.x, self.prior)
+            save_simulation(
+                theta=self.theta,
+                x=self.x,
+                prior=self.prior,
+                custom_save_dir=custom_save_dir
+            )
         
         return (self.theta, self.x)
             
@@ -100,7 +104,7 @@ class Inference:
             device: str = 'cpu',
     ) -> None:
         if sim_dir is not None:
-            self.theta, self.x, self.prior = load_simulation(sim_dir)
+            self.load_simulation(sim_dir)
 
         # do the training on the gpu but not the simulation
         self.theta = self.theta.to(device); self.x = self.x.to(device)
@@ -130,6 +134,19 @@ class Inference:
             prior=self.prior,
         )
         print(self.posterior)
+    
+    def load_simulation(self, sim_dir: str) -> None:
+        if not os.path.exists(f'simulations/{sim_dir}/'):
+            raise FileNotFoundError(f'Cannot find {sim_dir}.')
+        
+        print(f'Opening {sim_dir}...')
+        sim_path = f'simulations/{sim_dir}/theta_and_x.pt'
+        self.theta, self.x = torch.load(sim_path)
+        
+        prior_path = f'simulations/{sim_dir}/prior.pkl'
+        print(f'Opening {prior_path}...')
+        with open(prior_path, "rb") as handle:
+            self.prior = pickle.load(handle)
     
     def save_posterior(self, file_path: str) -> None:
         print(f'Saving to {file_path}...')

@@ -11,7 +11,6 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-N, V, PHI, THETA = [10_000_000, 0.00123, 2.93, 1.69]
 N_SIM = 20
 N_WORKERS = args.n_workers
 

@@ -175,13 +175,22 @@ def samples_to_hpmap(
     else:
         return sample_pdensity_map
 
-def save_simulation(theta: Tensor, x: Tensor, prior) -> None:
-    if not os.path.exists('simulations/'):
-        os.makedirs('simulations/')
-    i = 1
-    while os.path.exists(f'simulations/sim{i}/'):
-        i += 1
-    base_path = f'simulations/sim{i}'
+def save_simulation(
+        theta: Tensor,
+        x: Tensor,
+        prior,
+        custom_save_dir: str | None = None
+    ) -> None:
+    if custom_save_dir is None:
+        if not os.path.exists('simulations/'):
+            os.makedirs('simulations/')
+        i = 1
+        while os.path.exists(f'simulations/sim{i}/'):
+            i += 1
+        base_path = f'simulations/sim{i}'
+    else:
+        base_path = f'simulations/{custom_save_dir}'
+   
     os.makedirs(f'{base_path}/')
     simulation_path = f'{base_path}/theta_and_x.pt'
     prior_path = f'{base_path}/prior.pkl'
@@ -192,21 +201,6 @@ def save_simulation(theta: Tensor, x: Tensor, prior) -> None:
     print(f'Saving prior to {prior_path}...')
     with open(prior_path, "wb") as handle:
         pickle.dump(prior, handle)
-
-def load_simulation(sim_dir: str) -> tuple:
-    if not os.path.exists(f'simulations/{sim_dir}/'):
-        raise FileNotFoundError(f'Cannot find {sim_dir}.')
-    
-    print(f'Opening {sim_dir}...')
-    sim_path = f'simulations/{sim_dir}/theta_and_x.pt'
-    theta, x = torch.load(sim_path)
-    
-    prior_path = f'simulations/{sim_dir}/prior.pkl'
-    print(f'Opening {prior_path}...')
-    with open(prior_path, "rb") as handle:
-        prior = pickle.load(handle)
-    
-    return theta, x, prior
 
 def omega_to_theta(omega):
     '''
