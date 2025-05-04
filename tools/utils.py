@@ -8,6 +8,9 @@ import os
 import pickle
 from astropy.coordinates import SkyCoord
 import astropy.units as u
+from operator import itemgetter
+import numba
+import time
 
 def spherical_to_cartesian(theta_phi, device='cpu'):
     '''
@@ -221,3 +224,64 @@ def equatorial_to_ecliptic(ra, dec, output_unit='radians'):
     else:
         raise Exception(
             'Not a valid unit. Select either radians of degrees.')
+    
+class Sample2DHistogram:
+    def __init__(self, x_data, y_data, **hist_kwargs):
+        counts_2d, self.x_edges, self.y_edges = np.histogram2d(
+            x_data, y_data, **hist_kwargs
+        )
+        
+        x_centres = (self.x_edges[:-1] + self.x_edges[1:]) / 2
+        y_centres = (self.y_edges[:-1] + self.y_edges[1:]) / 2
+        
+        pdf_2d = counts_2d / np.sum(counts_2d)
+        pdf_x = np.sum(pdf_2d, axis=1)
+
+        # Filter out x-bins with zero marginal probability
+        valid_x_mask = pdf_x > 0
+        self.x_centres = x_centres[valid_x_mask]
+        self.x_edges = x_centres[valid_x_mask]
+        pdf_x_valid = pdf_x[valid_x_mask]
+        pdf_2d_valid = pdf_2d[valid_x_mask, :]
+
+        cdf_x = np.cumsum(pdf_x_valid)
+        assert np.isclose(cdf_x[-1], 1.)
+        
+        self.inverse_cdf_x = lambda x: np.interp(
+            x,
+            cdf_x,
+            self.x_centres
+        )
+
+        self.cdf_y_lookup = {}
+        self.cdf_y_lookup_np = {}
+        for i in range(0, len(self.x_centres)):
+            y_row = pdf_2d_valid[i, :] / np.sum(pdf_2d_valid[i, :])
+            cdf_y = np.cumsum(y_row)
+            assert np.isclose(cdf_y[-1], 1.)
+            
+            # for some reason I need to pass cdf_y and y_centres as default
+            # kwargs, otherwise they don't change on each for loop
+            inverse_cdf_y = (
+                lambda y, cdf_y=cdf_y, y_centres=y_centres: np.interp(
+                    y,
+                    cdf_y,
+                    y_centres
+                )
+            )
+            self.cdf_y_lookup[i] = inverse_cdf_y
+        
+    def sample(self, n_samples: int):
+        # timing: n_samples = 1_000_000
+        uniform_deviate_x = np.random.uniform(0, 1, n_samples)
+        uniform_deviate_y = np.random.uniform(0, 1, n_samples)
+
+        x_samples = self.inverse_cdf_x(uniform_deviate_x) # 30 ms
+        y_cdf_indices = np.searchsorted(self.x_edges, x_samples) # 25 ms
+        y_cdfs = itemgetter(*y_cdf_indices)(self.cdf_y_lookup) # 37 ms
+
+        y_samples = np.asarray(
+            [cdf_y(u_y) for cdf_y, u_y in zip(y_cdfs, uniform_deviate_y)]
+        ) # 790 ms
+        
+        return x_samples, y_samples

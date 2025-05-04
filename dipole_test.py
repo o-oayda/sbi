@@ -16,7 +16,7 @@ DEVICE = 'cpu'
 
 simulation_class = SkyMap()
 simulation_class.generate_dipole(torch.as_tensor(truths))
-simulation_class.mask_pixels(fill_value=0, equator_mask=30)
+simulation_class.mask_pixels(fill_value=0)
 dmap = simulation_class.density_map
 hp.projview(dmap.numpy(), nest=True)
 plt.show()
