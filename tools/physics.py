@@ -6,7 +6,7 @@ from astropy.modeling.rotations import (
 import astropy.units as u
 
 
-def sample_spherical_points(n_points) -> Tensor:
+def sample_spherical_points(n_points) -> tuple[Tensor]:
     longitudes_deg = 360 * torch.rand(size=(n_points,))
     latitudes_deg = torch.rad2deg(
         torch.arcsin( 2 * torch.rand(size=(n_points,)) - 1)
@@ -56,6 +56,17 @@ def boost_fluxes(
     delta = doppler_shift_factor(observer_speed, angle_to_source)
     boost_factor = delta ** ( 1 + spectral_index )
     return fluxes * boost_factor
+
+
+def boost_magnitudes(
+        magnitudes: Tensor,
+        angle_to_source: Tensor,
+        observer_speed: float,
+        spectral_index: float | Tensor
+    ) -> Tensor:
+    delta = doppler_shift_factor(observer_speed, angle_to_source)
+    boost_factor = delta ** ( 1 + spectral_index )
+    return magnitudes - 2.5 * (1 + spectral_index) * torch.log10(boost_factor)
 
 
 def native_to_dipole_frame(

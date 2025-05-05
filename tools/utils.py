@@ -9,8 +9,6 @@ import pickle
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 from operator import itemgetter
-import numba
-import time
 
 def spherical_to_cartesian(theta_phi, device='cpu'):
     '''
@@ -224,9 +222,50 @@ def equatorial_to_ecliptic(ra, dec, output_unit='radians'):
     else:
         raise Exception(
             'Not a valid unit. Select either radians of degrees.')
+
+class Sample1DHistogram:
+    def __init__(self) -> None:
+        pass
+
+    def build(self,
+            x_data = None,
+            **hist_kwargs
+        ) -> None:
+        counts, x_edges = np.histogram(x_data, **hist_kwargs)
+        x_centres = (x_edges[:-1] + x_edges[1:]) / 2
+        pdf = counts / np.sum(counts)
+        cdf = np.cumsum(pdf)
+        self.inverse_cdf = lambda x: np.interp(
+            x,
+            cdf,
+            x_centres
+        )
     
+    def save_data(self, save_dir: str):
+        if not os.path.exists(save_dir):
+            os.mkdir(save_dir)
+        sampler_data = self.inverse_cdf
+        np.save(f'{save_dir}sampler_data.npy', sampler_data)
+
+    def load_data(self, save_dir: str) -> None:
+        data = np.load(f'{save_dir}sampler_data.npy')
+        self.inverse_cdf_x = data
+    
+    def sample(self, n_samples: int) -> np.ndarray:
+        uniform_deviate = np.random.uniform(0, 1, n_samples)
+        samples = self.inverse_cdf(uniform_deviate)
+        return samples
+
 class Sample2DHistogram:
-    def __init__(self, x_data, y_data, **hist_kwargs):
+    def __init__(self) -> None:
+        pass
+
+    def build(self,
+            x_data = None,
+            y_data = None,
+            **hist_kwargs
+        ) -> None:
+
         counts_2d, self.x_edges, self.y_edges = np.histogram2d(
             x_data, y_data, **hist_kwargs
         )
@@ -254,7 +293,6 @@ class Sample2DHistogram:
         )
 
         self.cdf_y_lookup = {}
-        self.cdf_y_lookup_np = {}
         for i in range(0, len(self.x_centres)):
             y_row = pdf_2d_valid[i, :] / np.sum(pdf_2d_valid[i, :])
             cdf_y = np.cumsum(y_row)
@@ -270,8 +308,18 @@ class Sample2DHistogram:
                 )
             )
             self.cdf_y_lookup[i] = inverse_cdf_y
-        
-    def sample(self, n_samples: int):
+    
+    def save_data(self, save_dir: str) -> None:
+        if not os.path.exists(save_dir):
+            os.mkdir(save_dir)
+        sampler_data = (self.inverse_cdf_x, self.x_edges, self.cdf_y_lookup)
+        np.save(f'{save_dir}sampler_data.npy', sampler_data)
+    
+    def load_data(self, save_dir: str) -> None:
+        data = np.load(f'{save_dir}sampler_data.npy')
+        self.inverse_cdf_x, self.x_edges, self.cdf_y_lookup = data
+
+    def sample(self, n_samples: int) -> tuple[np.ndarray]:
         # timing: n_samples = 1_000_000
         uniform_deviate_x = np.random.uniform(0, 1, n_samples)
         uniform_deviate_y = np.random.uniform(0, 1, n_samples)
