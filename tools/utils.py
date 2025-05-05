@@ -5,10 +5,10 @@ from torch import poisson
 from torch.types import Tensor
 from scipy.interpolate import interp1d
 import os
-import pickle
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 from operator import itemgetter
+import dill as pickle
 
 def spherical_to_cartesian(theta_phi, device='cpu'):
     '''
@@ -243,13 +243,18 @@ class Sample1DHistogram:
     
     def save_data(self, save_dir: str):
         if not os.path.exists(save_dir):
-            os.mkdir(save_dir)
+            os.makedirs(save_dir)
+        
         sampler_data = self.inverse_cdf
-        np.save(f'{save_dir}sampler_data.npy', sampler_data)
+        
+        with open(f'{save_dir}sampler_data.pkl', 'wb') as handle:
+            pickle.dump(sampler_data, handle)
 
     def load_data(self, save_dir: str) -> None:
-        data = np.load(f'{save_dir}sampler_data.npy')
-        self.inverse_cdf_x = data
+        with open(f'{save_dir}sampler_data.pkl', 'rb') as handle:
+            data = pickle.load(handle)
+        
+        self.inverse_cdf = data
     
     def sample(self, n_samples: int) -> np.ndarray:
         uniform_deviate = np.random.uniform(0, 1, n_samples)
@@ -311,12 +316,17 @@ class Sample2DHistogram:
     
     def save_data(self, save_dir: str) -> None:
         if not os.path.exists(save_dir):
-            os.mkdir(save_dir)
+            os.makedirs(save_dir)
+        
         sampler_data = (self.inverse_cdf_x, self.x_edges, self.cdf_y_lookup)
-        np.save(f'{save_dir}sampler_data.npy', sampler_data)
+        
+        with open(f'{save_dir}sampler_data.pkl', 'wb') as handle:
+            pickle.dump(sampler_data, handle)
     
     def load_data(self, save_dir: str) -> None:
-        data = np.load(f'{save_dir}sampler_data.npy')
+        with open(f'{save_dir}sampler_data.pkl', 'rb') as handle:
+            data = pickle.load(handle)
+        
         self.inverse_cdf_x, self.x_edges, self.cdf_y_lookup = data
 
     def sample(self, n_samples: int) -> tuple[np.ndarray]:

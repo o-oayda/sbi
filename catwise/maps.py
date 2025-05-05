@@ -10,6 +10,8 @@ from catwise.utils import AlphaLookup
 import numpy as np
 import healpy as hp
 from tqdm import tqdm
+import os
+from tools.maps import Mask
 
 class CatwiseSim:
     def __init__(self, nside: int = 64):
@@ -34,7 +36,9 @@ class CatwiseSim:
             w12_min: float = 0.8
         ) -> Tensor:
         rest_w1_samples, rest_w2_samples = self.sample_magnitudes(self.n_samples)
-        spectral_indices = self.spectral_index_sampler.sample(self.n_samples)
+        spectral_indices = torch.as_tensor(
+            -self.spectral_index_sampler.sample(self.n_samples)
+        )
         
         rest_source_longitudes_deg,\
         rest_source_latitudes_deg = self.sample_points(self.n_samples)
@@ -83,14 +87,33 @@ class CatwiseSim:
             longitudes=cut_boosted_source_longitudes_deg,
             latitudes=cut_boosted_source_latitudes_deg
         )
+        self.mask_pixels()
 
     def make_density_map(self, longitudes: Tensor, latitudes: Tensor) -> None:
         source_indices = hp.ang2pix(
-            self.nside, longitudes, latitudes, lonlat=True, nest=self.nest
+            self.nside, longitudes, latitudes, lonlat=True, nest=True
         )
         return torch.bincount(
             source_indices, minlength=hp.nside2npix(self.nside)
         )
+    
+    @property
+    def density_map(self):
+        out = self._density_map.to(dtype=torch.float32)
+        out[self.mask_map == 1] = self.fill_value
+        return out
+
+    def mask_pixels(self, fill_value = None, **kwargs) -> None:
+        self.mask = Mask(nside=self.nside)
+        self.mask_map = torch.zeros(self.mask.npix)
+
+        masked_pixel_indices = self.mask.catwise_mask()
+        self.mask_map[masked_pixel_indices] = 1
+
+        if fill_value == None:
+            self.fill_value = torch.nan
+        else:
+            self.fill_value = fill_value
 
     def add_error(self,
             w1_magnitudes: Tensor,
@@ -100,11 +123,11 @@ class CatwiseSim:
         ) -> tuple[Tensor]:
         boosted_w1_samples = torch.normal(
             mean=w1_magnitudes,
-            std=w1_fractional_error * boosted_w1_samples
+            std=w1_fractional_error * w1_magnitudes
         )
         boosted_w2_samples = torch.normal(
             mean=w2_magnitudes,
-            std=w2_fractional_error * boosted_w2_samples
+            std=w2_fractional_error * w2_magnitudes
         )
         return boosted_w1_samples, boosted_w2_samples
     
@@ -115,11 +138,18 @@ class CatwiseSim:
             w1_min: float,
             w12_min: float
         ) -> Tensor:
-        condition = (
-                w1_magnitudes < w1_max
-            and w1_magnitudes > w1_min
-            and w12_magnitudes > w12_min
+        condition = torch.logical_and(
+            torch.logical_and(
+                w1_magnitudes < w1_max,
+                w1_magnitudes > w1_min
+            ),
+            w12_magnitudes > w12_min
         )
+        # condition = (
+            #   w1_magnitudes < w1_max
+            # & w1_magnitudes > w1_min
+            # & w12_magnitudes > w12_min
+        # )
         return condition
 
     def precompute_data(self):
@@ -138,12 +168,12 @@ class CatwiseSim:
     def create_error_map(self) -> None:
         assert self.catalogue_is_loaded
 
-        ra, dec = self.catalogue['ra'], self.catalogue['dec']
-        source_pixel_indices = hp.ang2pix(self.nside, ra, dec, lonlat=True, nest=True)
+        l, b = self.catalogue['l'], self.catalogue['b']
+        source_pixel_indices = hp.ang2pix(self.nside, l, b, lonlat=True, nest=True)
         n_pixels = hp.nside2npix(self.nside)
         
-        w1_error_map = torch.empty(n_pixels)
-        w2_error_map = torch.empty(n_pixels)
+        w1_error_map = np.empty(n_pixels)
+        w2_error_map = np.empty(n_pixels)
 
         for pix_ind in tqdm(range(n_pixels)):
             active_pixel = source_pixel_indices == pix_ind
@@ -158,8 +188,17 @@ class CatwiseSim:
             w1_error_map[pix_ind] = w1_fractional_error
             w2_error_map[pix_ind] = w2_fractional_error
         
-        torch.save(w1_error_map, 'catwise/data/error_map/w1_error_map.pt')
-        torch.save(w2_error_map, 'catwise/data/error_map/w2_error_map.pt')
+        if not os.path.exists('catwise/data/error_map/'):
+            os.makedirs('catwise/data/error_map/')
+        
+        torch.save(
+            torch.as_tensor(w1_error_map),
+            'catwise/data/error_map/w1_error_map.pt'
+        )
+        torch.save(
+            torch.as_tensor(w2_error_map),
+            'catwise/data/error_map/w2_error_map.pt'
+        )
 
     def create_colour_magnitude_distribution(self,
             bins: int = 200,
@@ -188,7 +227,7 @@ class CatwiseSim:
         assert self.catalogue_is_loaded
 
         lookup = AlphaLookup()
-        out_table = lookup.make_alpha(self.catalogue['w1'], self.catalogue['w2'])
+        out_table = lookup.make_alpha(self.catalogue['w1'], self.catalogue['w12'])
         self.spectral_indices = out_table['alpha_W1'].data
         
         sampler = Sample1DHistogram()
@@ -200,11 +239,8 @@ class CatwiseSim:
         )
         sampler.save_data('catwise/data/spectral_index/')
     
-    def load_colour_magnitude_distribution(self) -> None:
-        self.sampler = Sample2DHistogram(sampler_data_dir='catwise/data/')
-    
     def sample_magnitudes(self, n_samples: int) -> tuple[Tensor]:
-        w1_samples, w2_samples = self.sampler.sample(n_samples)
+        w1_samples, w2_samples = self.colour_mag_sampler.sample(n_samples)
         return torch.as_tensor(w1_samples), torch.as_tensor(w2_samples)
     
     def sample_points(self, n_points: int) -> Tensor:
@@ -233,7 +269,7 @@ class CatwiseSim:
             spectral_index: Tensor
         ) -> None:
         boosted_magnitudes = boost_magnitudes(
-            fluxes=magnitudes,
+            magnitudes=magnitudes,
             angle_to_source=rest_source_to_dipole_angle,
             observer_speed=self.observer_speed,
             spectral_index=spectral_index

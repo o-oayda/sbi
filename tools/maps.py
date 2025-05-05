@@ -43,6 +43,14 @@ class Mask:
             - set([*north_pole_indices, *south_pole_indices])
         )
         return list(masked_pixel_indices)
+    
+    def catwise_mask(self) -> list:
+        galactic_mask = hp.reorder(
+            np.load('catwise/CatWISE_Mask_nside64.npy'),
+            r2n=True
+        )
+        masked_pixel_indices = list(np.where(galactic_mask == 0)[0])
+        return masked_pixel_indices
 
 class SkyMap:
     def __init__(self, nside: int = 32, device: str = 'cpu'):

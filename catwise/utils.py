@@ -3,6 +3,8 @@ from astropy.table import Table
 import numpy as np
 from scipy.constants import speed_of_light
 import astropy.units as u
+from scipy.spatial import cKDTree
+from tqdm import tqdm
 
 class AlphaLookup:
     '''
@@ -39,7 +41,7 @@ class AlphaLookup:
         self.lookup_table = Table.read(self.lookup_table_path)
 
         self.lookup_alpha = self.lookup_table['alpha'].data
-        self.lookup_k_W1 = self.lookup_table['k_W1'].data    # Flux conversion factor
+        self.lookup_k_W1 = self.lookup_table['k_W1'].data # Flux conversion factor
         self.lookup_nu_W1_iso = self.lookup_table['nu_W1_iso'].data
         self.lookup_W1_W2 = self.lookup_table['W1_W2'].data
     
@@ -50,13 +52,16 @@ class AlphaLookup:
         self.k_W1 = np.nan * np.empty( self.n_sources, dtype=float )
         self.nu_W1_iso = np.nan * np.empty( self.n_sources, dtype=float )
 
-        for i in range(self.n_sources):
-            idx_W1_W2 = self.closest(self.lookup_W1_W2 - w12_color[i])
-            self.k_W1[i] = self.lookup_k_W1[idx_W1_W2]
-            self.alpha_W1[i] = self.lookup_alpha[idx_W1_W2]
-            self.nu_W1_iso[i] = self.lookup_nu_W1_iso[idx_W1_W2]
+        # Build a KDTree for efficient nearest-neighbor search
+        tree = cKDTree(self.lookup_W1_W2.reshape(-1, 1))
 
-            print("\t%.1f%%" % ((i + 1) / self.n_sources * 100), end='\r')
+        # Perform lookups for all sources
+        _, indices = tree.query(w12_color.reshape(-1, 1), k=1)
+
+        # Assign values based on nearest neighbors
+        self.k_W1 = self.lookup_k_W1[indices]
+        self.alpha_W1 = self.lookup_alpha[indices]
+        self.nu_W1_iso = self.lookup_nu_W1_iso[indices]
 
     def check_magnitude(self, w1_magnitude: np.ndarray):
         # Calculate k such that fnu = k * nu**alpha
@@ -67,9 +72,10 @@ class AlphaLookup:
         self.k = self.k_W1 * 10**( -W1_AB / 2.5 )
 
         # Double check to ensure that fnu = k * nu**alpha gives the right mag
-        nu, Snu = self.get_passband('RSR-W1.txt')
+        nu, Snu = self.get_passband('catwise/RSR-W1.txt')
         W1_AB_check = np.empty(self.n_sources, dtype=float)
-        for i in range(self.n_sources):
+        
+        for i in tqdm(range(self.n_sources)):
             fnu = self.k[i] * nu**self.alpha_W1[i]
             W1_AB_check[i] = self.compute_synth_ABmag(nu, fnu, Snu)
 
@@ -101,7 +107,6 @@ class AlphaLookup:
         Returns a synthetic AB magnitude as per Fukugita et al.
         (1996, AJ, 111, 1748), Eq. 7.
         '''
-
         log_nu = np.log(nu)
         m = (
             -2.5 * np.log10(
@@ -110,7 +115,6 @@ class AlphaLookup:
             )
             - zp_AB
         )
-
         return m
     
     @staticmethod
