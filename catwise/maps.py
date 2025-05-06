@@ -82,12 +82,30 @@ class CatwiseSim:
         )
         cut_boosted_source_longitudes_deg = boosted_source_longitudes_deg[cut]
         cut_boosted_source_latitudes_deg = boosted_source_latitudes_deg[cut]
+        cut_boosted_w1_samples = boosted_w1_samples[cut]
+        cut_boosted_w2_samples = boosted_w2_samples[cut]
+        cut_boosted_w12_samples = boosted_w12_samples[cut]
 
         self._density_map = self.make_density_map(
             longitudes=cut_boosted_source_longitudes_deg,
             latitudes=cut_boosted_source_latitudes_deg
         )
         self.mask_pixels()
+
+        cut_source_pixel_indices = hp.ang2pix(
+            self.nside,
+            cut_boosted_source_longitudes_deg,
+            cut_boosted_source_latitudes_deg,
+            lonlat=True,
+            nest=True
+        )
+        cut_masked_pixels = torch.isin(
+            cut_source_pixel_indices,
+            torch.nonzero(self.mask_map == 1).squeeze()
+        )
+        self.final_w1_samples = cut_boosted_w1_samples[~cut_masked_pixels]
+        self.final_w2_samples = cut_boosted_w2_samples[~cut_masked_pixels]
+        self.final_w12_samples = cut_boosted_w12_samples[~cut_masked_pixels]
 
     def make_density_map(self, longitudes: Tensor, latitudes: Tensor) -> None:
         source_indices = hp.ang2pix(

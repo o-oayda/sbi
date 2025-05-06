@@ -30,6 +30,7 @@ sim.initialise_data()
 # %%
 sim = CatwiseSim()
 sim.initialise_data()
+# %%
 sim.generate_dipole()
  # %%
 smooth_map(sim.density_map)
