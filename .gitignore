@@ -4,7 +4,13 @@ __pycache__*
 launch.json
 *.pt
 *.pkl
-!catwise/data/colour_mag/sampler_data.pkl
-!catwise/data/error_map/w1_error_map.pt
-!catwise/data/error_map/w2_error_map.pt
-!catwise/data/spectral_index/sampler_data.pkl
+
+!catwise/0p5_17p0/data/colour_mag/sampler_data.pkl
+!catwise/0p5_17p0/data/error_map/w1_error_map.pt
+!catwise/0p5_17p0/data/error_map/w2_error_map.pt
+!catwise/0p5_17p0/data/spectral_index/sampler_data.pkl
+
+!catwise/0p7_16p8/data/colour_mag/sampler_data.pkl
+!catwise/0p7_16p8/data/error_map/w1_error_map.pt
+!catwise/0p7_16p8/data/error_map/w2_error_map.pt
+!catwise/0p7_16p8/data/spectral_index/sampler_data.pkl

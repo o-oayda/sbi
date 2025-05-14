@@ -12,17 +12,34 @@ import healpy as hp
 from tqdm import tqdm
 import os
 from tools.maps import Mask
+from sbi.utils.user_input_checks import process_simulator, check_sbi_inputs
+from sbi.inference import simulate_for_sbi
 
 class CatwiseSim:
-    def __init__(self, nside: int = 64):
+    def __init__(self,
+            cat_w1_max: float,
+            cat_w12_min: float,
+            nside: int = 64,
+        ):
         self.nside = nside
         self.dipole_longitude = CMB_L
         self.dipole_latitude = CMB_B
         self.observer_speed = CMB_BETA
-        self.file_name = 'catwise2020_corr_w12-0p5_w1-17p0.fits'
-        self.n_samples = 35_947_376 # length of above table
+        self.cut_path = self._get_cut_path(cat_w1_max, cat_w12_min)
+        self.file_name = (
+            f'catwise2020_corr_w12-{self.cat_w12_min}_w1-{self.cat_w1_max}.fits'
+        )
+        # self.n_samples = 35_947_376 # length of above table
         self.catalogue_is_loaded = False
-        
+    
+    def _get_cut_path(self,
+            cat_w1_max: float,
+            cat_w12_min: float
+        ) -> str:
+        self.cat_w1_max = str(cat_w1_max).replace('.', 'p')
+        self.cat_w12_min = str(cat_w12_min).replace('.', 'p')
+        return f'{self.cat_w12_min}_{self.cat_w1_max}'
+
     def load_catalogue(self):
         self.file_path = f'catwise/{self.file_name}'
         print('Loading CatWISE2020...')
@@ -31,10 +48,19 @@ class CatwiseSim:
         self.catalogue_is_loaded = True
     
     def generate_dipole(self,
+            n_initial_samples: int,
             w1_max: float = 16.4,
             w1_min: float = 9,
-            w12_min: float = 0.8
+            w12_min: float = 0.8,
+            observer_speed: float = CMB_BETA,
+            dipole_longitude: float = CMB_L,
+            dipole_latitude: float = CMB_B
         ) -> Tensor:
+        self.observer_speed = observer_speed
+        self.observer_longitude = dipole_longitude
+        self.observer_latitude = dipole_latitude
+
+        self.n_samples = n_initial_samples
         rest_w1_samples, rest_w2_samples = self.sample_magnitudes(self.n_samples)
         spectral_indices = torch.as_tensor(
             -self.spectral_index_sampler.sample(self.n_samples)
@@ -62,13 +88,13 @@ class CatwiseSim:
             lonlat=True,
             nest=True
         )
-        w1_fractional_error = self.w1_error_map[source_pixel_indices]
-        w2_fractional_error = self.w2_error_map[source_pixel_indices]
+        self.w1_fractional_error = self.w1_error_map[source_pixel_indices]
+        self.w2_fractional_error = self.w2_error_map[source_pixel_indices]
         boosted_w1_samples, boosted_w2_samples = self.add_error(
             w1_magnitudes=boosted_w1_samples,
             w2_magnitudes=boosted_w2_samples,
-            w1_fractional_error=w1_fractional_error,
-            w2_fractional_error=w2_fractional_error
+            w1_fractional_error=self.w1_fractional_error,
+            w2_fractional_error=self.w2_fractional_error
         )
 
         boosted_w12_samples = boosted_w1_samples - boosted_w2_samples
@@ -106,6 +132,42 @@ class CatwiseSim:
         self.final_w1_samples = cut_boosted_w1_samples[~cut_masked_pixels]
         self.final_w2_samples = cut_boosted_w2_samples[~cut_masked_pixels]
         self.final_w12_samples = cut_boosted_w12_samples[~cut_masked_pixels]
+
+        return self.density_map
+
+    def batch_simulator(self,
+            proposal_distribution,
+            prior_returns_numpy: bool,
+            n_samples: int,
+            n_workers: int = 32
+        ) -> tuple[Tensor, Tensor]:
+        self.n_samples = n_samples
+
+        def simulator(Theta):
+            N, v = Theta[0], Theta[1]
+            phi, theta = Theta[2], Theta[3]
+            int_N = N.to(torch.int32).item()
+
+            density_map = self.generate_dipole(
+                n_initial_samples=int_N,
+                dipole_longitude=np.rad2deg(phi),
+                dipole_latitude=np.rad2deg(np.pi / 2 - theta),
+                observer_speed=v
+            )
+            return density_map
+        
+        simulator = process_simulator(
+            simulator, proposal_distribution, prior_returns_numpy
+        )
+        check_sbi_inputs(simulator=simulator, prior=proposal_distribution)
+        Theta, self.batch_density_maps = simulate_for_sbi(
+            simulator=simulator,
+            proposal=proposal_distribution,
+            num_workers=n_workers,
+            num_simulations=n_samples
+        )
+        
+        return Theta, self.batch_density_maps
 
     def make_density_map(self, longitudes: Tensor, latitudes: Tensor) -> None:
         source_indices = hp.ang2pix(
@@ -177,11 +239,11 @@ class CatwiseSim:
 
     def initialise_data(self):
         self.colour_mag_sampler = Sample2DHistogram()
-        self.colour_mag_sampler.load_data('catwise/data/colour_mag/')
+        self.colour_mag_sampler.load_data(f'catwise/{self.cut_path}/data/colour_mag/')
         self.spectral_index_sampler = Sample1DHistogram()
-        self.spectral_index_sampler.load_data('catwise/data/spectral_index/')
-        self.w1_error_map = torch.load('catwise/data/error_map/w1_error_map.pt')
-        self.w2_error_map = torch.load('catwise/data/error_map/w2_error_map.pt')
+        self.spectral_index_sampler.load_data(f'catwise/{self.cut_path}/data/spectral_index/')
+        self.w1_error_map = torch.load(f'catwise/{self.cut_path}/data/error_map/w1_error_map.pt')
+        self.w2_error_map = torch.load(f'catwise/{self.cut_path}/data/error_map/w2_error_map.pt')
 
     def create_error_map(self) -> None:
         assert self.catalogue_is_loaded
@@ -206,16 +268,16 @@ class CatwiseSim:
             w1_error_map[pix_ind] = w1_fractional_error
             w2_error_map[pix_ind] = w2_fractional_error
         
-        if not os.path.exists('catwise/data/error_map/'):
-            os.makedirs('catwise/data/error_map/')
+        if not os.path.exists(f'catwise/{self.cut_path}/data/error_map/'):
+            os.makedirs(f'catwise/{self.cut_path}/data/error_map/')
         
         torch.save(
             torch.as_tensor(w1_error_map),
-            'catwise/data/error_map/w1_error_map.pt'
+            f'catwise/{self.cut_path}/data/error_map/w1_error_map.pt'
         )
         torch.save(
             torch.as_tensor(w2_error_map),
-            'catwise/data/error_map/w2_error_map.pt'
+            f'catwise/{self.cut_path}/data/error_map/w2_error_map.pt'
         )
 
     def create_colour_magnitude_distribution(self,
@@ -236,7 +298,7 @@ class CatwiseSim:
                 **hist_kwargs
             }
         )
-        sampler.save_data('catwise/data/colour_mag/')
+        sampler.save_data(f'catwise/{self.cut_path}/data/colour_mag/')
     
     def create_spectral_index_distribution(self,
             bins: int = 200,
@@ -255,7 +317,7 @@ class CatwiseSim:
                 **hist_kwargs
             }
         )
-        sampler.save_data('catwise/data/spectral_index/')
+        sampler.save_data(f'catwise/{self.cut_path}/data/spectral_index/')
     
     def sample_magnitudes(self, n_samples: int) -> tuple[Tensor]:
         w1_samples, w2_samples = self.colour_mag_sampler.sample(n_samples)

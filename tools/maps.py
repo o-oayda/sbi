@@ -219,7 +219,7 @@ class SkyMap:
             prior_returns_numpy: bool,
             n_samples: int,
             n_workers: int = 32
-    ) -> tuple[Tensor]:
+    ) -> tuple[Tensor, Tensor]:
         self.n_samples = n_samples
 
         if self.dipole_method == 'poisson':
@@ -258,7 +258,7 @@ class SkyMap:
         
         self.batchwise_mask(**self.mask_kwargs)
 
-        return (Theta, self.batch_density_maps)
+        return Theta, self.batch_density_maps
 
     def batchwise_mask(self, mask_fill_value, **mask_kwargs) -> None:
         if mask_fill_value == None:
