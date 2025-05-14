@@ -4,6 +4,7 @@ __pycache__*
 launch.json
 *.pt
 *.pkl
+*.fits
 
 !catwise/0p5_17p0/data/colour_mag/sampler_data.pkl
 !catwise/0p5_17p0/data/error_map/w1_error_map.pt
