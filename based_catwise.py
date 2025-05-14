@@ -1,9 +1,18 @@
 from catwise.maps import CatwiseSim
 from tools.priors import DipolePrior
 from tools.inference import Inference
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    'n_workers',
+    type=int,
+    help='Number of workers to distribute simuation over.'
+)
+args = parser.parse_args()
 
 N_SIM = 20
-N_WORKERS = 12
+N_WORKERS = args.n_workers
 
 sim = CatwiseSim(cat_w1_max=17.0, cat_w12_min=0.5)
 sim.initialise_data()
