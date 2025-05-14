@@ -65,8 +65,7 @@ def boost_magnitudes(
         spectral_index: float | Tensor
     ) -> Tensor:
     delta = doppler_shift_factor(observer_speed, angle_to_source)
-    boost_factor = delta ** ( 1 + spectral_index )
-    return magnitudes - 2.5 * (1 + spectral_index) * torch.log10(boost_factor)
+    return magnitudes - 2.5 * (1 + spectral_index) * torch.log10(delta)
 
 
 def native_to_dipole_frame(
