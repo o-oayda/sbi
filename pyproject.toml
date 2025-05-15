@@ -1,14 +1,24 @@
 [project]
 name = "dipolesbi"
 version = "0.1.0"
-description = ""
+description = "Fit dipoles using simulation-based inference."
 authors = [
     {name = "Oliver Oayda",email = "oaydaoliver@gmail.com"}
 ]
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "healpy (>=1.18.1,<2.0.0)"
+    "healpy (>=1.18.1,<2.0.0)",
+    "matplotlib (==3.7.5)",
+    "dill (>=0.4.0,<0.5.0)",
+    "torch (<2.6.0)",
+    "astropy (>=7.0.2,<8.0.0)",
+    "tqdm (>=4.67.1,<5.0.0)",
+    "sbi @ git+https://github.com/o-oayda/sbi-custom.git",
+    "numpy (<2.0.0)",
+    "corner (>=2.2.3,<3.0.0)",
+    "dynesty (>=2.1.5,<3.0.0)",
+    "emcee (>=3.1.6,<4.0.0)"
 ]
 
 
