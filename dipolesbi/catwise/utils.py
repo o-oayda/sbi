@@ -11,18 +11,19 @@ class AlphaLookup:
     Adapted from lookup_alpha_catwise.py from Secrest+21.
     '''
     def __init__(self):
-        self.lookup_table_path = 'catwise/alpha_colors.fits'
+        self.lookup_table_path = 'dipolesbi/catwise/alpha_colors.fits'
         assert os.path.exists(self.lookup_table_path)
         self.AB_VEGA_OFFSET = 2.673
         self.SPEED_OF_LIGHT_ANGSTROMS_S = speed_of_light * 1e10
     
     def make_alpha(self,
             w1_magnitude: Table.Column,
-            w12_color: Table.Column
+            w12_color: Table.Column,
+            no_check: bool = False
         ) -> Table:
         self.make_lookup_table()
         self.do_lookups(w12_color)
-        self.check_magnitude(w1_magnitude)
+        self.check_magnitude(w1_magnitude, no_check=no_check)
         return self.process_for_table()
         
     def process_for_table(self) -> Table:
@@ -63,7 +64,7 @@ class AlphaLookup:
         self.alpha_W1 = self.lookup_alpha[indices]
         self.nu_W1_iso = self.lookup_nu_W1_iso[indices]
 
-    def check_magnitude(self, w1_magnitude: np.ndarray):
+    def check_magnitude(self, w1_magnitude: np.ndarray, no_check: bool = False):
         # Calculate k such that fnu = k * nu**alpha
         # We're using the Oke & Gunn / Fukugita AB magnitude, which has a
         # zeropoint of 48.60, so the AB - Vega offset for W1 is 2.673.
@@ -72,16 +73,19 @@ class AlphaLookup:
         self.k = self.k_W1 * 10**( -W1_AB / 2.5 )
 
         # Double check to ensure that fnu = k * nu**alpha gives the right mag
-        nu, Snu = self.get_passband('catwise/RSR-W1.txt')
+        nu, Snu = self.get_passband('dipolesbi/catwise/RSR-W1.txt')
         W1_AB_check = np.empty(self.n_sources, dtype=float)
         
-        for i in tqdm(range(self.n_sources)):
-            fnu = self.k[i] * nu**self.alpha_W1[i]
-            W1_AB_check[i] = self.compute_synth_ABmag(nu, fnu, Snu)
+        if no_check:
+            return None
+        else:
+            for i in tqdm(range(self.n_sources)):
+                fnu = self.k[i] * nu**self.alpha_W1[i]
+                W1_AB_check[i] = self.compute_synth_ABmag(nu, fnu, Snu)
 
-        abs_dmag = np.abs(W1_AB_check - W1_AB)
-        if abs_dmag.max() > 1e-12:
-            print("WARNING: Measured and predicted magnitudes differ!")
+            abs_dmag = np.abs(W1_AB_check - W1_AB)
+            if abs_dmag.max() > 1e-12:
+                print("WARNING: Measured and predicted magnitudes differ!")
 
     @staticmethod
     def closest(dx):

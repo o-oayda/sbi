@@ -41,7 +41,7 @@ class CatwiseSim:
         return f'{self.cat_w12_min}_{self.cat_w1_max}'
 
     def load_catalogue(self):
-        self.file_path = f'catwise/{self.file_name}'
+        self.file_path = f'dipolesbi/catwise/{self.file_name}'
         print('Loading CatWISE2020...')
         self.catalogue = Table.read(self.file_path)
         print('Finished loading CatWISE2020.')
@@ -232,18 +232,26 @@ class CatwiseSim:
         # )
         return condition
 
-    def precompute_data(self):
+    def precompute_data(self, no_check: bool = False):
         self.create_colour_magnitude_distribution()
-        self.create_spectral_index_distribution()
+        self.create_spectral_index_distribution(no_check=no_check)
         self.create_error_map()
 
     def initialise_data(self):
         self.colour_mag_sampler = Sample2DHistogram()
-        self.colour_mag_sampler.load_data(f'catwise/{self.cut_path}/data/colour_mag/')
+        self.colour_mag_sampler.load_data(
+            f'dipolesbi/catwise/{self.cut_path}/data/colour_mag/'
+        )
         self.spectral_index_sampler = Sample1DHistogram()
-        self.spectral_index_sampler.load_data(f'catwise/{self.cut_path}/data/spectral_index/')
-        self.w1_error_map = torch.load(f'catwise/{self.cut_path}/data/error_map/w1_error_map.pt')
-        self.w2_error_map = torch.load(f'catwise/{self.cut_path}/data/error_map/w2_error_map.pt')
+        self.spectral_index_sampler.load_data(
+            f'dipolesbi/catwise/{self.cut_path}/data/spectral_index/'
+        )
+        self.w1_error_map = torch.load(
+            f'dipolesbi/catwise/{self.cut_path}/data/error_map/w1_error_map.pt'
+        )
+        self.w2_error_map = torch.load(
+            f'dipolesbi/catwise/{self.cut_path}/data/error_map/w2_error_map.pt'
+        )
 
     def create_error_map(self) -> None:
         assert self.catalogue_is_loaded
@@ -268,16 +276,16 @@ class CatwiseSim:
             w1_error_map[pix_ind] = w1_fractional_error
             w2_error_map[pix_ind] = w2_fractional_error
         
-        if not os.path.exists(f'catwise/{self.cut_path}/data/error_map/'):
-            os.makedirs(f'catwise/{self.cut_path}/data/error_map/')
+        if not os.path.exists(f'dipolesbi/catwise/{self.cut_path}/data/error_map/'):
+            os.makedirs(f'dipolesbi/catwise/{self.cut_path}/data/error_map/')
         
         torch.save(
             torch.as_tensor(w1_error_map),
-            f'catwise/{self.cut_path}/data/error_map/w1_error_map.pt'
+            f'dipolesbi/catwise/{self.cut_path}/data/error_map/w1_error_map.pt'
         )
         torch.save(
             torch.as_tensor(w2_error_map),
-            f'catwise/{self.cut_path}/data/error_map/w2_error_map.pt'
+            f'dipolesbi/catwise/{self.cut_path}/data/error_map/w2_error_map.pt'
         )
 
     def create_colour_magnitude_distribution(self,
@@ -298,16 +306,19 @@ class CatwiseSim:
                 **hist_kwargs
             }
         )
-        sampler.save_data(f'catwise/{self.cut_path}/data/colour_mag/')
+        sampler.save_data(f'dipolesbi/catwise/{self.cut_path}/data/colour_mag/')
     
     def create_spectral_index_distribution(self,
             bins: int = 200,
+            no_check: bool = False,
             **hist_kwargs
         ) -> None:
         assert self.catalogue_is_loaded
 
         lookup = AlphaLookup()
-        out_table = lookup.make_alpha(self.catalogue['w1'], self.catalogue['w12'])
+        out_table = lookup.make_alpha(
+            self.catalogue['w1'], self.catalogue['w12'], no_check=no_check
+        )
         self.spectral_indices = out_table['alpha_W1'].data
         
         sampler = Sample1DHistogram()
@@ -317,7 +328,7 @@ class CatwiseSim:
                 **hist_kwargs
             }
         )
-        sampler.save_data(f'catwise/{self.cut_path}/data/spectral_index/')
+        sampler.save_data(f'dipolesbi/catwise/{self.cut_path}/data/spectral_index/')
     
     def sample_magnitudes(self, n_samples: int) -> tuple[Tensor]:
         w1_samples, w2_samples = self.colour_mag_sampler.sample(n_samples)

@@ -1,4 +1,4 @@
-from tools.utils import save_simulation
+from dipolesbi.tools.utils import save_simulation
 import dynesty
 import emcee
 import numpy as np
