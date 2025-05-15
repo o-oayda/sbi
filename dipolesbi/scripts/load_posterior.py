@@ -1,9 +1,9 @@
 # %%
-from tools.maps import SkyMap
-from tools.inference import Inference
+from dipolesbi.tools.maps import SkyMap
+from dipolesbi.tools.inference import Inference
 import healpy as hp
 import matplotlib.pyplot as plt
-from tools.plotting import smooth_map, sky_probability
+from dipolesbi.tools.plotting import smooth_map, sky_probability
 from corner import corner
 # %%
 dipole_hyperparameters={

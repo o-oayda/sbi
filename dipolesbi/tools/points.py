@@ -1,4 +1,4 @@
-from tools.physics import (
+from dipolesbi.tools.physics import (
     sample_spherical_points, sample_luminosity_function, sample_spectral_index,
     aberrate_points, boost_fluxes
 )

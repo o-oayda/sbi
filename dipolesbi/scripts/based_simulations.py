@@ -1,7 +1,7 @@
-from catwise.maps import CatwiseSim
-from tools.priors import DipolePrior
-from tools.inference import Inference
+from dipolesbi.tools.maps import SkyMap
+from dipolesbi.tools.priors import DipolePrior
 import argparse
+from dipolesbi.tools.inference import Inference
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -14,10 +14,16 @@ args = parser.parse_args()
 N_SIM = 20
 N_WORKERS = args.n_workers
 
-sim = CatwiseSim(cat_w1_max=17.0, cat_w12_min=0.5)
-sim.initialise_data()
+sim = SkyMap()
+sim.configure(
+    dipole_method='base',
+    dipole_hyperparameters={
+        'flux_percentage_noise': 'ecliptic',
+        'minimum_flux_cut': 3
+    }
+)
 prior = DipolePrior(
-    mean_count_range=[25_000_000, 35_000_000],
+    mean_count_range=[8_000_000, 12_000_000],
     amplitude_range=[0, 0.01]
 )
 
@@ -25,6 +31,5 @@ inferer = Inference(prior, sim)
 inferer.make_batch_simulations(
     n_simulations=N_SIM,
     n_workers=N_WORKERS,
-    save=True,
-    custom_save_dir='catwise_0p5_17p0'
+    save=True
 )

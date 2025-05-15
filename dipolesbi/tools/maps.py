@@ -1,5 +1,5 @@
 import numpy as np
-from tools.points import (
+from dipolesbi.tools.points import (
     sample_points_with_flux, boost_points_with_flux, flux_cut,
     add_noise_to_fluxes
 )
@@ -7,19 +7,19 @@ import healpy as hp
 import torch
 from torch import poisson
 from torch.types import Tensor
-from tools.utils import (
+from dipolesbi.tools.utils import (
     check_vectorised_input, spherical_to_cartesian, omega_to_theta,
     equatorial_to_ecliptic
 )
-from tools.physics import ellis_baldwin_amplitude
+from dipolesbi.tools.physics import ellis_baldwin_amplitude
 from typing import Literal, Callable
 from sbi.inference import simulate_for_sbi
 from sbi.utils.user_input_checks import (
     check_sbi_inputs,
     process_simulator,
 )
-from tools.noise_models import parse_noise_model
-from tools.noise_models import ecliptic_noise
+from dipolesbi.tools.noise_models import parse_noise_model
+from dipolesbi.tools.noise_models import ecliptic_noise
 
 class Mask:
     def __init__(self, nside: int = 32):

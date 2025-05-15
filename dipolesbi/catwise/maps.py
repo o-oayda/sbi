@@ -1,17 +1,17 @@
 from astropy.table import Table
-from tools.utils import Sample1DHistogram, Sample2DHistogram
+from dipolesbi.tools.utils import Sample1DHistogram, Sample2DHistogram
 from torch.types import Tensor
 import torch
-from tools.physics import (
+from dipolesbi.tools.physics import (
     sample_spherical_points, aberrate_points, boost_magnitudes
 )
-from tools.constants import *
-from catwise.utils import AlphaLookup
+from dipolesbi.tools.constants import *
+from dipolesbi.catwise.utils import AlphaLookup
 import numpy as np
 import healpy as hp
 from tqdm import tqdm
 import os
-from tools.maps import Mask
+from dipolesbi.tools.maps import Mask
 from sbi.utils.user_input_checks import process_simulator, check_sbi_inputs
 from sbi.inference import simulate_for_sbi
 

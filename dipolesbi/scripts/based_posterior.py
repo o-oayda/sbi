@@ -1,4 +1,4 @@
-from tools.inference import Inference
+from dipolesbi.tools.inference import Inference
 
 inference = Inference()
 inference.run_sbi(sim_dir='sim1')

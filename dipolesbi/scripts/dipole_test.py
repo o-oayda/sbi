@@ -1,11 +1,11 @@
 # %%
 import healpy as hp
 import matplotlib.pyplot as plt
-from tools.maps import SkyMap
-from tools.models import DipolePoisson
+from dipolesbi.tools.maps import SkyMap
+from dipolesbi.tools.models import DipolePoisson
 from corner import corner
 import torch
-from tools.plotting import sky_probability
+from dipolesbi.tools.plotting import sky_probability
 # %%
 D = 0.025
 PHI =  5
