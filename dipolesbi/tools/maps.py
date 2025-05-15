@@ -46,7 +46,7 @@ class Mask:
     
     def catwise_mask(self) -> list:
         galactic_mask = hp.reorder(
-            np.load('catwise/CatWISE_Mask_nside64.npy'),
+            np.load('dipolesbi/catwise/CatWISE_Mask_nside64.npy'),
             r2n=True
         )
         masked_pixel_indices = list(np.where(galactic_mask == 0)[0])
