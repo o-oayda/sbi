@@ -57,8 +57,8 @@ class CatwiseSim:
             dipole_latitude: float = CMB_B
         ) -> Tensor:
         self.observer_speed = observer_speed
-        self.observer_longitude = dipole_longitude
-        self.observer_latitude = dipole_latitude
+        self.dipole_longitude = dipole_longitude
+        self.dipole_latitude = dipole_latitude
 
         self.n_samples = n_initial_samples
         rest_w1_samples, rest_w2_samples = self.sample_magnitudes(self.n_samples)

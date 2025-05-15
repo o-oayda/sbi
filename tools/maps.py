@@ -65,6 +65,9 @@ class SkyMap:
             dipole_hyperparameters: dict = {},
             mask_kwargs: dict | None = None
         ) -> None:
+        '''
+        Configures parameters for the batch simulator method.
+        '''
         self.dipole_method = dipole_method
         self.dipole_hyperparameters = dipole_hyperparameters
         if mask_kwargs is None:
@@ -104,7 +107,7 @@ class SkyMap:
             return poisson_mean
 
     def generate_dipole_from_base(self,
-            observer_direction: tuple[float],
+            observer_direction: tuple[float, float],
             n_initial_points: int,
             observer_speed: float = 0.00123,
             luminosity_function_index: int = 2,
@@ -115,7 +118,8 @@ class SkyMap:
             noise_model_kwargs: dict = {}
         ) -> Tensor:
         '''
-        Probably cannot be vectorised.
+        :param observer_direction: Direction of observer's motion in spherical
+            coordinates in radians (phi, theta).
         '''
         dipole_longitude_rad, dipole_colatitude_rad = torch.as_tensor(
             observer_direction
