@@ -15,3 +15,6 @@ launch.json
 !catwise/0p7_16p8/data/error_map/w1_error_map.pt
 !catwise/0p7_16p8/data/error_map/w2_error_map.pt
 !catwise/0p7_16p8/data/spectral_index/sampler_data.pkl
+
+*.png
+*.pdf
