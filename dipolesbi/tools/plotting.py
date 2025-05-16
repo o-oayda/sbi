@@ -1,13 +1,12 @@
-from tools.utils import (
+from dipolesbi.tools.utils import (
     compute_2D_contours, convert_to_l_dash, samples_to_hpmap
 )
-from tools.maps import average_smooth_map
+from dipolesbi.tools.maps import average_smooth_map
 import healpy as hp
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from torch.types import Tensor
-import torch
 
 def sky_probability(
     X: Tensor,

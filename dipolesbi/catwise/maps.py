@@ -15,6 +15,58 @@ from dipolesbi.tools.maps import Mask
 from sbi.utils.user_input_checks import process_simulator, check_sbi_inputs
 from sbi.inference import simulate_for_sbi
 
+class CatwiseReal:
+    # TODO: refactor due to code duplication with CatwiseSim
+    def __init__(self, nside: int = 64):
+        self.file_path = (
+            'dipolesbi/catwise/catwise_agns_masked_final_w1lt16p5_alpha.fits'
+        )
+        self.nside = nside
+
+        self.load_catalogue()
+        self.make_cuts()
+        self.make_density_map()
+        self.mask_pixels()
+    
+    def load_catalogue(self) -> None:
+        self.catalogue = Table.read(self.file_path)
+
+    def make_cuts(self) -> None:
+        flux_cuts = (self.catalogue['w1'] < 16.4) & (self.catalogue['w1'] > 9)
+        self.catalogue = self.catalogue[flux_cuts]
+
+    def make_density_map(self) -> None:
+        source_indices = hp.ang2pix(
+            self.nside,
+            self.catalogue['l'].data,
+            self.catalogue['b'].data,
+            lonlat=True,
+            nest=True
+        )
+        self.source_indices = torch.as_tensor(source_indices)
+        self._density_map =  torch.bincount(
+            self.source_indices,
+            minlength=hp.nside2npix(self.nside)
+        )
+    
+    @property
+    def density_map(self):
+        out = self._density_map.to(dtype=torch.float32)
+        out[self.mask_map == 1] = self.fill_value
+        return out
+
+    def mask_pixels(self, fill_value = None) -> None:
+        self.mask = Mask(nside=self.nside)
+        self.mask_map = torch.zeros(self.mask.npix)
+
+        masked_pixel_indices = self.mask.catwise_mask()
+        self.mask_map[masked_pixel_indices] = 1
+        
+        if fill_value == None:
+            self.fill_value = torch.nan
+        else:
+            self.fill_value = fill_value
+
 class CatwiseSim:
     def __init__(self,
             cat_w1_max: float,
