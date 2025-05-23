@@ -6,7 +6,38 @@ import healpy as hp
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from torch.types import Tensor
+from typing import Callable
+
+def posterior_predictive_check(
+        samples: Tensor,
+        model: Callable,
+        n_samples: int = 5,
+        **projview_kwargs
+) -> None:
+    random_integers = torch.randint(
+        low=0,
+        high=samples.shape[0],
+        size=(n_samples,)
+    )
+    random_samples = samples[random_integers, :]
+    predictive_maps = model(random_samples)
+    
+    plt.figure(figsize=(4,9))  
+    for i in range(n_samples):
+        hp.projview(
+            predictive_maps[i, :],
+            sub=(n_samples, 1, i+1), # type: ignore
+            cbar=False,
+            nest=True,
+            override_plot_properties={
+                'figure_width': 3
+            },
+            **projview_kwargs
+        )
+    
+    plt.show()
 
 def sky_probability(
     X: Tensor,

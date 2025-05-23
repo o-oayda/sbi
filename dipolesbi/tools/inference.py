@@ -10,6 +10,7 @@ from sbi.utils.user_input_checks import process_prior
 import pickle
 import healpy as hp
 import os
+from numpy.typing import NDArray
 
 class Inference:
     def __init__(self, prior=None, model=None):
@@ -158,5 +159,8 @@ class Inference:
         with open(file_path, "rb") as handle:
             self.posterior = pickle.load(handle)
 
-    def sample_amortized_posterior(self, x_obs, n_samps: int = 10_000):
+    def sample_amortized_posterior(self,
+            x_obs,
+            n_samps: int = 10_000
+    ) -> NDArray[np.float64]:
         return self.posterior.sample((n_samps,), x=x_obs).cpu().detach().numpy()
