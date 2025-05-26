@@ -29,13 +29,18 @@ class CatwiseReal:
         self.mask_pixels()
     
     def load_catalogue(self) -> None:
+        print(f'Reading in CatWISE2020 from {self.file_path}...')
         self.catalogue = Table.read(self.file_path)
+        print(f'Loaded CatWISE2020.')
+
 
     def make_cuts(self) -> None:
+        print('Making flux cuts...')
         flux_cuts = (self.catalogue['w1'] < 16.4) & (self.catalogue['w1'] > 9)
         self.catalogue = self.catalogue[flux_cuts]
 
     def make_density_map(self) -> None:
+        print('Computing density map...')
         source_indices = hp.ang2pix(
             self.nside,
             self.catalogue['l'].data,
@@ -56,6 +61,7 @@ class CatwiseReal:
         return out
 
     def mask_pixels(self, fill_value = None) -> None:
+        print('Masking pixels...')
         self.mask = Mask(nside=self.nside)
         self.mask_map = torch.zeros(self.mask.npix)
 
