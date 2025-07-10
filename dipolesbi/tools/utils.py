@@ -9,6 +9,8 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 from operator import itemgetter
 import dill as pickle
+from numpy.typing import NDArray
+from collections import defaultdict
 
 def spherical_to_cartesian(theta_phi, device='cpu'):
     '''
@@ -222,6 +224,29 @@ def equatorial_to_ecliptic(ra, dec, output_unit='radians'):
     else:
         raise Exception(
             'Not a valid unit. Select either radians of degrees.')
+
+class ParameterMap:
+    def __init__(self,
+            pixel_indices: NDArray[np.int_],
+            parameter: NDArray[np.float_],
+            nside: int
+    ) -> None:
+        self.parameter_dict = defaultdict(list)
+        self.nside = nside
+        for idx, pix in enumerate(pixel_indices):
+            self.parameter_dict[int(pix)].append( parameter[idx] )
+        self.median_map = None
+
+    def get_map(self) -> NDArray[np.float_]:
+        if self.median_map is None:
+            n_pix = hp.nside2npix(self.nside)
+            self.median_map = np.full(n_pix, np.nan)
+            
+            for pix, parameter_values in self.parameter_dict.items():
+                if len(parameter_values) > 0:
+                    self.median_map[pix] = np.median(parameter_values)
+        
+        return self.median_map
 
 class Sample1DHistogram:
     def __init__(self) -> None:

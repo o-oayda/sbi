@@ -5,6 +5,7 @@ from scipy.constants import speed_of_light
 import astropy.units as u
 from scipy.spatial import cKDTree
 from tqdm import tqdm
+from numpy.typing import NDArray
 
 class AlphaLookup:
     '''
@@ -17,8 +18,8 @@ class AlphaLookup:
         self.SPEED_OF_LIGHT_ANGSTROMS_S = speed_of_light * 1e10
     
     def make_alpha(self,
-            w1_magnitude: Table.Column,
-            w12_color: Table.Column,
+            w1_magnitude: NDArray[np.float_],
+            w12_color: NDArray[np.float_],
             no_check: bool = False
         ) -> Table:
         self.make_lookup_table()
