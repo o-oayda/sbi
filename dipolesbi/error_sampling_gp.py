@@ -52,10 +52,10 @@ pixel_indicy = hp.ang2pix(
 )
 boolean_exclusion = [idx not in masked_pixels_set for idx in pixel_indicy]
 masked_catalogue = catalogue[boolean_exclusion]
-mag = masked_catalogue['w2']
-sigma = masked_catalogue['w2e']
-n_exp = np.log10( masked_catalogue['w2cov'] )
-covmap = ParameterMap(pixel_indicy[boolean_exclusion], masked_catalogue['w2cov'], 64)
+mag = masked_catalogue['w1']
+sigma = masked_catalogue['w1e']
+n_exp = np.log10( masked_catalogue['w1cov'] )
+covmap = ParameterMap(pixel_indicy[boolean_exclusion], masked_catalogue['w1cov'], 64)
 
 hp.projview( covmap.get_map(), norm='log', nest=True )
 # %%

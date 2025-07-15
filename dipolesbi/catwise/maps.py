@@ -1,5 +1,5 @@
 from astropy.table import Table
-from dipolesbi.tools.utils import Sample1DHistogram, Sample2DHistogram
+from dipolesbi.tools.utils import Sample1DHistogram, Sample2DHistogram, ParameterMap
 from torch.types import Tensor
 import torch
 from dipolesbi.tools.physics import (
@@ -153,13 +153,7 @@ class CatwiseSim:
             rest_source_longitudes_deg, rest_source_latitudes_deg
         )
 
-        boosted_w1_samples = self.boost_magnitudes(
-            rest_w1_samples, rest_source_to_dipole_angle_deg, spectral_indices
-        )
-        boosted_w2_samples = self.boost_magnitudes(
-            rest_w2_samples, rest_source_to_dipole_angle_deg, spectral_indices
-        )
-
+        # mask now for efficiency
         source_pixel_indices = hp.ang2pix(
             self.nside,
             boosted_source_longitudes_deg,
@@ -167,30 +161,57 @@ class CatwiseSim:
             lonlat=True,
             nest=True
         )
-        
-        # self.w1_fractional_error = self.w1mag_coverage_rgi(
-            # torch.column_stack
-        # )
-        # self.w1_fractional_error = self.w1_error_map[source_pixel_indices]
-        # self.w2_fractional_error = self.w2_error_map[source_pixel_indices]
-        self.w1_fractional_error,\
-        self.w2_fractional_error = self.sample_errors_ultra_fast(
-            source_pixel_indices
+        self.mask_pixels()
+        boolean_mask = ~torch.isin(
+            source_pixel_indices,
+            torch.nonzero(self.mask_map == 1).squeeze()
         )
-        boosted_w1_samples, boosted_w2_samples,\
-            sigma_w1, sigma_w2 = self.add_error(
-            w1_magnitudes=boosted_w1_samples,
-            w2_magnitudes=boosted_w2_samples,
-            w1_fractional_error=self.w1_fractional_error,
-            w2_fractional_error=self.w2_fractional_error
+        rest_w1_samples = rest_w1_samples[boolean_mask]
+        rest_w2_samples = rest_w2_samples[boolean_mask]
+        rest_w12_samples = rest_w12_samples[boolean_mask]
+        boosted_source_longitudes_deg = boosted_source_longitudes_deg[boolean_mask]
+        boosted_source_latitudes_deg = boosted_source_latitudes_deg[boolean_mask]
+        rest_source_to_dipole_angle_deg = rest_source_to_dipole_angle_deg[boolean_mask]
+        spectral_indices = spectral_indices[boolean_mask]
+        source_pixel_indices = source_pixel_indices[boolean_mask]
+
+        self.boosted_w1_samples = self.boost_magnitudes(
+            rest_w1_samples, rest_source_to_dipole_angle_deg, spectral_indices
+        )
+        self.boosted_w2_samples = self.boost_magnitudes(
+            rest_w2_samples, rest_source_to_dipole_angle_deg, spectral_indices
+        )
+        
+        self.source_log_w1_coverages = np.log10(self.w1_coverage_map[source_pixel_indices])
+        self.source_log_w2_coverages = np.log10(self.w2_coverage_map[source_pixel_indices])
+        self.w1_error = torch.as_tensor(
+            self.w1mag_coverage_rgi(
+                torch.column_stack(
+                    [self.boosted_w1_samples, self.source_log_w1_coverages]
+                )
+            )
+        )
+        self.w2_error = torch.as_tensor(
+            self.w2mag_coverage_rgi(
+                torch.column_stack(
+                    [self.boosted_w2_samples, self.source_log_w2_coverages]
+                )
+            )
+        )
+        self.boosted_w1_samples, self.boosted_w2_samples = self.add_error(
+            w1_magnitudes=self.boosted_w1_samples,
+            w2_magnitudes=self.boosted_w2_samples,
+            w1_error=self.w1_error,
+            w2_error=self.w2_error
         )
 
-        # boosted_w12_samples = boosted_w1_samples - boosted_w2_samples
-        # boosted_w12_errors = np.sqrt( sigma_w1**2 + sigma_w2**2 )
-        boosted_w12_samples = rest_w12_samples
+        # should be identical to rest_w12_samples since colour is invariant;
+        # TODO: check this
+        boosted_w12_samples = self.boosted_w1_samples - self.boosted_w2_samples
+        boosted_w12_errors = np.sqrt( self.w1_error**2 + self.w2_error**2 )
         
         cut = self.magnitude_cut_boolean(
-            w1_magnitudes=boosted_w1_samples,
+            w1_magnitudes=self.boosted_w1_samples,
             w12_magnitudes=boosted_w12_samples,
             w1_max=w1_max,
             w1_min=w1_min,
@@ -198,36 +219,22 @@ class CatwiseSim:
         )
         cut_boosted_source_longitudes_deg = boosted_source_longitudes_deg[cut]
         cut_boosted_source_latitudes_deg = boosted_source_latitudes_deg[cut]
-        cut_boosted_w1_samples = boosted_w1_samples[cut]
-        cut_boosted_w2_samples = boosted_w2_samples[cut]
+        cut_boosted_w1_samples = self.boosted_w1_samples[cut]
+        cut_boosted_w2_samples = self.boosted_w2_samples[cut]
         cut_boosted_w12_samples = boosted_w12_samples[cut]
         cut_boosted_w12_errors = boosted_w12_errors[cut]
+        cut_source_pixel_indices = source_pixel_indices[cut]
 
         self._density_map = self.make_density_map(
             longitudes=cut_boosted_source_longitudes_deg,
             latitudes=cut_boosted_source_latitudes_deg
         )
-        self.mask_pixels()
 
-        cut_source_pixel_indices = hp.ang2pix(
-            self.nside,
-            cut_boosted_source_longitudes_deg,
-            cut_boosted_source_latitudes_deg,
-            lonlat=True,
-            nest=True
-        )
-        cut_masked_pixels = torch.isin(
-            cut_source_pixel_indices,
-            torch.nonzero(self.mask_map == 1).squeeze()
-        )
-        self.final_w1_samples = cut_boosted_w1_samples[~cut_masked_pixels]
-        self.final_w2_samples = cut_boosted_w2_samples[~cut_masked_pixels]
-        self.final_w12_samples = cut_boosted_w12_samples[~cut_masked_pixels]
-        self.final_w12_frac_errors = (
-            cut_boosted_w12_errors[~cut_masked_pixels]
-            / self.final_w12_samples
-        )
-        self.final_pixel_indices = cut_source_pixel_indices[~cut_masked_pixels]
+        self.final_w1_samples = cut_boosted_w1_samples
+        self.final_w2_samples = cut_boosted_w2_samples
+        self.final_w12_samples = cut_boosted_w12_samples
+        self.final_w12_frac_errors = cut_boosted_w12_errors / self.final_w12_samples
+        self.final_pixel_indices = cut_source_pixel_indices
 
         return self.density_map
 
@@ -304,22 +311,19 @@ class CatwiseSim:
 
     def add_error(self,
             w1_magnitudes: Tensor,
-            w1_fractional_error: Tensor,
+            w1_error: Tensor,
             w2_magnitudes: Tensor,
-            w2_fractional_error: Tensor
-        ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-        sigma_w1 = w1_fractional_error * w1_magnitudes
-        sigma_w2 = w2_fractional_error * w2_magnitudes
-        
+            w2_error: Tensor
+        ) -> tuple[Tensor, Tensor]:
         boosted_w1_samples = torch.normal(
             mean=w1_magnitudes,
-            std=sigma_w1
+            std=w1_error
         )
         boosted_w2_samples = torch.normal(
             mean=w2_magnitudes,
-            std=sigma_w2
+            std=w2_error
         )
-        return boosted_w1_samples, boosted_w2_samples, sigma_w1, sigma_w2
+        return boosted_w1_samples, boosted_w2_samples
     
     def magnitude_cut_boolean(self,
             w1_magnitudes: Tensor,
@@ -350,7 +354,8 @@ class CatwiseSim:
 
         self.create_colour_magnitude_distribution()
         self.create_spectral_index_distribution(no_check=no_check)
-        self.create_error_map()
+        # self.create_error_map()
+        self.create_coverage_maps()
         self.create_magnitude_coverage_function()
     
     def make_masked_catalogue(self):
@@ -369,6 +374,38 @@ class CatwiseSim:
             for idx in all_pixel_indices
         ]
         self.masked_catalogue = self.catalogue[self.catalogue_mask]
+
+    def create_coverage_maps(self):
+        pixel_indices = hp.ang2pix(
+                self.nside,
+            self.masked_catalogue['l'],
+            self.masked_catalogue['b'],
+            lonlat=True,
+            nest=True
+        )
+        w1_covmap = ParameterMap(
+            pixel_indices=pixel_indices,
+            parameter=self.masked_catalogue['w1cov'],
+            nside=self.nside
+        ).get_map()
+        w2_covmap = ParameterMap(
+            pixel_indices=pixel_indices,
+            parameter=self.masked_catalogue['w2cov'],
+            nside=self.nside
+        ).get_map()
+        
+        file_path = f'dipolesbi/catwise/{self.cut_path}/data/coverage_map/'
+        if not os.path.exists(file_path):
+            os.makedirs(file_path)
+        
+        torch.save(
+            torch.as_tensor(w1_covmap),
+            f'{file_path}w1_coverage_map.pt'
+        )
+        torch.save(
+            torch.as_tensor(w2_covmap),
+            f'{file_path}w2_coverage_map.pt'
+        )
 
     def create_magnitude_coverage_function(self):
         N_1D_BINS = 100
@@ -444,7 +481,7 @@ class CatwiseSim:
                 filled_median_error_grid,
                 method='linear',
                 bounds_error=False,
-                fill_value=np.nan
+                fill_value=None # extrapolation for 16.95 -> 17 mag
             )
             file_path = f'dipolesbi/catwise/{self.cut_path}/data/mag_coverage'
             self.save_interpolator(
@@ -505,7 +542,7 @@ class CatwiseSim:
             print(f"✗ Error saving interpolator: {e}")
             return False
         
-    def load_interpolator(self, full_path: str) -> RegularGridInterpolator | None:
+    def load_interpolator(self, full_path: str) -> RegularGridInterpolator:
         try:
             with open(full_path, 'rb') as f:
                 save_data = pickle.load(f)
@@ -520,7 +557,7 @@ class CatwiseSim:
         
         except Exception as e:
             print(f"Error loading interpolator: {e}")
-            return None
+            raise Exception(e)
 
     def initialise_data(self):
         self.colour_mag_sampler = Sample2DHistogram()
@@ -547,12 +584,19 @@ class CatwiseSim:
         self.w2_error_map = torch.load(
             f'{path}w2_error_map.pt'
         )
-        
         with open(f'{path}w1_error_dict.pt', 'rb') as f:
             self.w1_error_dict = pickle.load(f)
         
         with open(f'{path}w2_error_dict.pt', 'rb') as f:
             self.w2_error_dict = pickle.load(f)
+
+        path = f'dipolesbi/catwise/{self.cut_path}/data/coverage_map/'
+        self.w1_coverage_map = torch.load(
+            f'{path}w1_coverage_map.pt'
+        )
+        self.w2_coverage_map = torch.load(
+            f'{path}w2_coverage_map.pt'
+        )
         
         print('Creating fractional error lookups...')
         self.create_error_lookup_arrays()
