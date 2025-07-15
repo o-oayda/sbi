@@ -128,17 +128,13 @@ class CatwiseSim:
 
         self.n_samples = n_initial_samples
         # rest_w1_samples, rest_w2_samples = self.sample_magnitudes(self.n_samples)
-        # rest_w1_samples, rest_w2_samples = self.resample_catwise_magnitudes(self.n_samples)
-        rest_w1_samples, rest_w12_samples = self.resample_colour_mag_distribution(
-            n_samples=self.n_samples
+        rest_w1_samples, rest_w2_samples = self.resample_catwise_magnitudes(
+            self.n_samples
         )
 
         # since w12 sets alpha, it is wrong to draw alpha independently from 
         # the empirical distribuion; instead, use lookups
-        # spectral_indices = torch.as_tensor(
-            # -self.spectral_index_sampler.sample(self.n_samples)
-        # )
-        # rest_w12_samples = rest_w1_samples - rest_w2_samples
+        rest_w12_samples = rest_w1_samples - rest_w2_samples
         lookup = AlphaLookup()
         out_table = lookup.make_alpha(
             w1_magnitude=rest_w1_samples.numpy(),
@@ -160,11 +156,9 @@ class CatwiseSim:
         boosted_w1_samples = self.boost_magnitudes(
             rest_w1_samples, rest_source_to_dipole_angle_deg, spectral_indices
         )
-        # dummy w2 samples
-        boosted_w2_samples = torch.ones(len(boosted_w1_samples))
-        # boosted_w2_samples = self.boost_magnitudes(
-            # rest_w2_samples, rest_source_to_dipole_angle_deg, spectral_indices
-        # )
+        boosted_w2_samples = self.boost_magnitudes(
+            rest_w2_samples, rest_source_to_dipole_angle_deg, spectral_indices
+        )
 
         source_pixel_indices = hp.ang2pix(
             self.nside,
@@ -173,6 +167,10 @@ class CatwiseSim:
             lonlat=True,
             nest=True
         )
+        
+        # self.w1_fractional_error = self.w1mag_coverage_rgi(
+            # torch.column_stack
+        # )
         # self.w1_fractional_error = self.w1_error_map[source_pixel_indices]
         # self.w2_fractional_error = self.w2_error_map[source_pixel_indices]
         self.w1_fractional_error,\
