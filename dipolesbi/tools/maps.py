@@ -20,6 +20,8 @@ from sbi.utils.user_input_checks import (
 )
 from dipolesbi.tools.noise_models import parse_noise_model
 from dipolesbi.tools.noise_models import ecliptic_noise
+from astropy.coordinates import SkyCoord
+import astropy.units as u
 
 class Mask:
     def __init__(self, nside: int = 32):
@@ -45,12 +47,35 @@ class Mask:
         return list(masked_pixel_indices)
     
     def catwise_mask(self) -> list:
+        '''
+        Return CatWISE2020 mask used in Secrest et al. (2021) in Galactic
+        coordinates, with `nside=64` and in nest ordering.
+        '''
         galactic_mask = hp.reorder(
             np.load('dipolesbi/catwise/CatWISE_Mask_nside64.npy'),
             r2n=True
         )
         masked_pixel_indices = list(np.where(galactic_mask == 0)[0])
         return masked_pixel_indices
+    
+    def north_ecliptic_mask(self) -> list:
+        ecl_north_pole = SkyCoord(
+            lon=0 * u.deg,  # type: ignore
+            lat=90 * u.deg, # type: ignore
+            frame='geocentrictrueecliptic'
+        )
+        gal_north_pole = ecl_north_pole.transform_to('galactic')
+        pole_colatitude = np.deg2rad(90 - gal_north_pole.b.deg)  # type: ignore
+        pole_longitude = np.deg2rad(gal_north_pole.l.deg)        # type: ignore
+        vec_north_ecl_gal = hp.ang2vec(pole_colatitude, pole_longitude)
+
+        north_pole_disc_pixels = hp.query_disc(
+            nside=self.nside,
+            vec=vec_north_ecl_gal,
+            radius=np.deg2rad(5), # hardcoded 5 degrees, see error_sampling_gp.py
+            nest=True
+        )
+        return list(north_pole_disc_pixels)
 
 class SkyMap:
     def __init__(self, nside: int = 32, device: str = 'cpu'):

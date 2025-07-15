@@ -16,6 +16,12 @@ from sbi.utils.user_input_checks import process_simulator, check_sbi_inputs
 from sbi.inference import simulate_for_sbi
 from collections import defaultdict
 import pickle
+from scipy.stats import binned_statistic_2d
+from sklearn.neighbors import NearestNeighbors
+from scipy.interpolate import RegularGridInterpolator
+from numpy.typing import NDArray
+from datetime import datetime
+import matplotlib.pyplot as plt
 
 class CatwiseReal:
     # TODO: refactor due to code duplication with CatwiseSim
@@ -261,7 +267,7 @@ class CatwiseSim:
         
         return Theta, self.batch_density_maps
 
-    def make_density_map(self, longitudes: Tensor, latitudes: Tensor) -> None:
+    def make_density_map(self, longitudes: Tensor, latitudes: Tensor) -> Tensor:
         source_indices = hp.ang2pix(
             self.nside, longitudes, latitudes, lonlat=True, nest=True
         )
@@ -275,12 +281,23 @@ class CatwiseSim:
         out[self.mask_map == 1] = self.fill_value
         return out
 
-    def mask_pixels(self, fill_value = None, **kwargs) -> None:
+    def mask_pixels(self,
+            fill_value = None,
+            mask_north_ecliptic: bool = True
+    ) -> None:
         self.mask = Mask(nside=self.nside)
         self.mask_map = torch.zeros(self.mask.npix)
 
-        masked_pixel_indices = self.mask.catwise_mask()
-        self.mask_map[masked_pixel_indices] = 1
+        assert self.nside == 64, 'CatWISE mask requires nside=64.'
+        masked_pixel_indices = set(self.mask.catwise_mask())
+        
+        if mask_north_ecliptic:
+            north_pole_pixels = self.mask.north_ecliptic_mask()
+            masked_pixel_indices.update(north_pole_pixels)
+        
+        self.masked_pixel_indices_set = masked_pixel_indices
+        self.masked_pixel_indices_list = list(masked_pixel_indices)
+        self.mask_map[self.masked_pixel_indices_list] = 1
 
         if fill_value == None:
             self.fill_value = torch.nan
@@ -328,9 +345,184 @@ class CatwiseSim:
         return condition
 
     def precompute_data(self, no_check: bool = False):
+        # load catalogue and mask
+        self.load_catalogue()
+        self.mask_pixels()
+        self.make_masked_catalogue()
+
         self.create_colour_magnitude_distribution()
         self.create_spectral_index_distribution(no_check=no_check)
         self.create_error_map()
+        self.create_magnitude_coverage_function()
+    
+    def make_masked_catalogue(self):
+        assert self.catalogue_is_loaded, 'Load catalogue first.'
+        assert hasattr(self, 'masked_pixel_indices_set'), 'Load mask first.'
+        
+        all_pixel_indices = hp.ang2pix(
+            self.nside,
+            self.catalogue['l'],
+            self.catalogue['b'],
+            lonlat=True,
+            nest=True
+        )
+        self.catalogue_mask = [
+            idx not in self.masked_pixel_indices_set
+            for idx in all_pixel_indices
+        ]
+        self.masked_catalogue = self.catalogue[self.catalogue_mask]
+
+    def create_magnitude_coverage_function(self):
+        N_1D_BINS = 100
+
+        # define magnitude-coverage grid bins, same for w1 and w2 for simplicity
+        magnitude_bins = np.linspace(9, 17, N_1D_BINS)
+        coverage_bins = np.linspace(1.5, 4., N_1D_BINS)
+        magnitude_centres = 0.5 * (magnitude_bins[:-1] + magnitude_bins[1:])
+        coverage_centres = 0.5 * (coverage_bins[:-1] + coverage_bins[1:])
+
+        for band in ['w1', 'w2']:
+
+            # compute median raw photometric across all sources in each cell
+            median_error_grid, x_edges, y_edges, _ = binned_statistic_2d(
+                self.masked_catalogue[f'{band}'],
+                np.log10(self.masked_catalogue[f'{band}cov']),
+                self.masked_catalogue[f'{band}e'],
+                statistic='median',
+                bins=[magnitude_bins, coverage_bins] # type: ignore
+            )
+            n_sources, *_ = binned_statistic_2d(
+                self.masked_catalogue[f'{band}'],
+                np.log10(self.masked_catalogue[f'{band}cov']),
+                self.masked_catalogue[f'{band}e'],
+                statistic='count',
+                bins=[magnitude_bins, coverage_bins] # type: ignore
+            )
+
+            # to remove noisy cells
+            median_error_grid[n_sources < 10] = np.nan
+
+            # do nearest neighbour interpolation to fill nan cells
+            magnitude_grid, coverage_grid = np.meshgrid(
+                magnitude_centres, coverage_centres, indexing='ij'
+            )
+            mask = ~np.isnan(median_error_grid)
+            valid_indices = np.where(mask)
+            X_train = np.column_stack(
+                [magnitude_grid[valid_indices], coverage_grid[valid_indices]]
+            )
+            y_train = median_error_grid[valid_indices]
+
+            nbrs = NearestNeighbors(
+                n_neighbors=4,
+                algorithm='kd_tree',
+                leaf_size=30
+            )
+            nbrs.fit(X_train)
+
+            def knn_interpolate(X_pred, nbrs: NearestNeighbors):
+                '''
+                KNN interpolation with inverse distance weighting.
+                '''
+                distances, indices = nbrs.kneighbors(X_pred)
+                
+                # Inverse distance weighting
+                weights = 1 / (distances + 1e-8) # Eps. to avoid division by zero
+                weights = weights / weights.sum(axis=1)[:, np.newaxis]
+                
+                # Weighted prediction
+                return np.sum(weights * y_train[indices], axis=1)
+            
+            filled_median_error_grid = median_error_grid.copy()
+            nan_indices = np.where(~mask)
+            X_predict = np.column_stack(
+                [magnitude_grid[nan_indices], coverage_grid[nan_indices]]
+            )
+            filled_errors = knn_interpolate(X_predict, nbrs)
+            filled_median_error_grid[~mask] = filled_errors
+
+            rgi = RegularGridInterpolator(
+                (magnitude_centres, coverage_centres), 
+                filled_median_error_grid,
+                method='linear',
+                bounds_error=False,
+                fill_value=np.nan
+            )
+            file_path = f'dipolesbi/catwise/{self.cut_path}/data/mag_coverage'
+            self.save_interpolator(
+                band=band,
+                interpolator=rgi,
+                mag_bins=magnitude_bins,
+                cov_bins=coverage_bins,
+                filled_grid=filled_median_error_grid,
+                file_path=file_path
+            )
+            plt.pcolormesh(
+                magnitude_bins,
+                coverage_bins,
+                filled_median_error_grid.T,
+                shading='auto'
+            )
+            plt.colorbar()
+            plt.savefig(f'{file_path}/{band}_matrix_plot.png', dpi=300)
+
+    def save_interpolator(self,
+            band: str,
+            interpolator: RegularGridInterpolator,
+            mag_bins: NDArray[np.float_],
+            cov_bins: NDArray[np.float_],
+            filled_grid: NDArray[np.float_],
+            file_path: str
+    ) -> bool:
+        '''
+        Save RegularGridInterpolator and metadata for use in batch simulations.
+        '''
+        save_data = {
+            'interpolator': interpolator,
+            'band': band,
+            'mag_bins': mag_bins,
+            'cov_bins': cov_bins,
+            'filled_grid': filled_grid,
+            'metadata': {
+                'creation_date': datetime.now().isoformat(),
+                'mag_range': (mag_bins.min(), mag_bins.max()),
+                'cov_range': (cov_bins.min(), cov_bins.max()),
+                'grid_shape': filled_grid.shape,
+                'interpolation_method': 'linear'
+            }
+        }
+        try:
+            full_path = f'{file_path}/{band}_median_error_interpolator.pkl'
+
+            if not os.path.exists(file_path):
+                os.makedirs(file_path)
+
+            with open(full_path, 'wb') as f:
+                pickle.dump(save_data, f)
+            
+            print(f"Interpolator saved to: {full_path}")
+            return True
+        
+        except Exception as e:
+            print(f"✗ Error saving interpolator: {e}")
+            return False
+        
+    def load_interpolator(self, full_path: str) -> RegularGridInterpolator | None:
+        try:
+            with open(full_path, 'rb') as f:
+                save_data = pickle.load(f)
+
+            print(f"Interpolator loaded from: {full_path}")
+            print(f"Created: {save_data['metadata']['creation_date']}")
+            print(f"Mag range: {save_data['metadata']['mag_range']}")
+            print(f"Cov range: {save_data['metadata']['cov_range']}")
+            print(f"Grid shape: {save_data['metadata']['grid_shape']}")
+            
+            return save_data['interpolator']
+        
+        except Exception as e:
+            print(f"Error loading interpolator: {e}")
+            return None
 
     def initialise_data(self):
         self.colour_mag_sampler = Sample2DHistogram()
@@ -340,6 +532,14 @@ class CatwiseSim:
         self.spectral_index_sampler = Sample1DHistogram()
         self.spectral_index_sampler.load_data(
             f'dipolesbi/catwise/{self.cut_path}/data/spectral_index/'
+        )
+        self.w1mag_coverage_rgi = self.load_interpolator(
+            f'dipolesbi/catwise/{self.cut_path}/data/'
+            'mag_coverage/w1_median_error_interpolator.pkl'
+        )
+        self.w2mag_coverage_rgi = self.load_interpolator(
+            f'dipolesbi/catwise/{self.cut_path}/data/'
+            'mag_coverage/w2_median_error_interpolator.pkl'
         )
 
         path = f'dipolesbi/catwise/{self.cut_path}/data/error_map/'
