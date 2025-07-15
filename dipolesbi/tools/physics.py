@@ -6,7 +6,7 @@ from astropy.modeling.rotations import (
 import astropy.units as u
 
 
-def sample_spherical_points(n_points) -> tuple[Tensor]:
+def sample_spherical_points(n_points) -> tuple[Tensor, Tensor]:
     longitudes_deg = 360 * torch.rand(size=(n_points,))
     latitudes_deg = torch.rad2deg(
         torch.arcsin( 2 * torch.rand(size=(n_points,)) - 1)
@@ -26,19 +26,19 @@ def sample_spectral_index(
         n_points: int,
         mean_index: float,
         sigma_index: float
-    ) -> None:
+    ) -> Tensor:
     return torch.normal(mean=mean_index, std=sigma_index, size=(n_points,))
 
 
-def lorentz_factor(observer_speed: float) -> float:
+def lorentz_factor(observer_speed: float) -> Tensor:
     return 1 / ( torch.sqrt(1 - torch.as_tensor(observer_speed) ** 2) )
 
 
 def doppler_shift_factor(
         observer_speed: float,
         angle_to_source: float
-    ) -> float:
-    angle_to_source = torch.deg2rad(angle_to_source)
+    ) -> Tensor:
+    angle_to_source = torch.deg2rad(angle_to_source) # type: ignore
     gamma = lorentz_factor(observer_speed)
     return gamma * ( 1 + observer_speed * torch.cos(angle_to_source) )
 
@@ -74,7 +74,7 @@ def native_to_dipole_frame(
         dipole_longitude: float,
         dipole_latitude: float,
         pole_longitude: float = 0.
-    ) -> tuple[Tensor]:
+    ) -> tuple[Tensor, Tensor]:
     rotator = RotateCelestial2Native(
         lon=dipole_longitude * u.degree,
         lat=dipole_latitude * u.degree,
@@ -90,7 +90,7 @@ def dipole_to_native_frame(
         dipole_longitude: float,
         dipole_latitude: float,
         pole_longitude: float = 0.
-    ) -> tuple[Tensor]:
+    ) -> tuple[Tensor, Tensor]:
     rotator = RotateNative2Celestial(
         lon=dipole_longitude * u.degree,
         lat=dipole_latitude * u.degree,
@@ -106,9 +106,9 @@ def dipole_to_native_frame(
 def aberrate_points(
         rest_longitudes: Tensor,
         rest_latitudes: Tensor,
-        observer_direction: tuple[float],
+        observer_direction: tuple[float, float],
         observer_speed: float
-    ) -> tuple[Tensor]:
+    ) -> tuple[Tensor, Tensor, Tensor]:
     '''
     Aberrate points by transforming into a frame with the dipole vector as the
     pole, boosting the latitude angle, then transforming back into the native frame.

@@ -1,5 +1,8 @@
 from astropy.table import Table
-from dipolesbi.tools.utils import Sample1DHistogram, Sample2DHistogram, ParameterMap
+from dipolesbi.tools.utils import (
+    Sample1DHistogram, Sample2DHistogram, ParameterMap,
+    MultinomialSample2DHistogram
+)
 from torch.types import Tensor
 import torch
 from dipolesbi.tools.physics import (
@@ -109,7 +112,10 @@ class CatwiseSim:
     def load_catalogue(self):
         self.file_path = f'dipolesbi/catwise/{self.file_name}'
         print('Loading CatWISE2020...')
-        self.catalogue = Table.read(self.file_path)
+        self.catalogue = Table.read(
+            self.file_path,
+            unit_parse_strict='silent' # supress unit warning printouts
+        )
         print('Finished loading CatWISE2020.')
         self.catalogue_is_loaded = True
     
@@ -127,10 +133,10 @@ class CatwiseSim:
         self.dipole_latitude = dipole_latitude
 
         self.n_samples = n_initial_samples
-        # rest_w1_samples, rest_w2_samples = self.sample_magnitudes(self.n_samples)
-        rest_w1_samples, rest_w2_samples = self.resample_catwise_magnitudes(
-            self.n_samples
-        )
+        rest_w1_samples, rest_w2_samples = self.sample_magnitudes(self.n_samples)
+        # rest_w1_samples, rest_w2_samples = self.resample_catwise_magnitudes(
+            # self.n_samples
+        # )
 
         # since w12 sets alpha, it is wrong to draw alpha independently from 
         # the empirical distribuion; instead, use lookups
@@ -162,18 +168,20 @@ class CatwiseSim:
             nest=True
         )
         self.mask_pixels()
-        boolean_mask = ~torch.isin(
+        is_masked = self.mask_map == 1
+        masked_pixel_indices = torch.nonzero(is_masked).squeeze()
+        mask_slice = ~torch.isin(
             source_pixel_indices,
-            torch.nonzero(self.mask_map == 1).squeeze()
+            masked_pixel_indices
         )
-        rest_w1_samples = rest_w1_samples[boolean_mask]
-        rest_w2_samples = rest_w2_samples[boolean_mask]
-        rest_w12_samples = rest_w12_samples[boolean_mask]
-        boosted_source_longitudes_deg = boosted_source_longitudes_deg[boolean_mask]
-        boosted_source_latitudes_deg = boosted_source_latitudes_deg[boolean_mask]
-        rest_source_to_dipole_angle_deg = rest_source_to_dipole_angle_deg[boolean_mask]
-        spectral_indices = spectral_indices[boolean_mask]
-        source_pixel_indices = source_pixel_indices[boolean_mask]
+        rest_w1_samples = rest_w1_samples[mask_slice]
+        rest_w2_samples = rest_w2_samples[mask_slice]
+        rest_w12_samples = rest_w12_samples[mask_slice]
+        boosted_source_longitudes_deg = boosted_source_longitudes_deg[mask_slice]
+        boosted_source_latitudes_deg = boosted_source_latitudes_deg[mask_slice]
+        rest_source_to_dipole_angle_deg = rest_source_to_dipole_angle_deg[mask_slice]
+        spectral_indices = spectral_indices[mask_slice]
+        source_pixel_indices = source_pixel_indices[mask_slice]
 
         self.boosted_w1_samples = self.boost_magnitudes(
             rest_w1_samples, rest_source_to_dipole_angle_deg, spectral_indices
@@ -348,12 +356,13 @@ class CatwiseSim:
 
     def precompute_data(self, no_check: bool = False):
         # load catalogue and mask
-        self.load_catalogue()
+        if not self.catalogue_is_loaded:
+            self.load_catalogue()
         self.mask_pixels()
         self.make_masked_catalogue()
 
-        self.create_colour_magnitude_distribution()
-        self.create_spectral_index_distribution(no_check=no_check)
+        self.create_w1_w2_distribution()
+        # self.create_spectral_index_distribution(no_check=no_check)
         # self.create_error_map()
         self.create_coverage_maps()
         self.create_magnitude_coverage_function()
@@ -362,6 +371,7 @@ class CatwiseSim:
         assert self.catalogue_is_loaded, 'Load catalogue first.'
         assert hasattr(self, 'masked_pixel_indices_set'), 'Load mask first.'
         
+        print('Generating masked catalogue...')
         all_pixel_indices = hp.ang2pix(
             self.nside,
             self.catalogue['l'],
@@ -374,15 +384,17 @@ class CatwiseSim:
             for idx in all_pixel_indices
         ]
         self.masked_catalogue = self.catalogue[self.catalogue_mask]
+        print('Done.')
 
     def create_coverage_maps(self):
         pixel_indices = hp.ang2pix(
-                self.nside,
+            self.nside,
             self.masked_catalogue['l'],
             self.masked_catalogue['b'],
             lonlat=True,
             nest=True
         )
+        print('Building coverage maps...')
         w1_covmap = ParameterMap(
             pixel_indices=pixel_indices,
             parameter=self.masked_catalogue['w1cov'],
@@ -406,6 +418,7 @@ class CatwiseSim:
             torch.as_tensor(w2_covmap),
             f'{file_path}w2_coverage_map.pt'
         )
+        print(f'Saved coverage maps at {file_path}.')
 
     def create_magnitude_coverage_function(self):
         N_1D_BINS = 100
@@ -417,7 +430,8 @@ class CatwiseSim:
         coverage_centres = 0.5 * (coverage_bins[:-1] + coverage_bins[1:])
 
         for band in ['w1', 'w2']:
-
+            print(f'Building {band} mag-coverage-error distribution...')
+                
             # compute median raw photometric across all sources in each cell
             median_error_grid, x_edges, y_edges, _ = binned_statistic_2d(
                 self.masked_catalogue[f'{band}'],
@@ -481,7 +495,7 @@ class CatwiseSim:
                 filled_median_error_grid,
                 method='linear',
                 bounds_error=False,
-                fill_value=None # extrapolation for 16.95 -> 17 mag
+                fill_value=None # extrapolation for 16.95 -> 17 mag # type: ignore
             )
             file_path = f'dipolesbi/catwise/{self.cut_path}/data/mag_coverage'
             self.save_interpolator(
@@ -492,6 +506,7 @@ class CatwiseSim:
                 filled_grid=filled_median_error_grid,
                 file_path=file_path
             )
+            plt.figure()
             plt.pcolormesh(
                 magnitude_bins,
                 coverage_bins,
@@ -560,14 +575,14 @@ class CatwiseSim:
             raise Exception(e)
 
     def initialise_data(self):
-        self.colour_mag_sampler = Sample2DHistogram()
+        self.colour_mag_sampler = MultinomialSample2DHistogram()
         self.colour_mag_sampler.load_data(
             f'dipolesbi/catwise/{self.cut_path}/data/colour_mag/'
         )
-        self.spectral_index_sampler = Sample1DHistogram()
-        self.spectral_index_sampler.load_data(
-            f'dipolesbi/catwise/{self.cut_path}/data/spectral_index/'
-        )
+        # self.spectral_index_sampler = Sample1DHistogram()
+        # self.spectral_index_sampler.load_data(
+            # f'dipolesbi/catwise/{self.cut_path}/data/spectral_index/'
+        # )
         self.w1mag_coverage_rgi = self.load_interpolator(
             f'dipolesbi/catwise/{self.cut_path}/data/'
             'mag_coverage/w1_median_error_interpolator.pkl'
@@ -584,11 +599,11 @@ class CatwiseSim:
         self.w2_error_map = torch.load(
             f'{path}w2_error_map.pt'
         )
-        with open(f'{path}w1_error_dict.pt', 'rb') as f:
-            self.w1_error_dict = pickle.load(f)
+        # with open(f'{path}w1_error_dict.pt', 'rb') as f:
+            # self.w1_error_dict = pickle.load(f)
         
-        with open(f'{path}w2_error_dict.pt', 'rb') as f:
-            self.w2_error_dict = pickle.load(f)
+        # with open(f'{path}w2_error_dict.pt', 'rb') as f:
+            # self.w2_error_dict = pickle.load(f)
 
         path = f'dipolesbi/catwise/{self.cut_path}/data/coverage_map/'
         self.w1_coverage_map = torch.load(
@@ -598,9 +613,9 @@ class CatwiseSim:
             f'{path}w2_coverage_map.pt'
         )
         
-        print('Creating fractional error lookups...')
-        self.create_error_lookup_arrays()
-        print('Done.')
+        # print('Creating fractional error lookups...')
+        # self.create_error_lookup_arrays()
+        # print('Done.')
 
     def create_error_map(self) -> None:
         assert self.catalogue_is_loaded
@@ -664,7 +679,7 @@ class CatwiseSim:
         with open(f'{file_path}w12_error_dict.pt', 'wb') as handle:
             pickle.dump(w12_error_dict, handle)
 
-    def create_colour_magnitude_distribution(self,
+    def create_w1_w2_distribution(self,
             bins: int = 200,
             **hist_kwargs
         ) -> None:
@@ -673,7 +688,7 @@ class CatwiseSim:
         w1_mags = self.masked_catalogue['w1']
         w2_mags = self.masked_catalogue['w2']
 
-        sampler = Sample2DHistogram()
+        sampler = MultinomialSample2DHistogram()
         sampler.build(
             w1_mags,
             w2_mags,
@@ -682,7 +697,14 @@ class CatwiseSim:
                 **hist_kwargs
             }
         )
-        sampler.save_data(f'dipolesbi/catwise/{self.cut_path}/data/colour_mag/')
+        path = f'dipolesbi/catwise/{self.cut_path}/data/colour_mag/'
+        sampler.save_data(path)
+        print(f'Saved W1-W2 distribution to {path}.')
+
+        print(f'Generating W1-W2 distribution plot...')
+        w1_samples, w2_samples = sampler.sample(n_samples=30_000_000)
+        plt.hist2d(w1_samples, w2_samples, bins=400, norm='log')
+        plt.savefig(f'{path}w1_w2_dist.png', dpi=300)
     
     def create_spectral_index_distribution(self,
             bins: int = 200,
@@ -695,7 +717,7 @@ class CatwiseSim:
         out_table = lookup.make_alpha(
             self.masked_catalogue['w1'], self.masked_catalogue['w12'], no_check=no_check
         )
-        self.spectral_indices = out_table['alpha_W1'].data
+        self.spectral_indices = out_table['alpha_W1'].data # type: ignore
         
         sampler = Sample1DHistogram()
         sampler.build(self.spectral_indices,
@@ -704,13 +726,17 @@ class CatwiseSim:
                 **hist_kwargs
             }
         )
-        # sampler.save_data(f'dipolesbi/catwise/{self.cut_path}/data/spectral_index/')
+        sampler.save_data(f'dipolesbi/catwise/{self.cut_path}/data/spectral_index/')
     
     def resample_catwise_magnitudes(self, n_samples: int) -> tuple[Tensor, Tensor]:
         if not self.catalogue_is_loaded:
             self.load_catalogue()
         
-        w1_real, w2_real = self.catalogue['w1'], self.catalogue['w2']
+        if not hasattr(self, 'masked_catalogue'):
+            self.mask_pixels()
+            self.make_masked_catalogue()
+        
+        w1_real, w2_real = self.masked_catalogue['w1'], self.masked_catalogue['w2']
         resampled_indexes = np.random.choice(len(w1_real), n_samples)
         w1_resampled = w1_real[resampled_indexes].astype('float32')
         w2_resampled = w2_real[resampled_indexes].astype('float32')
@@ -739,7 +765,7 @@ class CatwiseSim:
     def aberrate_points(self,
             longitudes_deg: Tensor,
             latitudes_deg: Tensor
-        ) -> Tensor:
+        ) -> tuple[Tensor, Tensor, Tensor]:
         boosted_longitudes_deg, boosted_latitudes_deg,\
         rest_source_to_dipole_angle = aberrate_points(
             rest_longitudes=longitudes_deg,
