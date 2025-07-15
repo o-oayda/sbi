@@ -561,7 +561,7 @@ class CatwiseSim:
     def create_error_map(self) -> None:
         assert self.catalogue_is_loaded
 
-        l, b = self.catalogue['l'], self.catalogue['b']
+        l, b = self.masked_catalogue['l'], self.masked_catalogue['b']
         source_pixel_indices = hp.ang2pix(self.nside, l, b, lonlat=True, nest=True)
         n_pixels = hp.nside2npix(self.nside)
         
@@ -576,13 +576,16 @@ class CatwiseSim:
             active_pixel = source_pixel_indices == pix_ind
 
             w1_fractional_error = (
-                self.catalogue['w1e'][active_pixel] / self.catalogue['w1'][active_pixel]
+                self.masked_catalogue['w1e'][active_pixel]
+                / self.masked_catalogue['w1'][active_pixel]
             )
             w2_fractional_error = (
-                self.catalogue['w2e'][active_pixel] / self.catalogue['w2'][active_pixel]
+                self.masked_catalogue['w2e'][active_pixel]
+                / self.masked_catalogue['w2'][active_pixel]
             )
             w12_fractional_error = (
-                self.catalogue['w12e'][active_pixel] / self.catalogue['w12'][active_pixel]
+                self.masked_catalogue['w12e'][active_pixel]
+                / self.masked_catalogue['w12'][active_pixel]
             )
 
             w1_error_dict[pix_ind] = w1_fractional_error
@@ -623,8 +626,8 @@ class CatwiseSim:
         ) -> None:
         assert self.catalogue_is_loaded
         
-        w1_mags = self.catalogue['w1']
-        w2_mags = self.catalogue['w2']
+        w1_mags = self.masked_catalogue['w1']
+        w2_mags = self.masked_catalogue['w2']
 
         sampler = Sample2DHistogram()
         sampler.build(
@@ -646,7 +649,7 @@ class CatwiseSim:
 
         lookup = AlphaLookup()
         out_table = lookup.make_alpha(
-            self.catalogue['w1'], self.catalogue['w12'], no_check=no_check
+            self.masked_catalogue['w1'], self.masked_catalogue['w12'], no_check=no_check
         )
         self.spectral_indices = out_table['alpha_W1'].data
         
