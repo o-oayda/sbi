@@ -10,6 +10,7 @@ launch.json
 !dipolesbi/catwise/0p5_17p0/data/**
 !dipolesbi/catwise/0p7_16p8/data/**
 !dipolesbi/catwise/0p0_17p2/data/**
+!dipolesbi/catwise/alpha_colors.fits
 
 *.png
 *.pdf
