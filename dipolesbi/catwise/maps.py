@@ -94,20 +94,21 @@ class CatwiseSim:
         self.dipole_longitude = CMB_L
         self.dipole_latitude = CMB_B
         self.observer_speed = CMB_BETA
+        self.cat_w1_max = cat_w1_max
+        self.cat_w12_min = cat_w12_min
         self.cut_path = self._get_cut_path(cat_w1_max, cat_w12_min)
         self.file_name = (
-            f'catwise2020_corr_w12-{self.cat_w12_min}_w1-{self.cat_w1_max}.fits'
+            f'catwise2020_corr_w12{self.cat_w12_min_str}_w1{self.cat_w1_max_str}.fits'
         )
-        # self.n_samples = 35_947_376 # length of above table
         self.catalogue_is_loaded = False
     
     def _get_cut_path(self,
             cat_w1_max: float,
             cat_w12_min: float
         ) -> str:
-        self.cat_w1_max = str(cat_w1_max).replace('.', 'p')
-        self.cat_w12_min = str(cat_w12_min).replace('.', 'p')
-        return f'{self.cat_w12_min}_{self.cat_w1_max}'
+        self.cat_w1_max_str = str(cat_w1_max).replace('.', 'p')
+        self.cat_w12_min_str = str(cat_w12_min).replace('.', 'p')
+        return f'{self.cat_w12_min_str}_{self.cat_w1_max_str}'
 
     def load_catalogue(self):
         self.file_path = f'dipolesbi/catwise/{self.file_name}'
@@ -134,9 +135,6 @@ class CatwiseSim:
 
         self.n_samples = n_initial_samples
         rest_w1_samples, rest_w2_samples = self.sample_magnitudes(self.n_samples)
-        # rest_w1_samples, rest_w2_samples = self.resample_catwise_magnitudes(
-            # self.n_samples
-        # )
 
         # since w12 sets alpha, it is wrong to draw alpha independently from 
         # the empirical distribuion; instead, use lookups
@@ -420,17 +418,31 @@ class CatwiseSim:
         )
         print(f'Saved coverage maps at {file_path}.')
 
+        plt.figure()
+        hp.projview(w1_covmap, nest=True, norm='log')
+        plt.savefig(f'{file_path}w1_coverage_map.png', dpi=300)
+
+        plt.figure()
+        hp.projview(w2_covmap, nest=True, norm='log')
+        plt.savefig(f'{file_path}w2_coverage_map.png', dpi=300)
+
+        print(f'Saved coverage map figures at {file_path}.')
+
     def create_magnitude_coverage_function(self):
-        N_1D_BINS = 100
+        N_1D_BINS = 200
 
         # define magnitude-coverage grid bins, same for w1 and w2 for simplicity
-        magnitude_bins = np.linspace(9, 17, N_1D_BINS)
+        magnitude_bins = np.linspace(
+            np.min(self.masked_catalogue['w1']),
+            self.cat_w1_max,
+            N_1D_BINS
+        )
         coverage_bins = np.linspace(1.5, 4., N_1D_BINS)
         magnitude_centres = 0.5 * (magnitude_bins[:-1] + magnitude_bins[1:])
         coverage_centres = 0.5 * (coverage_bins[:-1] + coverage_bins[1:])
 
         for band in ['w1', 'w2']:
-            print(f'Building {band} mag-coverage-error distribution...')
+            print(f'Building {band} mag-coverage-error relation...')
                 
             # compute median raw photometric across all sources in each cell
             median_error_grid, x_edges, y_edges, _ = binned_statistic_2d(
@@ -579,10 +591,6 @@ class CatwiseSim:
         self.colour_mag_sampler.load_data(
             f'dipolesbi/catwise/{self.cut_path}/data/colour_mag/'
         )
-        # self.spectral_index_sampler = Sample1DHistogram()
-        # self.spectral_index_sampler.load_data(
-            # f'dipolesbi/catwise/{self.cut_path}/data/spectral_index/'
-        # )
         self.w1mag_coverage_rgi = self.load_interpolator(
             f'dipolesbi/catwise/{self.cut_path}/data/'
             'mag_coverage/w1_median_error_interpolator.pkl'
@@ -591,20 +599,6 @@ class CatwiseSim:
             f'dipolesbi/catwise/{self.cut_path}/data/'
             'mag_coverage/w2_median_error_interpolator.pkl'
         )
-
-        path = f'dipolesbi/catwise/{self.cut_path}/data/error_map/'
-        self.w1_error_map = torch.load(
-            f'{path}w1_error_map.pt'
-        )
-        self.w2_error_map = torch.load(
-            f'{path}w2_error_map.pt'
-        )
-        # with open(f'{path}w1_error_dict.pt', 'rb') as f:
-            # self.w1_error_dict = pickle.load(f)
-        
-        # with open(f'{path}w2_error_dict.pt', 'rb') as f:
-            # self.w2_error_dict = pickle.load(f)
-
         path = f'dipolesbi/catwise/{self.cut_path}/data/coverage_map/'
         self.w1_coverage_map = torch.load(
             f'{path}w1_coverage_map.pt'
@@ -612,10 +606,6 @@ class CatwiseSim:
         self.w2_coverage_map = torch.load(
             f'{path}w2_coverage_map.pt'
         )
-        
-        # print('Creating fractional error lookups...')
-        # self.create_error_lookup_arrays()
-        # print('Done.')
 
     def create_error_map(self) -> None:
         assert self.catalogue_is_loaded
