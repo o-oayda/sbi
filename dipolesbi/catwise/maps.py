@@ -1,7 +1,6 @@
 from astropy.table import Table
 from dipolesbi.tools.utils import (
-    Sample1DHistogram, Sample2DHistogram, ParameterMap,
-    MultinomialSample2DHistogram
+    Sample1DHistogram, ParameterMap, MultinomialSample2DHistogram
 )
 from torch.types import Tensor
 import torch
@@ -127,7 +126,8 @@ class CatwiseSim:
             w12_min: float = 0.8,
             observer_speed: float = CMB_BETA,
             dipole_longitude: float = CMB_L,
-            dipole_latitude: float = CMB_B
+            dipole_latitude: float = CMB_B,
+            error_scale: float = 1.0
         ) -> Tensor:
         self.observer_speed = observer_speed
         self.dipole_longitude = dipole_longitude
@@ -207,8 +207,8 @@ class CatwiseSim:
         self.boosted_w1_samples, self.boosted_w2_samples = self.add_error(
             w1_magnitudes=self.boosted_w1_samples,
             w2_magnitudes=self.boosted_w2_samples,
-            w1_error=self.w1_error,
-            w2_error=self.w2_error
+            w1_error=error_scale * self.w1_error,
+            w2_error=error_scale * self.w2_error
         )
 
         # should be identical to rest_w12_samples since colour is invariant;
@@ -253,15 +253,16 @@ class CatwiseSim:
         self.n_samples = n_samples
 
         def simulator(Theta):
-            N, v = Theta[0], Theta[1]
-            phi, theta = Theta[2], Theta[3]
+            N, eta, v = Theta[0], Theta[1], Theta[2]
+            phi, theta = Theta[3], Theta[4]
             int_N = N.to(torch.int32).item()
 
             density_map = self.generate_dipole(
                 n_initial_samples=int_N,
                 dipole_longitude=np.rad2deg(phi),
                 dipole_latitude=np.rad2deg(np.pi / 2 - theta),
-                observer_speed=v
+                observer_speed=v,
+                error_scale=eta
             )
             return density_map
         
@@ -780,52 +781,3 @@ class CatwiseSim:
             spectral_index=spectral_index
         )
         return boosted_magnitudes
-
-    def create_error_lookup_arrays(self):
-        """Create lookup arrays for ultra-fast error sampling."""
-        n_pixels = hp.nside2npix(self.nside)
-        
-        # Find maximum number of errors per pixel
-        max_errors_w1 = max(len(errors) for errors in self.w1_error_dict.values())
-        max_errors_w2 = max(len(errors) for errors in self.w2_error_dict.values())
-        
-        # Create padded arrays (pad with NaN for empty slots)
-        self.w1_error_array = np.full((n_pixels, max_errors_w1), np.nan, dtype=np.float32)
-        self.w2_error_array = np.full((n_pixels, max_errors_w2), np.nan, dtype=np.float32)
-        self.w1_n_errors = np.zeros(n_pixels, dtype=np.int32)
-        self.w2_n_errors = np.zeros(n_pixels, dtype=np.int32)
-        
-        # Fill arrays
-        for pixel_idx, errors in self.w1_error_dict.items():
-            n_errors = len(errors)
-            if n_errors > 0:
-                self.w1_error_array[pixel_idx, :n_errors] = errors
-                self.w1_n_errors[pixel_idx] = n_errors
-        
-        for pixel_idx, errors in self.w2_error_dict.items():
-            n_errors = len(errors)
-            if n_errors > 0:
-                self.w2_error_array[pixel_idx, :n_errors] = errors
-                self.w2_n_errors[pixel_idx] = n_errors
-
-    def sample_errors_ultra_fast(self, source_pixel_indices):
-        """Ultra-fast error sampling using pre-computed arrays."""
-        n_sources = len(source_pixel_indices)
-        
-        # Generate random indices for each source
-        w1_random_indices = np.random.randint(0, self.w1_n_errors[source_pixel_indices])
-        w2_random_indices = np.random.randint(0, self.w2_n_errors[source_pixel_indices])
-        
-        # Handle pixels with no errors (set random index to 0, will select NaN)
-        w1_random_indices[self.w1_n_errors[source_pixel_indices] == 0] = 0
-        w2_random_indices[self.w2_n_errors[source_pixel_indices] == 0] = 0
-        
-        # Advanced indexing to get errors
-        w1_errors = self.w1_error_array[source_pixel_indices, w1_random_indices]
-        w2_errors = self.w2_error_array[source_pixel_indices, w2_random_indices]
-        
-        # Replace NaN with 0.0
-        w1_errors = np.nan_to_num(w1_errors, nan=0.0)
-        w2_errors = np.nan_to_num(w2_errors, nan=0.0)
-        
-        return torch.as_tensor(w1_errors), torch.as_tensor(w2_errors)

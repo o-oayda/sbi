@@ -1,20 +1,83 @@
 import torch
+from torch.types import Tensor
 from sbi.utils import BoxUniform
+from abc import ABC, abstractmethod
 
-class DipolePrior:
+class PriorMixin(ABC):
+    @property
+    @abstractmethod
+    def prior_list(self) -> list:
+        pass
+    
+    def sample(self, sample_size=torch.Size([])) -> Tensor:
+        samples = []
+        for prior in self.prior_list:
+            samples.append( prior.sample(sample_size).flatten() )
+        return torch.stack(samples, dim=1)
+    
+    def to(self, device: str) -> None:
+        for prior in self.prior_list:
+            prior.to(device)
+        self.device = device
+
+    def log_prob(self, sample_values: Tensor) -> Tensor:
+        n_samples = sample_values.shape[0]
+        log_prob = torch.zeros(n_samples)
+        for i, prior in enumerate(self.prior_list):
+            log_prob += prior.log_prob(sample_values[:, i])
+        return torch.as_tensor(log_prob)
+    
+    def add_prior(self,
+            prior: BoxUniform,
+            index: int
+    ) -> None:
+        '''
+        :param prior: Torch distribution, like BoxUniform.
+        :param index: Index at which to add the prior. E.g. specifying 0
+            makes the prior the first in the prior, 1 the 2nd, and so on...
+        '''
+        assert hasattr(self, '_prior_list')
+        self.prior_list.insert(index, prior)
+        self.dimension += 1
+
+        self.low_ranges.insert(index, float(prior.low))
+        self.high_ranges.insert(index, float(prior.high))
+    
+    def write_out(self, path):
+        with open(path, "w") as f:
+            f.write(f"Dimension: {self.dimension}\n")
+            f.write("Ranges:\n")
+            for i, (low, high) in enumerate(zip(self.low_ranges, self.high_ranges)):
+                f.write(f"  Param {i}: [{low}, {high}]\n")
+    
+    @property
+    @abstractmethod
+    def low_ranges(self) -> list:
+        pass
+
+    @property
+    @abstractmethod
+    def high_ranges(self) -> list:
+        pass
+
+class DipolePrior(PriorMixin):
     def __init__(self,
             mean_count_range: list[float] = [0, 100],
-            amplitude_range: list[float] = [0.0, 0.1],
-            longitude_range: list[float] = [0, 2*torch.pi],
-            latitude_range: list[float] = [0, torch.pi],
+            amplitude_range: list[float]  = [0.0, 0.1],
+            longitude_range: list[float]  = [0, 2*torch.pi],
+            latitude_range: list[float]   = [0, torch.pi],
             return_numpy: bool = False
     ) -> None:
         self.return_numpy = return_numpy
 
-        self.mean_count_range = mean_count_range
-        self.amplitude_range = amplitude_range
-        self.longitude_range = longitude_range
-        self.latitude_range = latitude_range
+        self._low_ranges = [
+            rngs[0] for rngs in
+            [mean_count_range, amplitude_range, longitude_range, latitude_range]
+        ]
+        self._high_ranges = [
+            rngs[0] for rngs in
+            [mean_count_range, amplitude_range, longitude_range, latitude_range]
+        ]
         
         self.mean_count_dist = BoxUniform(
             low=mean_count_range[0]*torch.ones(1),
@@ -34,61 +97,22 @@ class DipolePrior:
         )
         
         self.dimension = 4
-    
-    def sample(self, sample_size=torch.Size([])):
-        count_samples = self.mean_count_dist.sample(sample_size).flatten()
-        amplitude_samples = self.amplitude_dist.sample(sample_size).flatten()
-        longitude_samples = self.longitude_dist.sample(sample_size).flatten()
-        latitude_samples = self.latitude_dist.sample(sample_size).flatten()
-        return torch.stack(
-            [
-                count_samples, amplitude_samples,
-                longitude_samples, latitude_samples
-            ],
-            dim=1
-        )
-    
-    def mean_count_log_prob(self, mean_count):
-        return self.mean_count_dist.log_prob(mean_count)
-    
-    def amplitude_log_prob(self, amplitude):
-        return self.amplitude_dist.log_prob(amplitude)
-    
-    def longitude_log_prob(self, longitude):
-        return self.longitude_dist.log_prob(longitude)
-    
-    def latitude_log_prob(self, latitude):
-        return self.latitude_dist.polar_logpdf(latitude)
-
-    def log_prob(self, values):
-        if self.return_numpy:
-            values = torch.as_tensor(values)
-        log_probs = (
-             self.mean_count_log_prob(values[:, 0])
-           + self.amplitude_log_prob (values[:, 1])
-           + self.longitude_log_prob (values[:, 2])
-           + self.latitude_log_prob  (values[:, 3])
-        )
-        return log_probs.numpy() if self.return_numpy else log_probs
-    
-    def to(self, device: str) -> None:
-        self.mean_count_dist.to(device)
-        self.amplitude_dist.to(device)
-        self.longitude_dist.to(device)
-        self.latitude_dist.to(device)
-        self.device = device
-
-    def get_low_ranges(self) -> list:
-        return [
-            self.mean_count_range[0], self.amplitude_range[0],
-            self.longitude_range[0], self.latitude_range[0]   
+        self._prior_list = [
+            self.mean_count_dist, self.amplitude_dist, self.longitude_dist,
+            self.latitude_dist
         ]
+    
+    @property
+    def prior_list(self):
+        return self._prior_list
 
-    def get_high_ranges(self) -> list:
-        return [
-            self.mean_count_range[1], self.amplitude_range[1],
-            self.longitude_range[1], self.latitude_range[1]   
-        ]
+    @property
+    def low_ranges(self) -> list:
+        return self._low_ranges
+
+    @property
+    def high_ranges(self) -> list:
+        return self._high_ranges
 
 class PolarPrior:
     def __init__(self,

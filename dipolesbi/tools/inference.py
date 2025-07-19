@@ -76,10 +76,10 @@ class Inference:
             self.prior,
             custom_prior_wrapper_kwargs={
                 'lower_bound': torch.as_tensor(
-                    self.prior.get_low_ranges(), device=self.prior.device
+                    self.prior.low_ranges, device=self.prior.device
                 ),
                 'upper_bound': torch.as_tensor(
-                    self.prior.get_high_ranges(), device=self.prior.device
+                    self.prior.high_ranges, device=self.prior.device
                 )
             }
         )
