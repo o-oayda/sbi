@@ -109,6 +109,7 @@ class Inference:
 
         # do the training on the gpu but not the simulation
         self.theta = self.theta.to(device); self.x = self.x.to(device)
+        self._check_for_mask_nans()
 
         # choose which type of pre-configured embedding net to use (e.g. CNN)
         # must be nested healpix ordering!!!
@@ -164,3 +165,12 @@ class Inference:
             n_samps: int = 10_000
     ) -> NDArray[np.float64]:
         return self.posterior.sample((n_samps,), x=x_obs).cpu().detach().numpy()
+    
+    def _check_for_mask_nans(self) -> None:
+        assert hasattr(self, 'x'), 'Load the data first.'
+
+        if torch.isnan(self.x).any():
+            self.x = torch.nan_to_num(self.x, nan=0.0)
+            print('Replaced masked nan values with 0.')
+        else:
+            print('No masked nan values detected.')
