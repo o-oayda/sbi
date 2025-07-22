@@ -75,7 +75,7 @@ class DipolePrior(PriorMixin):
             [mean_count_range, amplitude_range, longitude_range, latitude_range]
         ]
         self._high_ranges = [
-            rngs[0] for rngs in
+            rngs[1] for rngs in
             [mean_count_range, amplitude_range, longitude_range, latitude_range]
         ]
         
