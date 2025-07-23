@@ -70,13 +70,19 @@ class CatwiseReal:
         out[self.mask_map == 1] = self.fill_value
         return out
 
-    def mask_pixels(self, fill_value = None) -> None:
+    def mask_pixels(self, fill_value = None, mask_north_ecliptic: bool = True) -> None:
         print('Masking pixels...')
         self.mask = Mask(nside=self.nside)
         self.mask_map = torch.zeros(self.mask.npix)
+        masked_pixel_indices = set(self.mask.catwise_mask())
 
-        masked_pixel_indices = self.mask.catwise_mask()
-        self.mask_map[masked_pixel_indices] = 1
+        if mask_north_ecliptic:
+            north_pole_pixels = self.mask.north_ecliptic_mask()
+            masked_pixel_indices.update(north_pole_pixels)
+        
+        self.masked_pixel_indices_set = masked_pixel_indices
+        self.masked_pixel_indices_list = list(masked_pixel_indices)
+        self.mask_map[self.masked_pixel_indices_list] = 1
         
         if fill_value == None:
             self.fill_value = torch.nan
@@ -243,6 +249,20 @@ class CatwiseSim:
         self.final_pixel_indices = cut_source_pixel_indices
 
         return self.density_map
+    
+    def simulator(self, Theta):
+        N, eta, v = Theta[0], Theta[1], Theta[2]
+        phi, theta = Theta[3], Theta[4]
+        int_N = N.to(torch.int32).item()
+
+        density_map = self.generate_dipole(
+            n_initial_samples=int_N,
+            dipole_longitude=np.rad2deg(phi),
+            dipole_latitude=np.rad2deg(np.pi / 2 - theta),
+            observer_speed=v,
+            error_scale=eta
+        )
+        return density_map
 
     def batch_simulator(self,
             proposal_distribution,
@@ -252,20 +272,8 @@ class CatwiseSim:
         ) -> tuple[Tensor, Tensor]:
         self.n_samples = n_samples
 
-        def simulator(Theta):
-            N, eta, v = Theta[0], Theta[1], Theta[2]
-            phi, theta = Theta[3], Theta[4]
-            int_N = N.to(torch.int32).item()
+        simulator = self.simulator
 
-            density_map = self.generate_dipole(
-                n_initial_samples=int_N,
-                dipole_longitude=np.rad2deg(phi),
-                dipole_latitude=np.rad2deg(np.pi / 2 - theta),
-                observer_speed=v,
-                error_scale=eta
-            )
-            return density_map
-        
         simulator = process_simulator(
             simulator, proposal_distribution, prior_returns_numpy
         )

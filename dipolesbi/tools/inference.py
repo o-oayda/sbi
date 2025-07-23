@@ -7,10 +7,17 @@ from sbi.inference import NPE
 from sbi.neural_nets import posterior_nn
 from sbi.neural_nets.embedding_nets import hpCNNEmbedding
 from sbi.utils.user_input_checks import process_prior
+from sbi.inference import simulate_for_sbi
+from sbi.utils.user_input_checks import process_simulator, check_sbi_inputs
 import pickle
 import healpy as hp
 import os
 from numpy.typing import NDArray
+from torch.types import Tensor
+from typing import Optional
+from dipolesbi.tools.utils import Samples
+from dipolesbi.tools.plotting import smooth_map
+import matplotlib.pyplot as plt
 
 class Inference:
     def __init__(self, prior=None, model=None):
@@ -162,9 +169,10 @@ class Inference:
 
     def sample_amortized_posterior(self,
             x_obs,
-            n_samps: int = 10_000
+            n_samps: int = 10_000,
+            **kwargs
     ) -> NDArray[np.float64]:
-        return self.posterior.sample((n_samps,), x=x_obs).cpu().detach().numpy()
+        return self.posterior.sample((n_samps,), x=x_obs, **kwargs).cpu().detach().numpy()
     
     def _check_for_mask_nans(self) -> None:
         assert hasattr(self, 'x'), 'Load the data first.'
@@ -174,3 +182,41 @@ class Inference:
             print('Replaced masked nan values with 0.')
         else:
             print('No masked nan values detected.')
+
+    def posterior_predictive_check(self,
+            n_samples: int,
+            x: Tensor,
+            samples: Optional[Tensor] = None,
+            simulator=None,
+            num_workers: int = 16
+        ) -> None:
+        
+        if not self.model:
+            assert simulator, 'Pass a simulator to this function.'
+        else:
+            simulator = self.model.simulator
+        
+        if type(samples) is Tensor:
+            samples_obj = Samples(samples)
+        else:
+            assert hasattr(self, 'posterior'), (
+                'Since no posterior attribute exists for this instance to sample from, '
+                'please pass a Tensor of samples to the function.'
+            )
+            samples = self.posterior.sample((n_samples,), x)
+            assert type(samples) is Tensor 
+            sample_obj = Samples(samples)
+
+        simulator = process_simulator(
+            simulator, sample_obj, is_numpy_simulator=False
+        )
+        theta, x = simulate_for_sbi(
+            simulator=simulator,
+            proposal=sample_obj,
+            num_simulations=n_samples,
+            num_workers=num_workers)
+        
+        for i in range(n_samples):
+            print(f'Samples: {samples[i, :]}')
+            smooth_map(x[i, :])
+            plt.show()

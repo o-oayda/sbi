@@ -1,33 +1,50 @@
 from dipolesbi.catwise.maps import CatwiseSim, CatwiseReal
 from dipolesbi.tools.priors import DipolePrior
 from dipolesbi.tools.inference import Inference
-from dipolesbi.tools.plotting import smooth_map
+from dipolesbi.tools.plotting import smooth_map, sky_probability
 import matplotlib.pyplot as plt
 import torch
 from corner import corner
-from dipolesbi.tools.constants import CMB_L, CMB_B
+from dipolesbi.tools.constants import CMB_L, CMB_B, CMB_PHI_GAL, CMB_THETA_GAL, CMB_BETA
 import healpy as hp
 import numpy as np
 
-# sim = CatwiseSim(cat_w1_max=17.0, cat_w12_min=0.5)
-# sim.initialise_data()
-# sim.generate_dipole(n_initial_samples=30_000_000)
-# smooth_map(sim.density_map)
-# dmap = sim.density_map
-# mask = torch.isnan(dmap)
-# dmap[mask] = 0
+plt.rcParams.update({
+    "text.usetex": True,
+    "font.family": "serif",
+    "text.latex.preamble": r"\usepackage{amsmath}"
+})
+sim = CatwiseSim(cat_w1_max=17.0, cat_w12_min=0.5)
+sim.initialise_data()
 
-catwise = CatwiseReal()
-dmap = catwise.density_map
-smooth_map(dmap)
-plt.show()
-
+SPEED_MULTIPLIER = 2
+ERROR_SCALE = 2.05
+N_SAMPLES = 36_000_000
+sim.generate_dipole(
+    n_initial_samples=N_SAMPLES,
+    observer_speed=SPEED_MULTIPLIER*CMB_BETA,
+    error_scale=ERROR_SCALE,
+    dipole_longitude=215,
+    dipole_latitude=40
+)
+smooth_map(sim.density_map)
+dmap = sim.density_map
 mask = torch.isnan(dmap)
 dmap[mask] = 0
 
+# catwise = CatwiseReal()
+# dmap = catwise.density_map
+# smooth_map(dmap)
+# plt.show()
+# mask = torch.isnan(dmap)
+# dmap[mask] = 0
+
 inferer = Inference()
-inferer.load_posterior('based_posterior_catwise_0p5_17p0.pkl')
-samples = inferer.sample_amortized_posterior(x_obs=dmap)
+inferer.load_posterior('based_posterior_catwise_0p5_17p0_error_scale.pkl')
+samples = inferer.sample_amortized_posterior(x_obs=dmap, n_samps=20_000)
+
+sky_probability(samples, truth_star=[CMB_PHI_GAL, CMB_THETA_GAL])
+plt.show()
 
 # transform samples
 samples[:, -2] = np.rad2deg(samples[:, -2])
@@ -36,9 +53,11 @@ samples[:, -3] = samples[:, -3] / 0.00123
 
 corner(
     samples,
-    truths=[None, 1, CMB_L, CMB_B],
+    # truths=[None, None, 1, CMB_L, CMB_B],
+    truths=[N_SAMPLES, ERROR_SCALE, SPEED_MULTIPLIER, CMB_L, CMB_B],
     labels=[
         r'$N_{\mathrm{init.}}$',
+        r'$\eta$',
         r'$v_{\mathrm{obs.}} / v_{\mathrm{CMB}}$',
         r'$l$ ($^\circ$)',
         r'$b$ ($^\circ$)'
@@ -49,3 +68,9 @@ corner(
     truth_color='cornflowerblue'
 )
 plt.show()
+
+inferer.posterior_predictive_check(
+    n_samples=10,
+    x=dmap,
+    simulator=sim.simulator
+)

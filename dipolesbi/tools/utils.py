@@ -537,3 +537,19 @@ class MultinomialSample2DHistogram:
             'min_probability': np.min(self.probs_flat),
             'max_probability': np.max(self.probs_flat)
         }
+
+class Samples:
+    def __init__(self, samples: Tensor) -> None:
+        self.samples = samples
+        self.total_samples = samples.shape[0]
+
+    def sample(self, num_simulations: tuple[int]):
+        '''
+        :param num_simulations: e.g. (5,).
+        '''
+        indices = np.random.choice(
+            self.total_samples,
+            size=num_simulations[0],
+            replace=True
+        )
+        return self.samples[indices]
