@@ -228,7 +228,7 @@ def equatorial_to_ecliptic(ra, dec, output_unit='radians'):
 class ParameterMap:
     def __init__(self,
             pixel_indices: NDArray[np.int_],
-            parameter: NDArray[np.float_],
+            parameter: NDArray[np.float64],
             nside: int
     ) -> None:
         self.parameter_dict = defaultdict(list)
@@ -237,7 +237,7 @@ class ParameterMap:
             self.parameter_dict[int(pix)].append( parameter[idx] )
         self.median_map = None
 
-    def get_map(self) -> NDArray[np.float_]:
+    def get_map(self) -> NDArray[np.float64]:
         if self.median_map is None:
             n_pix = hp.nside2npix(self.nside)
             self.median_map = np.full(n_pix, np.nan)
@@ -354,7 +354,7 @@ class Sample2DHistogram:
         
         self.inverse_cdf_x, self.x_edges, self.cdf_y_lookup = data
 
-    def sample(self, n_samples: int) -> tuple[NDArray[np.float_], NDArray[np.float_]]:
+    def sample(self, n_samples: int) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         # timing: n_samples = 1_000_000
         uniform_deviate_x = np.random.uniform(0, 1, n_samples)
         uniform_deviate_y = np.random.uniform(0, 1, n_samples)
@@ -480,7 +480,7 @@ class MultinomialSample2DHistogram:
         self.y_edges = sampler_data['y_edges']
         self.original_shape = sampler_data['original_shape']
 
-    def sample(self, n_samples: int) -> tuple[NDArray[np.float_], NDArray[np.float_]]:
+    def sample(self, n_samples: int) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         """
         Sample from the 2D distribution using multinomial sampling with uniform jittering.
         
@@ -491,9 +491,9 @@ class MultinomialSample2DHistogram:
             
         Returns:
         --------
-        x_samples : NDArray[np.float_]
+        x_samples : NDArray[np.float64]
             X coordinates of samples with uniform jittering within bins
-        y_samples : NDArray[np.float_]
+        y_samples : NDArray[np.float64]
             Y coordinates of samples with uniform jittering within bins
         """
         # Multinomial sampling to select bins

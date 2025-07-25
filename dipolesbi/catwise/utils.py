@@ -18,8 +18,8 @@ class AlphaLookup:
         self.SPEED_OF_LIGHT_ANGSTROMS_S = speed_of_light * 1e10
     
     def make_alpha(self,
-            w1_magnitude: NDArray[np.float_],
-            w12_color: NDArray[np.float_],
+            w1_magnitude: NDArray[np.float64],
+            w12_color: NDArray[np.float64],
             no_check: bool = False
         ) -> Table:
         self.make_lookup_table()

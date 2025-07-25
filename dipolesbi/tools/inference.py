@@ -9,6 +9,8 @@ from sbi.neural_nets.embedding_nets import hpCNNEmbedding
 from sbi.utils.user_input_checks import process_prior
 from sbi.inference import simulate_for_sbi
 from sbi.utils.user_input_checks import process_simulator, check_sbi_inputs
+from sbi.diagnostics import check_sbc, run_sbc
+from sbi.analysis.plot import sbc_rank_plot
 import pickle
 import healpy as hp
 import os
@@ -220,3 +222,40 @@ class Inference:
             print(f'Samples: {samples[i, :]}')
             smooth_map(x[i, :])
             plt.show()
+    
+    def run_simulation_based_calibration(self,
+            num_posterior_samples: int = 1000,
+            use_multidim_sbc: bool = False
+        ) -> None:
+        assert hasattr(self, 'posterior')
+
+        ranks, dap_samples = run_sbc(
+            self.theta,
+            self.x,
+            self.posterior,
+            num_posterior_samples=1000,
+            num_workers=1,
+            reduce_fns=self.posterior.log_prob if use_multidim_sbc else 'marginals'
+        )
+        check_stats = check_sbc(
+            ranks, self.theta, dap_samples,
+            num_posterior_samples=num_posterior_samples
+        )
+
+        print(
+            f"""kolmogorov-smirnov p-values \n
+            check_stats['ks_pvals'] = {check_stats['ks_pvals'].numpy()}"""
+        )
+        print(
+            f"c2st accuracies \ncheck_stats['c2st_ranks'] = {check_stats['c2st_ranks'].numpy()}"
+        )
+        print(
+            f"- c2st accuracies check_stats['c2st_dap'] = {check_stats['c2st_dap'].numpy()}"
+        )
+
+        f, ax = sbc_rank_plot(
+            ranks=ranks,
+            num_posterior_samples=num_posterior_samples,
+            plot_type="hist",
+            num_bins=None,  # heuristic for the number of bins
+        )

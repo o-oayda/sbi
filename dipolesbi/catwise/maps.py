@@ -540,9 +540,9 @@ class CatwiseSim:
     def save_interpolator(self,
             band: str,
             interpolator: RegularGridInterpolator,
-            mag_bins: NDArray[np.float_],
-            cov_bins: NDArray[np.float_],
-            filled_grid: NDArray[np.float_],
+            mag_bins: NDArray[np.float64],
+            cov_bins: NDArray[np.float64],
+            filled_grid: NDArray[np.float64],
             file_path: str
     ) -> bool:
         '''
