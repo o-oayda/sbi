@@ -6,22 +6,25 @@ authors = [
     {name = "Oliver Oayda",email = "oaydaoliver@gmail.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "healpy (>=1.18.1,<2.0.0)",
-    "matplotlib (==3.7.5)",
+    "matplotlib (>=3.10.3,<4.0.0)",
     "dill (>=0.4.0,<0.5.0)",
-    "torch (<2.6.0)",
+    "torch (>=2.0.0)",
+    "torchvision (>=0.15.0)",
     "astropy (>=7.0.2,<8.0.0)",
     "tqdm (>=4.67.1,<5.0.0)",
-    "sbi @ git+https://github.com/o-oayda/sbi-custom.git",
+    "sbi @ git+https://github.com/o-oayda/sbi-custom.git@main",
     "corner (>=2.2.3,<3.0.0)",
     "dynesty (>=2.1.5,<3.0.0)",
     "emcee (>=3.1.6,<4.0.0)",
-    "numpy (<2.0.0)"
+    "numpy (<2.0.0)",
+    "pymc (>=5.25.1,<6.0.0)" # get around this issue: AttributeError: module 'numpy.__config__' has no attribute 'get_info'
 ]
 
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
