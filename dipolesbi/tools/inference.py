@@ -9,7 +9,7 @@ from sbi.neural_nets.embedding_nets import hpCNNEmbedding
 from sbi.utils.user_input_checks import process_prior
 from sbi.inference import simulate_for_sbi
 from sbi.utils.user_input_checks import process_simulator, check_sbi_inputs
-from sbi.diagnostics import check_sbc, run_sbc
+from sbi.diagnostics import check_sbc, run_sbc, check_tarp, run_tarp
 from sbi.analysis.plot import sbc_rank_plot
 import pickle
 import healpy as hp
@@ -225,32 +225,36 @@ class Inference:
     
     def run_simulation_based_calibration(self,
             num_posterior_samples: int = 1000,
-            use_multidim_sbc: bool = False
+            use_multidim_sbc: bool = False,
+            num_sbc_samples: int = 200
         ) -> None:
         assert hasattr(self, 'posterior')
 
+        indices = np.random.choice(self.theta.shape[0], num_sbc_samples, replace=False)
+        theta = self.theta[indices]
+        x = self.x[indices]
+
         ranks, dap_samples = run_sbc(
-            self.theta,
-            self.x,
+            theta,
+            x,
             self.posterior,
             num_posterior_samples=1000,
             num_workers=1,
             reduce_fns=self.posterior.log_prob if use_multidim_sbc else 'marginals'
         )
         check_stats = check_sbc(
-            ranks, self.theta, dap_samples,
+            ranks, theta, dap_samples,
             num_posterior_samples=num_posterior_samples
         )
 
         print(
-            f"""kolmogorov-smirnov p-values \n
-            check_stats['ks_pvals'] = {check_stats['ks_pvals'].numpy()}"""
+            f"kolmogorov-smirnov p-values \ncheck_stats['ks_pvals'] = {check_stats['ks_pvals'].numpy()}"
         )
         print(
             f"c2st accuracies \ncheck_stats['c2st_ranks'] = {check_stats['c2st_ranks'].numpy()}"
         )
         print(
-            f"- c2st accuracies check_stats['c2st_dap'] = {check_stats['c2st_dap'].numpy()}"
+            f"c2st accuracies check_stats['c2st_dap'] = {check_stats['c2st_dap'].numpy()}"
         )
 
         f, ax = sbc_rank_plot(
@@ -259,3 +263,25 @@ class Inference:
             plot_type="hist",
             num_bins=None,  # heuristic for the number of bins
         )
+        plt.show()
+
+        # the tarp method returns the ECP values for a given set of alpha coverage levels.
+        ecp, alpha = run_tarp(
+            theta,
+            x,
+            self.posterior,
+            references=None,  # will be calculated automatically.
+            num_posterior_samples=num_posterior_samples,
+        )
+
+        # Similar to SBC, we can check then check whether the distribution of ecp is close to
+        # that of alpha.
+        atc, ks_pval = check_tarp(ecp, alpha)
+        print(atc, "Should be close to 0")
+        print(ks_pval, "Should be larger than 0.05")
+
+        # Or, we can perform a visual check.
+        from sbi.analysis.plot import plot_tarp
+
+        plot_tarp(ecp, alpha)
+        plt.show()
