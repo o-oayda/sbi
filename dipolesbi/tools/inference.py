@@ -112,25 +112,28 @@ class Inference:
     def run_sbi(self,
             sim_dir: str | None,
             device: str = 'cpu',
+            load_simulations_in_vram: bool = False
     ) -> None:
         if sim_dir is not None:
             self.load_simulation(sim_dir)
+        
+        self.prior.to(device)
 
-        # do the training on the gpu but not the simulation
-        self.theta = self.theta.to(device); self.x = self.x.to(device)
         self._check_for_mask_nans()
 
-        # choose which type of pre-configured embedding net to use (e.g. CNN)
-        # must be nested healpix ordering!!!
         if not hasattr(self, 'nside'):
             self.nside = hp.npix2nside(self.x.shape[-1])
-        embedding_net = hpCNNEmbedding(nside=self.nside)
+        
+        embedding_net = hpCNNEmbedding(
+            nside=self.nside,
+            dropout_rate=0.2,
+            out_channels_per_layer=[2, 4, 8, 16, 32, 64]
+        )
 
-        # instantiate the conditional neural density estimator
-        # maf, maf_rqs 
         neural_posterior = posterior_nn(
             model="maf",
-            embedding_net=embedding_net
+            embedding_net=embedding_net,
+            z_score_x='structured'
         )
         inference = NPE(
             prior=self.prior,
@@ -138,10 +141,16 @@ class Inference:
             device=device
         )
 
-        inference = inference.append_simulations(self.theta, self.x)
-        density_estimator = inference.train(show_train_summary=True)
+        # by specifying data_device = 'cpu', we can train on the GPU
+        # while transferring data from host memory to VRAM
+        inference = inference.append_simulations(
+            self.theta,
+            self.x,
+            data_device='cpu' if not load_simulations_in_vram else 'cuda'
+        )
+        self.density_estimator = inference.train(show_train_summary=True)
         self.posterior = inference.build_posterior(
-            density_estimator,
+            self.density_estimator,
             prior=self.prior,
         )
         print(self.posterior)
@@ -276,6 +285,7 @@ class Inference:
 
         # Similar to SBC, we can check then check whether the distribution of ecp is close to
         # that of alpha.
+        ecp = ecp.to('cpu'); alpha = alpha.to('cpu')
         atc, ks_pval = check_tarp(ecp, alpha)
         print(atc, "Should be close to 0")
         print(ks_pval, "Should be larger than 0.05")
