@@ -18,6 +18,13 @@ class PriorMixin(ABC):
     def to(self, device: str) -> None:
         for prior in self.prior_list:
             prior.to(device)
+        
+        # these are estimated by sbi later and cause FUCKED problems if they
+        # aren't on the right device
+        if hasattr(self, 'mean'):
+            self.mean = self.mean.to(device)
+            self.variance = self.variance.to(device)
+        
         self.device = device
 
     def log_prob(self, sample_values: Tensor) -> Tensor:

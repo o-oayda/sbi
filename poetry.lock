@@ -3047,7 +3047,7 @@ doc = ["ipython (<=8.9.0)", "jupyter_contrib_nbextensions", "jupytext", "markdow
 type = "git"
 url = "https://github.com/o-oayda/sbi-custom.git"
 reference = "main"
-resolved_reference = "d2aa1a532616b6f9eb1bc9ac7473f5c0792870e1"
+resolved_reference = "39b9aab292ca603283c3d63e03898c5bf7256bb5"
 
 [[package]]
 name = "scikit-learn"

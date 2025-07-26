@@ -117,6 +117,9 @@ class Inference:
         if sim_dir is not None:
             self.load_simulation(sim_dir)
         
+        # calling this again here should put the mean and variance attributes
+        # on the right device, as well as the support boundaries (thanks to
+        # the custom to method we defined)
         self.prior.to(device)
 
         self._check_for_mask_nans()
@@ -143,12 +146,12 @@ class Inference:
 
         # by specifying data_device = 'cpu', we can train on the GPU
         # while transferring data from host memory to VRAM
-        inference = inference.append_simulations(
+        self.inference = inference.append_simulations(
             self.theta,
             self.x,
             data_device='cpu' if not load_simulations_in_vram else 'cuda'
         )
-        self.density_estimator = inference.train(show_train_summary=True)
+        self.density_estimator = self.inference.train(show_train_summary=True)
         self.posterior = inference.build_posterior(
             self.density_estimator,
             prior=self.prior,
