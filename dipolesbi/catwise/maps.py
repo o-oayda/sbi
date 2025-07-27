@@ -147,14 +147,14 @@ class CatwiseSim:
         # the empirical distribuion; instead, use lookups
         rest_w12_samples = rest_w1_samples - rest_w2_samples
         lookup = AlphaLookup()
-        out_table = lookup.make_alpha(
+        spectral_indices = lookup.make_alpha(
             w1_magnitude=rest_w1_samples.numpy(),
             w12_color=rest_w12_samples.numpy(),
             no_check=True
         )
-        spectral_indices = torch.as_tensor(
-            out_table['alpha_W1'].data.astype('float32') # type: ignore
-        )
+
+        # oops... needs a -ve sign
+        spectral_indices = torch.as_tensor(-spectral_indices.astype('float32'))
 
         rest_source_longitudes_deg,\
         rest_source_latitudes_deg = self.sample_points(self.n_samples)

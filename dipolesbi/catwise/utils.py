@@ -12,7 +12,7 @@ class AlphaLookup:
     Adapted from lookup_alpha_catwise.py from Secrest+21.
     '''
     def __init__(self):
-        self.lookup_table_path = 'dipolesbi/catwise/alpha_colors.fits'
+        self.lookup_table_path = 'dipolesbi/catwise/alpha_w12_only.fits'
         assert os.path.exists(self.lookup_table_path)
         self.AB_VEGA_OFFSET = 2.673
         self.SPEED_OF_LIGHT_ANGSTROMS_S = speed_of_light * 1e10
@@ -21,12 +21,14 @@ class AlphaLookup:
             w1_magnitude: NDArray[np.float64],
             w12_color: NDArray[np.float64],
             no_check: bool = False
-        ) -> Table:
+        ) -> NDArray[np.float32]:
+        self.no_check = no_check
         self.make_lookup_table()
         self.do_lookups(w12_color)
-        self.check_magnitude(w1_magnitude, no_check=no_check)
-        return self.process_for_table()
-        
+        if not self.no_check:
+            self.check_magnitude(w1_magnitude) 
+        return self.alpha_W1
+
     def process_for_table(self) -> Table:
         out_table = Table()
         
@@ -41,18 +43,21 @@ class AlphaLookup:
 
     def make_lookup_table(self):
         self.lookup_table = Table.read(self.lookup_table_path)
-
         self.lookup_alpha = self.lookup_table['alpha'].data
-        self.lookup_k_W1 = self.lookup_table['k_W1'].data # Flux conversion factor
-        self.lookup_nu_W1_iso = self.lookup_table['nu_W1_iso'].data
         self.lookup_W1_W2 = self.lookup_table['W1_W2'].data
+
+        if not self.no_check:
+            self.lookup_k_W1 = self.lookup_table['k_W1'].data # Flux conversion factor
+            self.lookup_nu_W1_iso = self.lookup_table['nu_W1_iso'].data
     
     def do_lookups(self, w12_color: np.ndarray):
         self.n_sources = len(w12_color)
+        
+        self.alpha_W1 = np.nan * np.empty( self.n_sources, dtype=np.float32 )
 
-        self.alpha_W1 = np.nan * np.empty( self.n_sources, dtype=float )
-        self.k_W1 = np.nan * np.empty( self.n_sources, dtype=float )
-        self.nu_W1_iso = np.nan * np.empty( self.n_sources, dtype=float )
+        if not self.no_check:
+            self.k_W1 = np.nan * np.empty( self.n_sources, dtype=np.float32 )
+            self.nu_W1_iso = np.nan * np.empty( self.n_sources, dtype=np.float32 )
 
         # Build a KDTree for efficient nearest-neighbor search
         tree = cKDTree(self.lookup_W1_W2.reshape(-1, 1))
@@ -61,11 +66,13 @@ class AlphaLookup:
         _, indices = tree.query(w12_color.reshape(-1, 1), k=1)
 
         # Assign values based on nearest neighbors
-        self.k_W1 = self.lookup_k_W1[indices]
         self.alpha_W1 = self.lookup_alpha[indices]
-        self.nu_W1_iso = self.lookup_nu_W1_iso[indices]
 
-    def check_magnitude(self, w1_magnitude: np.ndarray, no_check: bool = False):
+        if not self.no_check:
+            self.k_W1 = self.lookup_k_W1[indices]
+            self.nu_W1_iso = self.lookup_nu_W1_iso[indices]
+
+    def check_magnitude(self, w1_magnitude: np.ndarray):
         # Calculate k such that fnu = k * nu**alpha
         # We're using the Oke & Gunn / Fukugita AB magnitude, which has a
         # zeropoint of 48.60, so the AB - Vega offset for W1 is 2.673.
@@ -77,16 +84,13 @@ class AlphaLookup:
         nu, Snu = self.get_passband('dipolesbi/catwise/RSR-W1.txt')
         W1_AB_check = np.empty(self.n_sources, dtype=float)
         
-        if no_check:
-            return None
-        else:
-            for i in tqdm(range(self.n_sources)):
-                fnu = self.k[i] * nu**self.alpha_W1[i]
-                W1_AB_check[i] = self.compute_synth_ABmag(nu, fnu, Snu)
+        for i in tqdm(range(self.n_sources)):
+            fnu = self.k[i] * nu**self.alpha_W1[i]
+            W1_AB_check[i] = self.compute_synth_ABmag(nu, fnu, Snu)
 
-            abs_dmag = np.abs(W1_AB_check - W1_AB)
-            if abs_dmag.max() > 1e-12:
-                print("WARNING: Measured and predicted magnitudes differ!")
+        abs_dmag = np.abs(W1_AB_check - W1_AB)
+        if abs_dmag.max() > 1e-12:
+            print("WARNING: Measured and predicted magnitudes differ!")
 
     @staticmethod
     def closest(dx):
