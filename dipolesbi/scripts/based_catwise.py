@@ -33,12 +33,19 @@ prior = DipolePrior(
     mean_count_range=[30_000_000, 40_000_000],
     amplitude_range=[0, 0.01]
 )
-prior.add_prior(
+prior.add_prior( # eta_w1
     prior=BoxUniform(
         low=torch.ones(1),
         high=3 * torch.ones(1)
     ),
     index=1
+)
+prior.add_prior( # eta_w2
+    prior=BoxUniform(
+        low=torch.ones(1),
+        high=3 * torch.ones(1)
+    ),
+    index=2
 )
 
 inferer = Inference(prior, sim)

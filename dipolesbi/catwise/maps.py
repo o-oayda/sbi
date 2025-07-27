@@ -133,7 +133,8 @@ class CatwiseSim:
             observer_speed: float = CMB_BETA,
             dipole_longitude: float = CMB_L,
             dipole_latitude: float = CMB_B,
-            error_scale: float = 1.0
+            error_scale_w1: float = 1.0,
+            error_scale_w2: float = 1.0
         ) -> Tensor:
         self.observer_speed = observer_speed
         self.dipole_longitude = dipole_longitude
@@ -213,8 +214,8 @@ class CatwiseSim:
         self.boosted_w1_samples, self.boosted_w2_samples = self.add_error(
             w1_magnitudes=self.boosted_w1_samples,
             w2_magnitudes=self.boosted_w2_samples,
-            w1_error=error_scale * self.w1_error,
-            w2_error=error_scale * self.w2_error
+            w1_error=error_scale_w1 * self.w1_error,
+            w2_error=error_scale_w2 * self.w2_error
         )
 
         # should be identical to rest_w12_samples since colour is invariant;
@@ -251,8 +252,8 @@ class CatwiseSim:
         return self.density_map
     
     def simulator(self, Theta):
-        N, eta, v = Theta[0], Theta[1], Theta[2]
-        phi, theta = Theta[3], Theta[4]
+        N, eta_w1, eta_w2, v = Theta[0], Theta[1], Theta[2], Theta[3]
+        phi, theta = Theta[4], Theta[5]
         int_N = N.to(torch.int32).item()
 
         density_map = self.generate_dipole(
@@ -260,7 +261,8 @@ class CatwiseSim:
             dipole_longitude=np.rad2deg(phi),
             dipole_latitude=np.rad2deg(np.pi / 2 - theta),
             observer_speed=v,
-            error_scale=eta
+            error_scale_w1=eta_w1,
+            error_scale_w2=eta_w2
         )
         return density_map
 
@@ -273,7 +275,6 @@ class CatwiseSim:
         self.n_samples = n_samples
 
         simulator = self.simulator
-
         simulator = process_simulator(
             simulator, proposal_distribution, prior_returns_numpy
         )
