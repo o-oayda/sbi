@@ -20,6 +20,7 @@ from typing import Optional
 from dipolesbi.tools.utils import Samples
 from dipolesbi.tools.plotting import smooth_map
 import matplotlib.pyplot as plt
+from sbi.analysis.plot import plot_tarp
 
 class Inference:
     def __init__(self, prior=None, model=None):
@@ -112,10 +113,18 @@ class Inference:
     def run_sbi(self,
             sim_dir: str | None,
             device: str = 'cpu',
-            load_simulations_in_vram: bool = False
+            load_simulations_in_vram: bool = False,
+            simulation_fraction: float = 1.0
     ) -> None:
         if sim_dir is not None:
             self.load_simulation(sim_dir)
+        
+        n_train_indices = int(simulation_fraction * len(self.x))
+        self.x = self.x[:n_train_indices]
+        self.theta = self.theta[:n_train_indices]
+        print(
+            f'Using {n_train_indices} simulations ({simulation_fraction*100}%)...'
+        )
         
         # calling this again here should put the mean and variance attributes
         # on the right device, as well as the support boundaries (thanks to
@@ -250,7 +259,7 @@ class Inference:
             theta,
             x,
             self.posterior,
-            num_posterior_samples=1000,
+            num_posterior_samples=num_posterior_samples,
             num_workers=1,
             reduce_fns=self.posterior.log_prob if use_multidim_sbc else 'marginals'
         )
@@ -278,7 +287,7 @@ class Inference:
         plt.show()
 
         # the tarp method returns the ECP values for a given set of alpha coverage levels.
-        ecp, alpha = run_tarp(
+        self.ecp, self.alpha = run_tarp(
             theta,
             x,
             self.posterior,
@@ -288,13 +297,10 @@ class Inference:
 
         # Similar to SBC, we can check then check whether the distribution of ecp is close to
         # that of alpha.
-        ecp = ecp.to('cpu'); alpha = alpha.to('cpu')
-        atc, ks_pval = check_tarp(ecp, alpha)
+        self.ecp = self.ecp.to('cpu'); self.alpha = self.alpha.to('cpu')
+        atc, ks_pval = check_tarp(self.ecp, self.alpha)
         print(atc, "Should be close to 0")
         print(ks_pval, "Should be larger than 0.05")
 
-        # Or, we can perform a visual check.
-        from sbi.analysis.plot import plot_tarp
-
-        plot_tarp(ecp, alpha)
+        plot_tarp(self.ecp, self.alpha)
         plt.show()

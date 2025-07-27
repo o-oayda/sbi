@@ -19,16 +19,24 @@ parser.add_argument(
 	action='store_true',
 	help='If set, load simulations into VRAM (default: False).'
 )
+parser.add_argument(
+	'--simulation_fraction',
+	type=float,
+	default=1.0,
+	help='Fraction of data to use for simulating (default: 1.0).'
+)
 args = parser.parse_args()
 
 SAVE_DIR = args.save_dir
 DEVICE = args.device
 LOAD_IN_VRAM = args.load_in_vram
+SIM_FRACTION = args.simulation_fraction
 
 inference = Inference()
 inference.run_sbi(
     sim_dir=SAVE_DIR,
     device=DEVICE,
-    load_simulations_in_vram=LOAD_IN_VRAM
+    load_simulations_in_vram=LOAD_IN_VRAM,
+    simulation_fraction=SIM_FRACTION
 )
 inference.save_posterior(f'based_posterior_{SAVE_DIR}.pkl')
