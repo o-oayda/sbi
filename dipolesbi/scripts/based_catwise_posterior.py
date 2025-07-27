@@ -28,6 +28,7 @@ sim.generate_dipole(
     dipole_latitude=40
 )
 smooth_map(sim.density_map)
+plt.show()
 dmap = sim.density_map
 mask = torch.isnan(dmap)
 dmap[mask] = 0
@@ -41,7 +42,11 @@ dmap[mask] = 0
 
 inferer = Inference()
 inferer.load_posterior('based_posterior_catwise_0p5_17p0_error_scale.pkl')
+inferer.posterior.to('cpu')
 samples = inferer.sample_amortized_posterior(x_obs=dmap, n_samps=20_000)
+
+# hack rn
+samples[:, -1] = samples[:, -1] % torch.pi
 
 sky_probability(samples, truth_star=[CMB_PHI_GAL, CMB_THETA_GAL])
 plt.show()
@@ -69,8 +74,12 @@ corner(
 )
 plt.show()
 
-inferer.posterior_predictive_check(
-    n_samples=10,
-    x=dmap,
-    simulator=sim.simulator
-)
+# inferer.posterior_predictive_check(
+#     n_samples=10,
+#     x=dmap.to('cuda'),
+#     simulator=sim.simulator
+# )
+
+inferer.load_simulation('catwise_0p5_17p0_error_scale')
+inferer._check_for_mask_nans()
+inferer.run_simulation_based_calibration()
