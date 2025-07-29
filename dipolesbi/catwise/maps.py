@@ -126,7 +126,7 @@ class CatwiseSim:
         print('Finished loading CatWISE2020.')
         self.catalogue_is_loaded = True
     
-    @profile
+    # @profile
     def generate_dipole(self,
             n_initial_samples: int,
             w1_max: float = 16.4,
@@ -136,32 +136,25 @@ class CatwiseSim:
             dipole_longitude: float = CMB_L,
             dipole_latitude: float = CMB_B,
             error_scale_w1: float = 1.0,
-            error_scale_w2: float = 1.0
+            error_scale_w2: float = 1.0,
+            use_float32_coords: bool = False
         ) -> NDArray[np.float32]:
         self.observer_speed = observer_speed
         self.dipole_longitude = dipole_longitude
         self.dipole_latitude = dipole_latitude
 
         self.n_samples = n_initial_samples
-        rest_w1_samples, rest_w2_samples = self.sample_magnitudes(self.n_samples) # float64
+        rest_w1_samples, rest_w2_samples = self.sample_magnitudes(self.n_samples)
 
-        # since w12 sets alpha, it is wrong to draw alpha independently from 
-        # the empirical distribuion; instead, use lookups
-        rest_w12_samples = rest_w1_samples - rest_w2_samples # float64
-        spectral_indices = self.spectral_lookup.fit_alpha( # float32 
-            w12_colour=rest_w12_samples
+        coord_dtype = np.float32 if use_float32_coords else np.float64
+        rest_source_lon_deg, rest_source_lat_deg = self.sample_points(
+            self.n_samples,
+            dtype=coord_dtype
         )
-        del rest_w12_samples
 
-        # oops... needs a -ve sign
-        spectral_indices = -spectral_indices
-
-        rest_source_lon_deg, rest_source_lat_deg = self.sample_points(self.n_samples) # float64
-
-        # float64
         boosted_source_lon_deg, boosted_source_lat_deg,\
         rest_source_to_dipole_angle_deg = self.aberrate_points(
-            rest_source_lon_deg, rest_source_lat_deg
+            rest_source_lon_deg, rest_source_lat_deg, dtype=coord_dtype
         )
         del rest_source_lon_deg, rest_source_lat_deg
 
@@ -172,7 +165,7 @@ class CatwiseSim:
             boosted_source_lat_deg,
             lonlat=True,
             nest=True
-        ).astype(np.int32)
+        ).astype(np.uint16) # unsigned 16-bit can represent all pixels in nside=64 map
         is_masked = self.mask_map == 1
         masked_pixel_indices = np.squeeze(np.nonzero(is_masked))
         mask_slice = ~np.isin(source_pixel_indices, masked_pixel_indices)
@@ -182,56 +175,71 @@ class CatwiseSim:
         boosted_source_lon_deg = boosted_source_lon_deg[mask_slice]
         boosted_source_lat_deg = boosted_source_lat_deg[mask_slice]
         rest_source_to_dipole_angle_deg = rest_source_to_dipole_angle_deg[mask_slice]
-        spectral_indices = spectral_indices[mask_slice]
         source_pixel_indices = source_pixel_indices[mask_slice]
 
-        self.boosted_w1_samples = self.boost_magnitudes( # float64
+        rest_w12_samples = rest_w1_samples - rest_w2_samples # float64
+        spectral_indices = self.spectral_lookup.fit_alpha( # float32 
+            w12_colour=rest_w12_samples
+        )
+        del rest_w12_samples
+
+        # oops... needs a -ve sign
+        spectral_indices = -spectral_indices
+
+        boosted_w1_samples = self.boost_magnitudes( # float64
             rest_w1_samples, rest_source_to_dipole_angle_deg, spectral_indices
         )
-        self.boosted_w2_samples = self.boost_magnitudes( # float64
+        boosted_w2_samples = self.boost_magnitudes( # float64
             rest_w2_samples, rest_source_to_dipole_angle_deg, spectral_indices
         )
+        del rest_w1_samples, rest_w2_samples
         
-        self.source_logw1_cov = np.log10(self.w1cov_map[source_pixel_indices]) # float64
-        self.source_logw2_cov = np.log10(self.w2cov_map[source_pixel_indices]) # float64
+        source_logw1_cov = np.log10(self.w1cov_map[source_pixel_indices]) # float64
+        source_logw2_cov = np.log10(self.w2cov_map[source_pixel_indices]) # float64
 
         self.w1_error = self.w1mag_coverage_rgi(
             np.column_stack(
-                [self.boosted_w1_samples, self.source_logw1_cov]
+                [boosted_w1_samples, source_logw1_cov]
             )
         ).astype(np.float32)
         self.w2_error = self.w2mag_coverage_rgi(
             np.column_stack(
-                [self.boosted_w2_samples, self.source_logw2_cov]
+                [boosted_w2_samples, source_logw2_cov]
             )
         ).astype(np.float32)
+        del source_logw1_cov, source_logw2_cov
 
-        self.boosted_w1_samples, self.boosted_w2_samples = self.add_error( # float64
-            w1_magnitudes=self.boosted_w1_samples,
-            w2_magnitudes=self.boosted_w2_samples,
+        boosted_w1_samples, boosted_w2_samples = self.add_error( # float64
+            w1_magnitudes=boosted_w1_samples,
+            w2_magnitudes=boosted_w2_samples,
             w1_error=error_scale_w1 * self.w1_error,
             w2_error=error_scale_w2 * self.w2_error
         )
 
         # should be identical to rest_w12_samples since colour is invariant;
         # TODO: check this
-        boosted_w12_samples = self.boosted_w1_samples - self.boosted_w2_samples
+        boosted_w12_samples = boosted_w1_samples - boosted_w2_samples
         # boosted_w12_errors = np.sqrt( self.w1_error**2 + self.w2_error**2 )
         
         cut = self.magnitude_cut_boolean(
-            w1_magnitudes=self.boosted_w1_samples,
+            w1_magnitudes=boosted_w1_samples,
             w12_magnitudes=boosted_w12_samples,
             w1_max=w1_max,
             w1_min=w1_min,
             w12_min=w12_min
         )
+
         cut_boosted_source_longitudes_deg = boosted_source_lon_deg[cut]
         cut_boosted_source_latitudes_deg = boosted_source_lat_deg[cut]
-        cut_boosted_w1_samples = self.boosted_w1_samples[cut]
-        cut_boosted_w2_samples = self.boosted_w2_samples[cut]
+        cut_boosted_w1_samples = boosted_w1_samples[cut]
+        cut_boosted_w2_samples = boosted_w2_samples[cut]
         cut_boosted_w12_samples = boosted_w12_samples[cut]
         # cut_boosted_w12_errors = boosted_w12_errors[cut]
         cut_source_pixel_indices = source_pixel_indices[cut]
+
+        del boosted_w1_samples, boosted_w2_samples, boosted_w12_samples
+        del boosted_source_lon_deg, boosted_source_lat_deg
+        del source_pixel_indices
 
         self._density_map = self.make_density_map(
             longitudes=cut_boosted_source_longitudes_deg,
@@ -768,21 +776,40 @@ class CatwiseSim:
         w1_samples, w2_samples = self.colour_mag_sampler.sample(n_samples)
         return w1_samples, w2_samples
     
-    def sample_points(self, n_points: int) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    def sample_points(self, n_points: int, dtype: type = np.float64) -> tuple[NDArray, NDArray]:
         longitudes_deg, latitudes_deg = sample_spherical_points(n_points)
-        return longitudes_deg, latitudes_deg
+        return longitudes_deg.astype(dtype), latitudes_deg.astype(dtype)
     
     def aberrate_points(self,
             longitudes_deg: NDArray,
             latitudes_deg: NDArray,
-        ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+            dtype: type = np.float64
+        ) -> tuple[NDArray, NDArray, NDArray]:
+
+        # Convert to float64 for calculations if using float32, then convert back
+        if dtype == np.float32:
+            calc_lon = longitudes_deg.astype(np.float64)
+            calc_lat = latitudes_deg.astype(np.float64)
+        else:
+            calc_lon = longitudes_deg
+            calc_lat = latitudes_deg
+            
         boosted_lon_deg, boosted_lat_deg, rest_source_to_dipole_angle = aberrate_points(
-            rest_longitudes=longitudes_deg,
-            rest_latitudes=latitudes_deg,
+            rest_longitudes=calc_lon,
+            rest_latitudes=calc_lat,
             observer_direction=(self.dipole_longitude, self.dipole_latitude),
             observer_speed=self.observer_speed
         )
-        return boosted_lon_deg, boosted_lat_deg, rest_source_to_dipole_angle
+        
+        # Convert back to requested dtype
+        if dtype == np.float32:
+            return (
+                boosted_lon_deg.astype(dtype), 
+                boosted_lat_deg.astype(dtype), 
+                rest_source_to_dipole_angle.astype(dtype)
+            )
+        else:
+            return boosted_lon_deg, boosted_lat_deg, rest_source_to_dipole_angle
 
     def boost_magnitudes(self,
             magnitudes: NDArray,
