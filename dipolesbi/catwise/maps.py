@@ -24,6 +24,7 @@ from scipy.interpolate import RegularGridInterpolator
 from numpy.typing import NDArray
 from datetime import datetime
 import matplotlib.pyplot as plt
+from memory_profiler import profile
 
 class CatwiseReal:
     # TODO: refactor due to code duplication with CatwiseSim
@@ -125,6 +126,7 @@ class CatwiseSim:
         print('Finished loading CatWISE2020.')
         self.catalogue_is_loaded = True
     
+    @profile
     def generate_dipole(self,
             n_initial_samples: int,
             w1_max: float = 16.4,
@@ -141,28 +143,29 @@ class CatwiseSim:
         self.dipole_latitude = dipole_latitude
 
         self.n_samples = n_initial_samples
-        rest_w1_samples, rest_w2_samples = self.sample_magnitudes(self.n_samples)
+        rest_w1_samples, rest_w2_samples = self.sample_magnitudes(self.n_samples) # float64
 
         # since w12 sets alpha, it is wrong to draw alpha independently from 
         # the empirical distribuion; instead, use lookups
-        rest_w12_samples = rest_w1_samples - rest_w2_samples
-        lookup = AlphaLookup()
-        spectral_indices = lookup.make_alpha(
-            w1_magnitude=rest_w1_samples.numpy(),
-            w12_color=rest_w12_samples.numpy(),
-            no_check=True
+        rest_w12_samples = rest_w1_samples - rest_w2_samples # float64
+        spectral_indices = self.spectral_lookup.make_alpha( # float64 
+            w1_magnitude=rest_w1_samples,
+            w12_color=rest_w12_samples
         )
+        del rest_w12_samples
 
         # oops... needs a -ve sign
-        spectral_indices = torch.as_tensor(-spectral_indices.astype('float32'))
+        spectral_indices = -spectral_indices
 
         rest_source_longitudes_deg,\
-        rest_source_latitudes_deg = self.sample_points(self.n_samples)
-        
+        rest_source_latitudes_deg = self.sample_points(self.n_samples) # float32
+
+        # float32
         boosted_source_longitudes_deg, boosted_source_latitudes_deg,\
         rest_source_to_dipole_angle_deg = self.aberrate_points(
             rest_source_longitudes_deg, rest_source_latitudes_deg
         )
+        del rest_source_longitudes_deg, rest_source_latitudes_deg
 
         # mask now for efficiency
         source_pixel_indices = hp.ang2pix(
@@ -171,33 +174,32 @@ class CatwiseSim:
             boosted_source_latitudes_deg,
             lonlat=True,
             nest=True
-        )
-        self.mask_pixels()
+        ).astype(np.int32) # int64
         is_masked = self.mask_map == 1
-        masked_pixel_indices = torch.nonzero(is_masked).squeeze()
-        mask_slice = ~torch.isin(
+        masked_pixel_indices = np.squeeze(np.nonzero(is_masked))
+        mask_slice = ~np.isin(
             source_pixel_indices,
             masked_pixel_indices
         )
         rest_w1_samples = rest_w1_samples[mask_slice]
         rest_w2_samples = rest_w2_samples[mask_slice]
-        rest_w12_samples = rest_w12_samples[mask_slice]
+        # rest_w12_samples = rest_w12_samples[mask_slice]
         boosted_source_longitudes_deg = boosted_source_longitudes_deg[mask_slice]
         boosted_source_latitudes_deg = boosted_source_latitudes_deg[mask_slice]
         rest_source_to_dipole_angle_deg = rest_source_to_dipole_angle_deg[mask_slice]
         spectral_indices = spectral_indices[mask_slice]
         source_pixel_indices = source_pixel_indices[mask_slice]
 
-        self.boosted_w1_samples = self.boost_magnitudes(
+        self.boosted_w1_samples = self.boost_magnitudes( # float64
             rest_w1_samples, rest_source_to_dipole_angle_deg, spectral_indices
         )
-        self.boosted_w2_samples = self.boost_magnitudes(
+        self.boosted_w2_samples = self.boost_magnitudes( # float64
             rest_w2_samples, rest_source_to_dipole_angle_deg, spectral_indices
         )
         
-        self.source_log_w1_coverages = np.log10(self.w1_coverage_map[source_pixel_indices])
-        self.source_log_w2_coverages = np.log10(self.w2_coverage_map[source_pixel_indices])
-        self.w1_error = torch.as_tensor(
+        self.source_log_w1_coverages = np.log10(self.w1_coverage_map[source_pixel_indices]) # float64
+        self.source_log_w2_coverages = np.log10(self.w2_coverage_map[source_pixel_indices]) # float64
+        self.w1_error = torch.as_tensor( # float64
             self.w1mag_coverage_rgi(
                 torch.column_stack(
                     [self.boosted_w1_samples, self.source_log_w1_coverages]
@@ -211,7 +213,7 @@ class CatwiseSim:
                 )
             )
         )
-        self.boosted_w1_samples, self.boosted_w2_samples = self.add_error(
+        self.boosted_w1_samples, self.boosted_w2_samples = self.add_error( # float64
             w1_magnitudes=self.boosted_w1_samples,
             w2_magnitudes=self.boosted_w2_samples,
             w1_error=error_scale_w1 * self.w1_error,
@@ -307,7 +309,7 @@ class CatwiseSim:
             mask_north_ecliptic: bool = True
     ) -> None:
         self.mask = Mask(nside=self.nside)
-        self.mask_map = torch.zeros(self.mask.npix)
+        self.mask_map = np.zeros(self.mask.npix)
 
         assert self.nside == 64, 'CatWISE mask requires nside=64.'
         masked_pixel_indices = set(self.mask.catwise_mask())
@@ -321,7 +323,7 @@ class CatwiseSim:
         self.mask_map[self.masked_pixel_indices_list] = 1
 
         if fill_value == None:
-            self.fill_value = torch.nan
+            self.fill_value = np.nan
         else:
             self.fill_value = fill_value
 
@@ -617,6 +619,12 @@ class CatwiseSim:
             f'{path}w2_coverage_map.pt'
         )
 
+        # initialise AlphaLookup so table is not read in at each simulation
+        self.spectral_lookup = AlphaLookup(no_check=True)
+        
+        # mask now instead of during each loop
+        self.mask_pixels()
+        
     def create_error_map(self) -> None:
         assert self.catalogue_is_loaded
 
@@ -754,18 +762,24 @@ class CatwiseSim:
 
         return torch.as_tensor(w1_resampled), torch.as_tensor(w12_resampled)
 
-    def sample_magnitudes(self, n_samples: int) -> tuple[Tensor, Tensor]:
+    def sample_magnitudes(
+            self,
+            n_samples: int
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+        '''
+        :return: Tuple of 64-bit numpy arrays representing the w1 and w2 mag samples.
+        '''
         w1_samples, w2_samples = self.colour_mag_sampler.sample(n_samples)
-        return torch.as_tensor(w1_samples), torch.as_tensor(w2_samples)
+        return w1_samples, w2_samples
     
-    def sample_points(self, n_points: int) -> tuple[Tensor, Tensor]:
+    def sample_points(self, n_points: int) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         longitudes_deg, latitudes_deg = sample_spherical_points(n_points)
         return longitudes_deg, latitudes_deg
     
     def aberrate_points(self,
-            longitudes_deg: Tensor,
-            latitudes_deg: Tensor
-        ) -> tuple[Tensor, Tensor, Tensor]:
+            longitudes_deg: NDArray[np.float32],
+            latitudes_deg: NDArray[np.float32]
+        ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
         boosted_longitudes_deg, boosted_latitudes_deg,\
         rest_source_to_dipole_angle = aberrate_points(
             rest_longitudes=longitudes_deg,
@@ -779,10 +793,10 @@ class CatwiseSim:
         )
 
     def boost_magnitudes(self,
-            magnitudes: Tensor,
-            rest_source_to_dipole_angle: Tensor,
-            spectral_index: Tensor
-        ) -> Tensor:
+            magnitudes: NDArray[np.float64],
+            rest_source_to_dipole_angle: NDArray[np.float32],
+            spectral_index: NDArray[np.float32]
+        ) -> NDArray[np.float64 | np.float32]:
         boosted_magnitudes = boost_magnitudes(
             magnitudes=magnitudes,
             angle_to_source=rest_source_to_dipole_angle,

@@ -11,19 +11,25 @@ class AlphaLookup:
     '''
     Adapted from lookup_alpha_catwise.py from Secrest+21.
     '''
-    def __init__(self):
-        self.lookup_table_path = 'dipolesbi/catwise/alpha_w12_only.fits'
-        assert os.path.exists(self.lookup_table_path)
+    def __init__(self, no_check: bool = False) -> None:
+        self.no_check = no_check
+
+        # load only smaller-size version of table if not needed
+        if self.no_check:
+            self.lookup_table_path = 'dipolesbi/catwise/alpha_w12_only.fits'
+        else:
+            self.lookup_table_path = 'dipolesbi/catwise/alpha_colors.fits'
+
+        assert os.path.exists(self.lookup_table_path), 'Cannot find lookup tab.'
+        self._load_lookup_table()
+
         self.AB_VEGA_OFFSET = 2.673
         self.SPEED_OF_LIGHT_ANGSTROMS_S = speed_of_light * 1e10
     
     def make_alpha(self,
             w1_magnitude: NDArray[np.float64],
             w12_color: NDArray[np.float64],
-            no_check: bool = False
         ) -> NDArray[np.float32]:
-        self.no_check = no_check
-        self.make_lookup_table()
         self.do_lookups(w12_color)
         if not self.no_check:
             self.check_magnitude(w1_magnitude) 
@@ -41,14 +47,17 @@ class AlphaLookup:
 
         return out_table
 
-    def make_lookup_table(self):
-        self.lookup_table = Table.read(self.lookup_table_path)
-        self.lookup_alpha = self.lookup_table['alpha'].data
-        self.lookup_W1_W2 = self.lookup_table['W1_W2'].data
+    def _load_lookup_table(self):
+        self.lookup_tab = Table.read(self.lookup_table_path)
+        self.lookup_alpha = self.lookup_tab['alpha'].data.astype('float32')
+        self.lookup_W1_W2 = self.lookup_tab['W1_W2'].data.astype('float32')
 
         if not self.no_check:
-            self.lookup_k_W1 = self.lookup_table['k_W1'].data # Flux conversion factor
-            self.lookup_nu_W1_iso = self.lookup_table['nu_W1_iso'].data
+            self.lookup_k_W1 = self.lookup_tab['k_W1'].data.astype('float32')
+ # Flux conversion factor
+            self.lookup_nu_W1_iso = self.lookup_tab['nu_W1_iso'].data.astype('float32')
+
+        del self.lookup_tab
     
     def do_lookups(self, w12_color: np.ndarray):
         self.n_sources = len(w12_color)

@@ -4,13 +4,15 @@ from astropy.modeling.rotations import (
     RotateCelestial2Native, RotateNative2Celestial
 )
 import astropy.units as u
+import numpy as np
+from numpy.typing import NDArray
 
 
-def sample_spherical_points(n_points) -> tuple[Tensor, Tensor]:
-    longitudes_deg = 360 * torch.rand(size=(n_points,))
-    latitudes_deg = torch.rad2deg(
-        torch.arcsin( 2 * torch.rand(size=(n_points,)) - 1)
-    )
+def sample_spherical_points(n_points) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    longitudes_deg = 360 * np.random.rand(n_points).astype(np.float64)
+    latitudes_deg = np.rad2deg(
+        np.arcsin( 2 * np.random.rand(n_points) - 1)
+    ).astype(np.float64)
     return longitudes_deg, latitudes_deg
 
 
@@ -30,25 +32,25 @@ def sample_spectral_index(
     return torch.normal(mean=mean_index, std=sigma_index, size=(n_points,))
 
 
-def lorentz_factor(observer_speed: float) -> Tensor:
-    return 1 / ( torch.sqrt(1 - torch.as_tensor(observer_speed) ** 2) )
+def lorentz_factor(observer_speed: float) -> float: 
+    return 1 /  np.sqrt(1 - observer_speed ** 2) 
 
 
 def doppler_shift_factor(
         observer_speed: float,
-        angle_to_source: float
-    ) -> Tensor:
-    angle_to_source = torch.deg2rad(angle_to_source) # type: ignore
+        angle_to_source: NDArray[np.float64 | np.float32] 
+    ) -> NDArray[np.float64 | np.float32]:
+    angle_to_source = np.deg2rad(angle_to_source) # type: ignore
     gamma = lorentz_factor(observer_speed)
-    return gamma * ( 1 + observer_speed * torch.cos(angle_to_source) )
+    return gamma * ( 1 + observer_speed * np.cos(angle_to_source) )
 
 
 def boost_fluxes(
-        fluxes: Tensor,
-        angle_to_source: Tensor,
+        fluxes: NDArray[np.float64 | np.float32],
+        angle_to_source: NDArray[np.float64 | np.float32],
         observer_speed: float,
-        spectral_index: float | Tensor
-    ) -> Tensor:
+        spectral_index: float | NDArray[np.float64 | np.float32]
+    ) -> NDArray[np.float64 | np.float32]:
     '''
     :param angle_to_source: Angle between dipole vector and source in degrees
         in source rest frame.
@@ -59,56 +61,53 @@ def boost_fluxes(
 
 
 def boost_magnitudes(
-        magnitudes: Tensor,
-        angle_to_source: Tensor,
+        magnitudes: NDArray[np.float64 | np.float32],
+        angle_to_source: NDArray[np.float64 | np.float32],
         observer_speed: float,
-        spectral_index: float | Tensor
-    ) -> Tensor:
+        spectral_index: float | NDArray[np.float64 | np.float32]
+    ) -> NDArray[np.float64 | np.float32]:
     delta = doppler_shift_factor(observer_speed, angle_to_source)
-    return magnitudes - 2.5 * (1 + spectral_index) * torch.log10(delta)
+    return magnitudes - 2.5 * (1 + spectral_index) * np.log10(delta)
 
 
 def native_to_dipole_frame(
-        point_longitudes: Tensor,
-        point_latitudes: Tensor,
+        point_longitudes: NDArray[np.float32 | np.float64],
+        point_latitudes: NDArray[np.float32 | np.float64],
         dipole_longitude: float,
         dipole_latitude: float,
         pole_longitude: float = 0.
-    ) -> tuple[Tensor, Tensor]:
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     rotator = RotateCelestial2Native(
         lon=dipole_longitude * u.degree,
         lat=dipole_latitude * u.degree,
         lon_pole=pole_longitude * u.degree
     )
     new_long, new_lat = rotator(point_longitudes, point_latitudes)
-    return torch.as_tensor(new_long), torch.as_tensor(new_lat)
+    return new_long, new_lat
 
 
 def dipole_to_native_frame(
-        point_longitudes: Tensor,
-        point_latitudes: Tensor,
+        point_longitudes: NDArray[np.float32 | np.float64],
+        point_latitudes: NDArray[np.float32 | np.float64],
         dipole_longitude: float,
         dipole_latitude: float,
         pole_longitude: float = 0.
-    ) -> tuple[Tensor, Tensor]:
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     rotator = RotateNative2Celestial(
         lon=dipole_longitude * u.degree,
         lat=dipole_latitude * u.degree,
         lon_pole=pole_longitude * u.degree
     )
     new_long, new_lat = rotator(point_longitudes, point_latitudes)
-    return (
-        torch.as_tensor(new_long, dtype=torch.float32),
-        torch.as_tensor(new_lat, dtype=torch.float32)
-    )
+    return new_long, new_lat
 
 
 def aberrate_points(
-        rest_longitudes: Tensor,
-        rest_latitudes: Tensor,
+        rest_longitudes: NDArray[np.float32 | np.float64],
+        rest_latitudes: NDArray[np.float32 | np.float64],
         observer_direction: tuple[float, float],
         observer_speed: float
-    ) -> tuple[Tensor, Tensor, Tensor]:
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
     '''
     Aberrate points by transforming into a frame with the dipole vector as the
     pole, boosting the latitude angle, then transforming back into the native frame.
@@ -146,9 +145,9 @@ def aberrate_points(
 
 
 def compute_boosted_angles(
-        source_frame_angles: Tensor,
+        source_frame_angles: NDArray[np.float32 | np.float64],
         observer_speed: float
-    ) -> Tensor:
+    ) -> NDArray[np.float64]:
     '''
     Given an angle between the direction of motion and the source
     in the source frame, find the boosted angle, corresponding to the
@@ -158,11 +157,11 @@ def compute_boosted_angles(
         direction of motion (i.e. the dipole vector) and the source.
     :param observer_speed: the speed (in units of c) of the observer.
     '''
-    source_frame_angles = torch.deg2rad(source_frame_angles)
-    return torch.rad2deg(
-        torch.arccos(
-            (observer_speed + torch.cos(source_frame_angles))
-            / (observer_speed * torch.cos(source_frame_angles) + 1)
+    source_frame_angles = np.deg2rad(source_frame_angles)
+    return np.rad2deg(
+        np.arccos(
+            (observer_speed + np.cos(source_frame_angles))
+            / (observer_speed * np.cos(source_frame_angles) + 1)
         )
     )
 
