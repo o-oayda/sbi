@@ -21,14 +21,26 @@ class AlphaLookup:
             self.lookup_table_path = 'dipolesbi/catwise/alpha_colors.fits'
 
         assert os.path.exists(self.lookup_table_path), 'Cannot find lookup tab.'
-        self._load_lookup_table()
+        self._load_lookup_data()
+        self._extrapolate_colour_alpha_relation()
 
         self.AB_VEGA_OFFSET = 2.673
         self.SPEED_OF_LIGHT_ANGSTROMS_S = speed_of_light * 1e10
+
+    def _extrapolate_colour_alpha_relation(self, order: int = 5) -> None:
+        '''
+        With a degree 5 polynomial fit, we are anticipating errors in alpha
+        of order 10**-4.
+        '''
+        polynomial_fit = np.polyfit(self.lookup_W1_W2, self.lookup_alpha, deg=order)
+        self.p_W12 = np.poly1d(polynomial_fit)
+
+    def fit_alpha(self, w12_colour: NDArray) -> NDArray[np.float32]:
+        return self.p_W12(w12_colour).astype('float32')
     
     def make_alpha(self,
-            w1_magnitude: NDArray[np.float64],
-            w12_color: NDArray[np.float64],
+            w1_magnitude: NDArray,
+            w12_color: NDArray
         ) -> NDArray[np.float32]:
         self.do_lookups(w12_color)
         if not self.no_check:
@@ -47,7 +59,7 @@ class AlphaLookup:
 
         return out_table
 
-    def _load_lookup_table(self):
+    def _load_lookup_data(self):
         self.lookup_tab = Table.read(self.lookup_table_path)
         self.lookup_alpha = self.lookup_tab['alpha'].data.astype('float32')
         self.lookup_W1_W2 = self.lookup_tab['W1_W2'].data.astype('float32')
@@ -59,7 +71,7 @@ class AlphaLookup:
 
         del self.lookup_tab
     
-    def do_lookups(self, w12_color: np.ndarray):
+    def do_lookups(self, w12_color: NDArray):
         self.n_sources = len(w12_color)
         
         self.alpha_W1 = np.nan * np.empty( self.n_sources, dtype=np.float32 )
