@@ -9,10 +9,10 @@ from numpy.typing import NDArray
 
 
 def sample_spherical_points(n_points) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    longitudes_deg = 360 * np.random.rand(n_points).astype(np.float64)
+    longitudes_deg = 360 * np.random.rand(n_points)
     latitudes_deg = np.rad2deg(
         np.arcsin( 2 * np.random.rand(n_points) - 1)
-    ).astype(np.float64)
+    )
     return longitudes_deg, latitudes_deg
 
 
@@ -38,20 +38,23 @@ def lorentz_factor(observer_speed: float) -> float:
 
 def doppler_shift_factor(
         observer_speed: float,
-        angle_to_source: NDArray[np.float64 | np.float32] 
-    ) -> NDArray[np.float64 | np.float32]:
+        angle_to_source: NDArray,
+    ) -> NDArray[np.float64]:
     angle_to_source = np.deg2rad(angle_to_source) # type: ignore
     gamma = lorentz_factor(observer_speed)
     return gamma * ( 1 + observer_speed * np.cos(angle_to_source) )
 
 
 def boost_fluxes(
-        fluxes: NDArray[np.float64 | np.float32],
-        angle_to_source: NDArray[np.float64 | np.float32],
+        fluxes: NDArray,
+        angle_to_source: NDArray,
         observer_speed: float,
-        spectral_index: float | NDArray[np.float64 | np.float32]
-    ) -> NDArray[np.float64 | np.float32]:
+        spectral_index: float | NDArray
+    ) -> NDArray[np.float64]:
     '''
+    Returns S_nu * (delta ** (1 + alpha) ), i.e. special relativistic boosting
+    of flux densities.
+
     :param angle_to_source: Angle between dipole vector and source in degrees
         in source rest frame.
     '''
@@ -61,18 +64,25 @@ def boost_fluxes(
 
 
 def boost_magnitudes(
-        magnitudes: NDArray[np.float64 | np.float32],
-        angle_to_source: NDArray[np.float64 | np.float32],
+        magnitudes: NDArray,
+        angle_to_source: NDArray,
         observer_speed: float,
-        spectral_index: float | NDArray[np.float64 | np.float32]
-    ) -> NDArray[np.float64 | np.float32]:
+        spectral_index: float | NDArray,
+    ) -> NDArray[np.float64]:
+    '''
+    Since m_nu = -2.5 log_10 (S_nu) + ZP and S'_nu = S_nu delta ** (1 + alpha),
+    we can write the boosted magnitude as a function of function of rest frame
+    magnitude:
+    
+    m'_nu = m_nu - 2.5 (1 + alpha) log_10 (delta). 
+    '''
     delta = doppler_shift_factor(observer_speed, angle_to_source)
     return magnitudes - 2.5 * (1 + spectral_index) * np.log10(delta)
 
 
 def native_to_dipole_frame(
-        point_longitudes: NDArray[np.float32 | np.float64],
-        point_latitudes: NDArray[np.float32 | np.float64],
+        point_longitudes: NDArray,
+        point_latitudes: NDArray,
         dipole_longitude: float,
         dipole_latitude: float,
         pole_longitude: float = 0.
@@ -103,8 +113,8 @@ def dipole_to_native_frame(
 
 
 def aberrate_points(
-        rest_longitudes: NDArray[np.float32 | np.float64],
-        rest_latitudes: NDArray[np.float32 | np.float64],
+        rest_longitudes: NDArray,
+        rest_latitudes: NDArray,
         observer_direction: tuple[float, float],
         observer_speed: float
     ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
@@ -127,12 +137,14 @@ def aberrate_points(
     )
 
     source_to_dipole_angle = 90. - dipole_frame_latitudes
+    del dipole_frame_latitudes
     
     boosted_source_to_dipole_angle = compute_boosted_angles(
         source_frame_angles=source_to_dipole_angle,
         observer_speed=observer_speed
     )
     boosted_dipole_frame_latitudes = 90. - boosted_source_to_dipole_angle
+    del boosted_source_to_dipole_angle
 
     boosted_longitudes, boosted_latitudes = dipole_to_native_frame(
         point_longitudes=dipole_frame_longitudes,
@@ -145,7 +157,7 @@ def aberrate_points(
 
 
 def compute_boosted_angles(
-        source_frame_angles: NDArray[np.float32 | np.float64],
+        source_frame_angles: NDArray,
         observer_speed: float
     ) -> NDArray[np.float64]:
     '''
