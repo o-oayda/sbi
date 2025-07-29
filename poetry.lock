@@ -1486,6 +1486,21 @@ files = [
 ]
 
 [[package]]
+name = "memory-profiler"
+version = "0.61.0"
+description = "A module for monitoring memory usage of a python program"
+optional = false
+python-versions = ">=3.5"
+groups = ["main"]
+files = [
+    {file = "memory_profiler-0.61.0-py3-none-any.whl", hash = "sha256:400348e61031e3942ad4d4109d18753b2fb08c2f6fb8290671c5513a34182d84"},
+    {file = "memory_profiler-0.61.0.tar.gz", hash = "sha256:4e5b73d7864a1d1292fb76a03e82a3e78ef934d06828a698d9dada76da2067b0"},
+]
+
+[package.dependencies]
+psutil = "*"
+
+[[package]]
 name = "minikanren"
 version = "1.0.5"
 description = "Relational programming in Python"
@@ -3685,4 +3700,4 @@ test = ["pytest (>=8.0.0)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.14"
-content-hash = "884f779da3c5b95d8a6ef55337890ba39510f0f9696e2c93152838a83c4ada6d"
+content-hash = "022bb89eacea19f35a38c39bd821c8c23586093471a47fc0d0dfbc3094b648f3"

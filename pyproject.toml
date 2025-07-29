@@ -20,7 +20,8 @@ dependencies = [
     "dynesty (>=2.1.5,<3.0.0)",
     "emcee (>=3.1.6,<4.0.0)",
     "numpy (<2.0.0)",
-    "pymc (>=5.25.1,<6.0.0)" # get around this issue: AttributeError: module 'numpy.__config__' has no attribute 'get_info'
+    "pymc (>=5.25.1,<6.0.0)", # get around this issue: AttributeError: module 'numpy.__config__' has no attribute 'get_info'
+    "memory-profiler (>=0.61.0,<0.62.0)"
 ]
 
 
