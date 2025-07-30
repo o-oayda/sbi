@@ -1,3 +1,6 @@
+from dill.session import Optional
+import scipy
+from typing_extensions import Literal
 from astropy.table import Table
 from dipolesbi.tools.utils import (
     Sample1DHistogram, ParameterMap, MultinomialSample2DHistogram
@@ -135,8 +138,10 @@ class CatwiseSim:
             observer_speed: float = CMB_BETA,
             dipole_longitude: float = CMB_L,
             dipole_latitude: float = CMB_B,
-            error_scale_w1: float = 1.0,
-            error_scale_w2: float = 1.0,
+            w1_extra_error: float = 1.0,
+            w2_extra_error: float = 1.0,
+            magnitude_error_distribution: Literal['gaussian', 'students-t'] = 'gaussian',
+            magnitude_error_shape_param: float = 1.0,
             use_float32: bool = False
         ) -> NDArray[np.float32]:
         '''
@@ -221,10 +226,12 @@ class CatwiseSim:
         del source_logw1_cov, source_logw2_cov
 
         boosted_w1_samples, boosted_w2_samples = self.add_error( # float64
-            w1_magnitudes=boosted_w1_samples,
-            w2_magnitudes=boosted_w2_samples,
-            w1_error=error_scale_w1 * self.w1_error,
-            w2_error=error_scale_w2 * self.w2_error
+            w1=(boosted_w1_samples, self.w1_error),
+            w2=(boosted_w2_samples, self.w2_error),
+            w1_extra_error=w1_extra_error,
+            w2_extra_error=w2_extra_error,
+            error_dist=magnitude_error_distribution,
+            shape_param=magnitude_error_shape_param
         )
 
         # should be identical to rest_w12_samples since colour is invariant;
@@ -276,8 +283,8 @@ class CatwiseSim:
             dipole_longitude=np.rad2deg(phi),
             dipole_latitude=np.rad2deg(np.pi / 2 - theta),
             observer_speed=v,
-            error_scale_w1=eta_w1,
-            error_scale_w2=eta_w2
+            w1_extra_error=eta_w1,
+            w2_extra_error=eta_w2
         )
         return density_map
 
@@ -345,20 +352,56 @@ class CatwiseSim:
             self.fill_value = fill_value
 
     def add_error(self,
-            w1_magnitudes: NDArray,
-            w1_error: NDArray,
-            w2_magnitudes: NDArray,
-            w2_error: NDArray
-        ) -> tuple[NDArray, NDArray]:
-        boosted_w1_samples = np.random.normal(
-            loc=w1_magnitudes,
-            scale=w1_error
-        )
-        boosted_w2_samples = np.random.normal(
-            loc=w2_magnitudes,
-            scale=w2_error
-        )
-        return boosted_w1_samples, boosted_w2_samples
+              w1: tuple[NDArray, NDArray],
+              w2: tuple[NDArray, NDArray],
+              w1_extra_error: Optional[float] = None,
+              w2_extra_error: Optional[float] = None,
+              error_dist: Literal['gaussian', 'students-t'] = 'gaussian',
+              shape_param: float = 1.
+          ) -> tuple[NDArray, NDArray]:
+          """
+          Adds random photometric errors to W1 and W2 magnitudes.
+
+          :param w1: Tuple of (magnitudes, errors) for the W1 band.
+          :param w2: Tuple of (magnitudes, errors) for the W2 band.
+          :param w1_extra_error: Optional extra error (added in quadrature) for W1.
+          :param w2_extra_error: Optional extra error (added in quadrature) for W2.
+          :param error_dist: Distribution to sample errors from ('gaussian' or 'students-t').
+          :param shape_param: Shape parameter (degrees of freedom) for Student's t-distribution.
+          :returns: Tuple of arrays: (noisy_w1_magnitudes, noisy_w2_magnitudes)
+          """
+          w1_magnitudes, w1_error = w1
+          w2_magnitudes, w2_error = w2
+
+          assert error_dist in ['gaussian', 'students-t'], 'Error dist not recognised.'
+
+          if w1_extra_error is None:
+              w1_sigma = w1_error
+          else:
+              w1_sigma = np.sqrt(w1_error**2 + w1_extra_error**2)
+
+          if w2_extra_error is None:
+              w2_sigma = w2_error
+          else:
+              w2_sigma = np.sqrt(w2_error**2 + w2_extra_error**2)
+
+          rand_sampler = {
+              'gaussian': lambda mu, sigma: np.random.normal(mu, sigma),
+              'students-t': lambda mu, sigma, nu: scipy.stats.t.rvs(
+                  nu, loc=mu, scale=sigma
+              )
+          }
+
+          if error_dist == 'gaussian':
+              return (
+                  rand_sampler[error_dist](w1_magnitudes, w1_sigma),
+                  rand_sampler[error_dist](w2_magnitudes, w2_sigma)
+              )
+          else:
+              return (
+                  rand_sampler[error_dist](w1_magnitudes, w1_sigma, shape_param),
+                  rand_sampler[error_dist](w2_magnitudes, w2_sigma, shape_param)
+              )
     
     def magnitude_cut_boolean(self,
             w1_magnitudes: NDArray,
@@ -376,7 +419,7 @@ class CatwiseSim:
         )
         return condition
 
-    def precompute_data(self, no_check: bool = False):
+    def precompute_data(self): 
         # load catalogue and mask
         if not self.catalogue_is_loaded:
             self.load_catalogue()
@@ -469,7 +512,7 @@ class CatwiseSim:
             print(f'Building {band} mag-coverage-error relation...')
                 
             # compute median raw photometric across all sources in each cell
-            median_error_grid, x_edges, y_edges, _ = binned_statistic_2d(
+            median_error_grid, *_ = binned_statistic_2d(
                 self.masked_catalogue[f'{band}'],
                 np.log10(self.masked_catalogue[f'{band}cov']),
                 self.masked_catalogue[f'{band}e'],
