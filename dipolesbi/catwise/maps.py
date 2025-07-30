@@ -137,24 +137,33 @@ class CatwiseSim:
             dipole_latitude: float = CMB_B,
             error_scale_w1: float = 1.0,
             error_scale_w2: float = 1.0,
-            use_float32_coords: bool = False
+            use_float32: bool = False
         ) -> NDArray[np.float32]:
+        '''
+        :param use_float32: If True, cast all arrays to float32 when sampling
+        from the empirical CatWISE distributions for alpha and W1-W2, as well
+        as when drawing points on the sphere. However, during aberration
+        and Doppler boosting calculations, the arrays will be cast to float64
+        for those computations and then returned back to float32. The final
+        colour and magnitude cut will be on float32 arrays.
+        '''
         self.observer_speed = observer_speed
         self.dipole_longitude = dipole_longitude
         self.dipole_latitude = dipole_latitude
+        dtype = np.float32 if use_float32 else np.float64
 
         self.n_samples = n_initial_samples
-        rest_w1_samples, rest_w2_samples = self.sample_magnitudes(self.n_samples)
+        rest_w1_samples, rest_w2_samples = self.sample_magnitudes(
+            self.n_samples, dtype=dtype
+        )
 
-        coord_dtype = np.float32 if use_float32_coords else np.float64
         rest_source_lon_deg, rest_source_lat_deg = self.sample_points(
             self.n_samples,
-            dtype=coord_dtype
         )
 
         boosted_source_lon_deg, boosted_source_lat_deg,\
         rest_source_to_dipole_angle_deg = self.aberrate_points(
-            rest_source_lon_deg, rest_source_lat_deg, dtype=coord_dtype
+            rest_source_lon_deg, rest_source_lat_deg, dtype=dtype
         )
         del rest_source_lon_deg, rest_source_lat_deg
 
@@ -187,10 +196,12 @@ class CatwiseSim:
         spectral_indices = -spectral_indices
 
         boosted_w1_samples = self.boost_magnitudes( # float64
-            rest_w1_samples, rest_source_to_dipole_angle_deg, spectral_indices
+            rest_w1_samples, rest_source_to_dipole_angle_deg, spectral_indices,
+            dtype=dtype
         )
         boosted_w2_samples = self.boost_magnitudes( # float64
-            rest_w2_samples, rest_source_to_dipole_angle_deg, spectral_indices
+            rest_w2_samples, rest_source_to_dipole_angle_deg, spectral_indices,
+            dtype=dtype
         )
         del rest_w1_samples, rest_w2_samples
         
@@ -725,10 +736,9 @@ class CatwiseSim:
         ) -> None:
         assert self.catalogue_is_loaded
 
-        lookup = AlphaLookup()
+        lookup = AlphaLookup(no_check=no_check)
         out_table = lookup.make_alpha(
-            self.masked_catalogue['w1'], self.masked_catalogue['w12'], no_check=no_check
-        )
+            self.masked_catalogue['w1'], self.masked_catalogue['w12'])
         self.spectral_indices = out_table['alpha_W1'].data # type: ignore
         
         sampler = Sample1DHistogram()
@@ -768,13 +778,14 @@ class CatwiseSim:
 
     def sample_magnitudes(
             self,
-            n_samples: int
+            n_samples: int,
+            dtype: type = np.float64
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         '''
         :return: Tuple of 64-bit numpy arrays representing the w1 and w2 mag samples.
         '''
         w1_samples, w2_samples = self.colour_mag_sampler.sample(n_samples)
-        return w1_samples, w2_samples
+        return w1_samples.astype(dtype), w2_samples.astype(dtype)
     
     def sample_points(self, n_points: int, dtype: type = np.float64) -> tuple[NDArray, NDArray]:
         longitudes_deg, latitudes_deg = sample_spherical_points(n_points)
@@ -814,12 +825,28 @@ class CatwiseSim:
     def boost_magnitudes(self,
             magnitudes: NDArray,
             rest_source_to_dipole_angle: NDArray,
-            spectral_index: NDArray
+            spectral_index: NDArray,
+            dtype: type = np.float64
         ) -> NDArray[np.float64]:
+         # Convert to float64 for calculations if using float32, then convert back
+        if dtype == np.float32:
+            calc_mags = magnitudes.astype(np.float64)
+            calc_angles = rest_source_to_dipole_angle.astype(np.float64)
+            calc_spectral = spectral_index.astype(np.float64)
+        else:
+            calc_mags = magnitudes
+            calc_angles = rest_source_to_dipole_angle
+            calc_spectral = spectral_index
+             
         boosted_magnitudes = boost_magnitudes(
-            magnitudes=magnitudes,
-            angle_to_source=rest_source_to_dipole_angle,
+            magnitudes=calc_mags,
+            angle_to_source=calc_angles,
             observer_speed=self.observer_speed,
-            spectral_index=spectral_index
+            spectral_index=calc_spectral
         )
-        return boosted_magnitudes
+        
+        # Convert back to requested dtype
+        if dtype == np.float32:
+            return boosted_magnitudes.astype(dtype)
+        else:
+            return boosted_magnitudes
