@@ -260,6 +260,7 @@ class Catwise:
         #                 f"  etaW1: {w1_extra_error}\n"
         #                 f"  etaW2: {w2_extra_error}\n"
         #         )
+        boosted_w12_samples = boosted_w1_samples - boosted_w2_samples
     # boosted_w12_errors = np.sqrt( self.w1_error**2 + self.w2_error**2 )
         
         cut = self.magnitude_cut_boolean(
