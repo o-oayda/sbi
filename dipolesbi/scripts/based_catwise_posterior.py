@@ -17,31 +17,34 @@ plt.rcParams.update({
 sim = CatwiseSim(cat_w1_max=17.0, cat_w12_min=0.5)
 sim.initialise_data()
 
-SPEED_MULTIPLIER = 2
-ERROR_SCALE = 2.05
-N_SAMPLES = 36_000_000
-sim.generate_dipole(
-    n_initial_samples=N_SAMPLES,
-    observer_speed=SPEED_MULTIPLIER*CMB_BETA,
-    error_scale=ERROR_SCALE,
-    dipole_longitude=215,
-    dipole_latitude=40
-)
-smooth_map(sim.density_map)
-plt.show()
-dmap = sim.density_map
-mask = torch.isnan(dmap)
-dmap[mask] = 0
-
-# catwise = CatwiseReal()
-# dmap = catwise.density_map
-# smooth_map(dmap)
+# SPEED_MULTIPLIER = 2
+# ERROR_SCALE = 2.05
+# N_SAMPLES = 36_000_000
+# DIPOLE_LONGITUDE = 215
+# DIPOLE_LATITUDE = 40
+# sim.generate_dipole(
+#     n_initial_samples=N_SAMPLES,
+#     observer_speed=SPEED_MULTIPLIER*CMB_BETA,
+#     error_scale_w1=ERROR_SCALE,
+#     error_scale_w2=ERROR_SCALE,
+#     dipole_longitude=DIPOLE_LONGITUDE,
+#     dipole_latitude=DIPOLE_LATITUDE
+# )
+# smooth_map(sim.density_map)
 # plt.show()
+# dmap = sim.density_map
 # mask = torch.isnan(dmap)
 # dmap[mask] = 0
 
+catwise = CatwiseReal()
+dmap = catwise.density_map
+smooth_map(dmap)
+plt.show()
+mask = torch.isnan(dmap)
+dmap[mask] = 0
+
 inferer = Inference()
-inferer.load_posterior('based_posterior_catwise_0p5_17p0_error_scale.pkl')
+inferer.load_posterior('based_posterior_catwise_0p5_17p0_w1_w2_error_scale.pkl')
 inferer.posterior.to('cpu')
 samples = inferer.sample_amortized_posterior(x_obs=dmap, n_samps=20_000)
 
@@ -59,10 +62,11 @@ samples[:, -3] = samples[:, -3] / 0.00123
 corner(
     samples,
     # truths=[None, None, 1, CMB_L, CMB_B],
-    truths=[N_SAMPLES, ERROR_SCALE, SPEED_MULTIPLIER, CMB_L, CMB_B],
+    # truths=[N_SAMPLES, ERROR_SCALE, ERROR_SCALE, SPEED_MULTIPLIER, DIPOLE_LONGITUDE, DIPOLE_LATITUDE],
     labels=[
         r'$N_{\mathrm{init.}}$',
-        r'$\eta$',
+        r'$\eta_{W1}$',
+        r'$\eta_{W2}$',
         r'$v_{\mathrm{obs.}} / v_{\mathrm{CMB}}$',
         r'$l$ ($^\circ$)',
         r'$b$ ($^\circ$)'
@@ -72,6 +76,7 @@ corner(
     },
     truth_color='cornflowerblue'
 )
+plt.savefig('../../Desktop/simulation_w1w2error_corner.png', dpi=300)
 plt.show()
 
 # inferer.posterior_predictive_check(
@@ -80,6 +85,6 @@ plt.show()
 #     simulator=sim.simulator
 # )
 
-inferer.load_simulation('catwise_0p5_17p0_error_scale')
-inferer._check_for_mask_nans()
-inferer.run_simulation_based_calibration()
+# inferer.load_simulation('catwise_0p5_17p0_error_scale')
+# inferer._check_for_mask_nans()
+# inferer.run_simulation_based_calibration()
