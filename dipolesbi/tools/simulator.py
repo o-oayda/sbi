@@ -81,6 +81,14 @@ class Simulator:
             base_path = f'simulations/sim{i}'
         else:
             base_path = f'simulations/{custom_save_dir}'
+            if os.path.exists(base_path):
+                suffix = "_copy"
+                count = 1
+                new_base_path = f"{base_path}{suffix}"
+                while os.path.exists(new_base_path):
+                    count += 1
+                    new_base_path = f"{base_path}{suffix}{count}"
+                base_path = new_base_path
        
         os.makedirs(f'{base_path}/')
         simulation_path = f'{base_path}/theta_and_x.pt'
