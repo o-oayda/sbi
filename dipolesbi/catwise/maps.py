@@ -17,8 +17,6 @@ import healpy as hp
 from tqdm import tqdm
 import os
 from dipolesbi.tools.maps import Mask
-from sbi.utils.user_input_checks import process_simulator, check_sbi_inputs
-from sbi.inference import simulate_for_sbi
 from collections import defaultdict
 import pickle
 from scipy.stats import binned_statistic_2d
@@ -93,7 +91,7 @@ class CatwiseReal:
         else:
             self.fill_value = fill_value
 
-class CatwiseSim:
+class Catwise:
     def __init__(self,
             cat_w1_max: float,
             cat_w12_min: float,
@@ -157,7 +155,7 @@ class CatwiseSim:
         self.dipole_latitude = dipole_latitude
         dtype = np.float32 if use_float32 else np.float64
 
-        self.n_samples = n_initial_samples
+        self.n_samples = int(n_initial_samples)
         rest_w1_samples, rest_w2_samples = self.sample_magnitudes(
             self.n_samples, dtype=dtype
         )
@@ -272,44 +270,6 @@ class CatwiseSim:
 
         return self.density_map
     
-    def simulator(self, Theta):
-        Theta = np.asarray(Theta)
-        N, eta_w1, eta_w2, v = Theta[0], Theta[1], Theta[2], Theta[3]
-        phi, theta = Theta[4], Theta[5]
-        int_N = N.astype(np.int32)
-
-        density_map = self.generate_dipole(
-            n_initial_samples=int_N,
-            dipole_longitude=np.rad2deg(phi),
-            dipole_latitude=np.rad2deg(np.pi / 2 - theta),
-            observer_speed=v,
-            w1_extra_error=eta_w1,
-            w2_extra_error=eta_w2
-        )
-        return density_map
-
-    def batch_simulator(self,
-            proposal_distribution,
-            prior_returns_numpy: bool,
-            n_samples: int,
-            n_workers: int = 32
-        ) -> tuple[Tensor, Tensor]:
-        self.n_samples = n_samples
-
-        simulator = self.simulator
-        simulator = process_simulator(
-            simulator, proposal_distribution, prior_returns_numpy
-        )
-        check_sbi_inputs(simulator=simulator, prior=proposal_distribution)
-        Theta, self.batch_density_maps = simulate_for_sbi(
-            simulator=simulator,
-            proposal=proposal_distribution,
-            num_workers=n_workers,
-            num_simulations=n_samples
-        )
-        
-        return Theta, self.batch_density_maps
-
     def make_density_map(self,
         longitudes: NDArray,
         latitudes: NDArray

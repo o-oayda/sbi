@@ -1,4 +1,5 @@
 import numpy as np
+from numpy.typing import NDArray
 from dipolesbi.tools.points import (
     sample_points_with_flux, boost_points_with_flux, flux_cut,
     add_noise_to_fluxes
@@ -309,25 +310,24 @@ class SkyMap:
         return (Theta, batch_density_maps)
 
 def average_smooth_map(
-        healpy_map: Tensor,
-        weights: Tensor | None = Tensor,
+        healpy_map: NDArray[np.floating],
+        weights: NDArray[np.floating] | None = None, 
         angle_scale: float = 1.
-    ) -> Tensor:
+    ) -> NDArray:
     '''
     Smooth a healpy map using a moving average.
     '''
-    included_pixels = torch.where(~torch.isnan(healpy_map))[0]
-    smoothed_map = torch.empty_like(healpy_map).to(dtype=torch.float64)
-    smoothed_map.fill_(torch.nan)
+    included_pixels = np.where(~np.isnan(healpy_map))[0]
+    smoothed_map = np.nan * np.empty_like(healpy_map)
     nside = hp.get_nside(healpy_map)
     
-    if type(weights) != Tensor:
-        weights = torch.ones_like(healpy_map).to(dtype=torch.float32)
+    if weights is None:
+        weights = np.ones_like(healpy_map)
 
-    smoothing_radius = omega_to_theta(torch.as_tensor(angle_scale))
+    smoothing_radius = omega_to_theta(angle_scale)
     for p_index in included_pixels:
         vec = hp.pix2vec(nside, p_index, nest=True)
         disc = hp.query_disc(nside, vec, smoothing_radius, nest=True)
-        smoothed_map[p_index] = torch.nanmean(healpy_map[disc] * weights[disc])
+        smoothed_map[p_index] = np.nanmean(healpy_map[disc] * weights[disc])
 
     return smoothed_map

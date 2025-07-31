@@ -1,7 +1,7 @@
 from dipolesbi.tools.maps import SkyMap
 from dipolesbi.tools.priors import DipolePrior
 import argparse
-from dipolesbi.tools.inference import Inference
+from dipolesbi.tools.inference import LikelihoodFreeInferer
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -24,10 +24,10 @@ sim.configure(
 )
 prior = DipolePrior(
     mean_count_range=[8_000_000, 12_000_000],
-    amplitude_range=[0, 0.01]
+    speed_range=[0, 0.01]
 )
 
-inferer = Inference(prior, sim)
+inferer = LikelihoodFreeInferer(prior, sim)
 inferer.make_batch_simulations(
     n_simulations=N_SIM,
     n_workers=N_WORKERS,

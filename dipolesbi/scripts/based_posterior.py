@@ -1,4 +1,4 @@
-from dipolesbi.tools.inference import Inference
+from dipolesbi.tools.inference import LikelihoodFreeInferer
 import argparse
 
 parser = argparse.ArgumentParser()
@@ -32,7 +32,7 @@ DEVICE = args.device
 LOAD_IN_VRAM = args.load_in_vram
 SIM_FRACTION = args.simulation_fraction
 
-inference = Inference()
+inference = LikelihoodFreeInferer()
 inference.run_sbi(
     sim_dir=SAVE_DIR,
     device=DEVICE,

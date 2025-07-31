@@ -1,5 +1,5 @@
 # %%
-from dipolesbi.catwise.maps import CatwiseSim
+from dipolesbi.catwise.maps import Catwise
 import healpy as hp
 import matplotlib.pyplot as plt
 import numpy as np
@@ -7,7 +7,7 @@ from collections import defaultdict
 from dipolesbi.tools.utils import ParameterMap
 # %%
 
-sim = CatwiseSim(cat_w1_max=17.0, cat_w12_min=0.5)
+sim = Catwise(cat_w1_max=17.0, cat_w12_min=0.5)
 sim.initialise_data()
 sim.mask_pixels()
 
@@ -53,12 +53,12 @@ plt.hist2d(
 )
 plt.show()
 # %%
-from dipolesbi.catwise.maps import CatwiseSim
+from dipolesbi.catwise.maps import Catwise
 import healpy as hp
 import matplotlib.pyplot as plt
 from dipolesbi.tools.plotting import smooth_map
 
-sim = CatwiseSim(cat_w1_max=17.0, cat_w12_min=0.5)
+sim = Catwise(cat_w1_max=17.0, cat_w12_min=0.5)
 sim.initialise_data()
 sim.generate_dipole(n_initial_samples=30_000_000)
 # %%

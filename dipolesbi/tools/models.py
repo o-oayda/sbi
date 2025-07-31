@@ -1,12 +1,12 @@
 from dipolesbi.tools.maps import SkyMap
-from dipolesbi.tools.inference import Inference
+from dipolesbi.tools.inference import LikelihoodBasedInferer
 from dipolesbi.tools.utils import polar_pdf, sample_polar, sample_unif, unif_pdf
 import healpy as hp
 import numpy as np
 import torch
 from scipy.stats import poisson as sp_poisson
 
-class DipolePoisson(Inference):
+class DipolePoisson(LikelihoodBasedInferer):
     def __init__(self,
             density_map: np.ndarray[float],
             amplitude_range: list[float] = [0, 0.1],

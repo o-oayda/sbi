@@ -1,6 +1,6 @@
-from dipolesbi.catwise.maps import CatwiseSim
+from dipolesbi.catwise.maps import Catwise
 from dipolesbi.tools.priors import DipolePrior
-from dipolesbi.tools.inference import Inference
+from dipolesbi.tools.inference import LikelihoodFreeInferer
 from sbi.utils import BoxUniform
 import torch
 import argparse
@@ -27,28 +27,32 @@ N_SIM = args.n_simulations
 N_WORKERS = args.n_workers
 SAVE_DIR = args.save_dir
 
-sim = CatwiseSim(cat_w1_max=17.0, cat_w12_min=0.5)
-sim.initialise_data()
+model = Catwise(cat_w1_max=17.0, cat_w12_min=0.5)
+model.initialise_data()
 prior = DipolePrior(
     mean_count_range=[30_000_000, 40_000_000],
-    amplitude_range=[0, 0.01]
+    speed_range=[0, 0.01]
 )
-prior.add_prior( # eta_w1
+prior.add_prior(
     prior=BoxUniform(
         low=torch.ones(1),
         high=3 * torch.ones(1)
     ),
+    short_name='sigmaW1',
+    simulator_kwarg='w1_extra_error',
     index=1
 )
-prior.add_prior( # eta_w2
+prior.add_prior(
     prior=BoxUniform(
         low=torch.ones(1),
         high=3 * torch.ones(1)
     ),
+    short_name='sigmaW2',
+    simulator_kwarg='w2_extra_error',
     index=2
 )
 
-inferer = Inference(prior, sim)
+inferer = LikelihoodFreeInferer(prior, model.generate_dipole)
 inferer.make_batch_simulations(
     n_simulations=N_SIM,
     n_workers=N_WORKERS,

@@ -1,6 +1,6 @@
-from dipolesbi.catwise.maps import CatwiseSim, CatwiseReal
+from dipolesbi.catwise.maps import Catwise, CatwiseReal
 from dipolesbi.tools.priors import DipolePrior
-from dipolesbi.tools.inference import Inference
+from dipolesbi.tools.inference import LikelihoodFreeInferer
 from dipolesbi.tools.plotting import smooth_map, sky_probability
 import matplotlib.pyplot as plt
 import torch
@@ -14,7 +14,7 @@ plt.rcParams.update({
     "font.family": "serif",
     "text.latex.preamble": r"\usepackage{amsmath}"
 })
-sim = CatwiseSim(cat_w1_max=17.0, cat_w12_min=0.5)
+sim = Catwise(cat_w1_max=17.0, cat_w12_min=0.5)
 sim.initialise_data()
 
 SPEED_MULTIPLIER = 2
@@ -23,14 +23,14 @@ N_SAMPLES = 36_000_000
 sim.generate_dipole(
     n_initial_samples=N_SAMPLES,
     observer_speed=SPEED_MULTIPLIER*CMB_BETA,
-    error_scale=ERROR_SCALE,
+    w1_extra_error=ERROR_SCALE,
     dipole_longitude=215,
     dipole_latitude=40
 )
 smooth_map(sim.density_map)
 plt.show()
 dmap = sim.density_map
-mask = torch.isnan(dmap)
+mask = np.isnan(dmap)
 dmap[mask] = 0
 
 # catwise = CatwiseReal()
@@ -40,7 +40,7 @@ dmap[mask] = 0
 # mask = torch.isnan(dmap)
 # dmap[mask] = 0
 
-inferer = Inference()
+inferer = LikelihoodFreeInferer()
 inferer.load_posterior('based_posterior_catwise_0p5_17p0_error_scale.pkl')
 inferer.posterior.to('cpu')
 samples = inferer.sample_amortized_posterior(x_obs=dmap, n_samps=20_000)

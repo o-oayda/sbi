@@ -1,3 +1,4 @@
+from typing import cast
 import healpy as hp
 import numpy as np
 import torch
@@ -178,41 +179,14 @@ def samples_to_hpmap(
     else:
         return sample_pdensity_map
 
-def save_simulation(
-        theta: Tensor,
-        x: Tensor,
-        prior,
-        custom_save_dir: str | None = None
-    ) -> None:
-    if custom_save_dir is None:
-        if not os.path.exists('simulations/'):
-            os.makedirs('simulations/')
-        i = 1
-        while os.path.exists(f'simulations/sim{i}/'):
-            i += 1
-        base_path = f'simulations/sim{i}'
-    else:
-        base_path = f'simulations/{custom_save_dir}'
-   
-    os.makedirs(f'{base_path}/')
-    simulation_path = f'{base_path}/theta_and_x.pt'
-    prior_path = f'{base_path}/prior.pkl'
-
-    print(f'Saving theta and x to {simulation_path}...')
-    torch.save([theta, x], simulation_path)
-
-    print(f'Saving prior to {prior_path}...')
-    with open(prior_path, "wb") as handle:
-        pickle.dump(prior, handle)
-
-def omega_to_theta(omega):
+def omega_to_theta(omega: float) -> np.float64:
     '''
     Convert solid angle in steradins to theta in radians for
     a cone section of a sphere.
     
     :param omega: solid angle in steradians.
     '''
-    return torch.arccos( 1 - omega / (2 * np.pi) )
+    return np.arccos( 1 - omega / (2 * np.pi) )
 
 def equatorial_to_ecliptic(ra, dec, output_unit='radians'):
     eq = SkyCoord(ra, dec, unit=u.deg)
@@ -539,17 +513,22 @@ class MultinomialSample2DHistogram:
         }
 
 class Samples:
-    def __init__(self, samples: Tensor) -> None:
-        self.samples = samples
+    def __init__(self, samples: Tensor | NDArray) -> None:
+        if type(samples) is NDArray:
+            self.samples = torch.as_tensor(samples)
+        else:
+            self.samples = samples
         self.total_samples = samples.shape[0]
 
-    def sample(self, num_simulations: tuple[int]):
+    def sample(self, num_simulations: tuple[int]) -> Tensor:
         '''
         :param num_simulations: e.g. (5,).
         '''
-        indices = np.random.choice(
-            self.total_samples,
-            size=num_simulations[0],
-            replace=True
+        indices = torch.as_tensor(
+            np.random.choice(
+                self.total_samples,
+                size=num_simulations[0],
+                replace=True
+            )
         )
         return self.samples[indices]

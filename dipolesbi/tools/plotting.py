@@ -1,3 +1,4 @@
+from numpy.typing import NDArray
 from dipolesbi.tools.utils import (
     compute_2D_contours, convert_to_l_dash, samples_to_hpmap
 )
@@ -164,8 +165,8 @@ def sky_probability(
     return proj_map
 
 def smooth_map(
-        healpy_map: Tensor,
-        weights: Tensor | None = None,
+        healpy_map: NDArray,
+        weights: NDArray | None = None,
         angle_scale: float = 1.,
         **kwargs
     ) -> None:
@@ -175,7 +176,7 @@ def smooth_map(
         angle_scale=angle_scale
     )
     hp.projview(
-        smoothed_map_to_plot.detach().cpu().numpy(),
+        smoothed_map_to_plot,
         nest=True,
         **kwargs
     )

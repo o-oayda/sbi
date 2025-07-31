@@ -1,4 +1,3 @@
-from dipolesbi.tools.utils import save_simulation
 import dynesty
 import emcee
 import numpy as np
@@ -7,184 +6,140 @@ from sbi.inference import NPE
 from sbi.neural_nets import posterior_nn
 from sbi.neural_nets.embedding_nets import hpCNNEmbedding
 from sbi.utils.user_input_checks import process_prior
-from sbi.inference import simulate_for_sbi
-from sbi.utils.user_input_checks import process_simulator, check_sbi_inputs
 from sbi.diagnostics import check_sbc, run_sbc, check_tarp, run_tarp
 from sbi.analysis.plot import sbc_rank_plot
+from sbi.inference.posteriors.base_posterior import NeuralPosterior
+from sbi.utils.user_input_checks import CustomPriorWrapper
 import pickle
 import healpy as hp
-import os
 from numpy.typing import NDArray
 from torch.types import Tensor
-from typing import Optional
-from dipolesbi.tools.utils import Samples
+from typing import Callable, Optional, cast
+from dipolesbi.tools import Samples
 from dipolesbi.tools.plotting import smooth_map
+from dipolesbi.tools import Prior
+from dipolesbi.tools import Simulator 
 import matplotlib.pyplot as plt
 from sbi.analysis.plot import plot_tarp
 
-class Inference:
-    def __init__(self, prior=None, model=None):
-        self.prior = prior
-        self.model = model
-
-    def run_mcmc(self,
-        nwalkers: int = 32,
-        n_steps: int = 2000,
-        burn_in: int = 100
+class LikelihoodFreeInferer:
+    def __init__(self, 
+            prior: Prior,
+            simulation_model: Callable[..., NDArray | Tensor]
     ) -> None:
-        '''
-        Run MCMC with emcee and save posterior in samples attribute.
-        '''
+        self.prior = prior
+        self.sbi_processed_prior = self._process_prior()
+        self.simulator = Simulator(self.sbi_processed_prior, simulation_model)
+        self.posterior: NeuralPosterior | None = None
 
-        def log_prob(Theta):
-            log_prior = self.log_prior_likelihood(Theta)
-            if not np.isfinite(log_prior):
-                return -np.inf
-            return log_prior + self.log_likelihood(Theta)
-
-        pos = np.zeros((nwalkers, self.ndim))
-        for i in range(0, nwalkers):
-            unifs = np.random.rand(self.ndim)
-            pos[i, :] = self.prior_transform(unifs)
-
-        self.sampler = emcee.EnsembleSampler(nwalkers, self.ndim, log_prob)
-        self.sampler.run_mcmc(pos, n_steps, progress=True)
-        self.samples = self.sampler.get_chain(discard=burn_in, flat=True)
-
-    def run_dynesty(self,
-        sample_method: str = 'auto',
-        print_info: bool = True,
-        **kwargs
-    ):
-        '''
-        Begin the nested sampling process and save results in dresults attribute.
-        '''
-        dsampler = dynesty.NestedSampler(
-            self.log_likelihood,
-            self.prior_transform,
-            **{
-                'ndim': self.ndim,
-               'sample': sample_method,
-               **kwargs
+    def _process_prior(self) -> CustomPriorWrapper:
+        sbi_processed_prior, *_ = process_prior(self.prior, #type: ignore
+            custom_prior_wrapper_kwargs={
+                'lower_bound': self.prior.low_ranges,    
+                'upper_bound': self.prior.high_ranges
             }
         )
-
-        dsampler.run_nested(print_progress=print_info)
-        self.model_evidence = dsampler.results.logz[-1]
-        print('Model evidence: {:.2f}'.format(self.model_evidence))
-        self.dresults = dsampler.results
+        # since we pass a custom Prior from prior.py,
+        # this should be a CustomPriorWrapper
+        sbi_processed_prior = cast(CustomPriorWrapper, sbi_processed_prior)
+        return sbi_processed_prior
 
     def make_batch_simulations(self,
             n_simulations: int = 2000,
             n_workers: int = 32,
-            device: str = 'cpu',
             save: bool = False,
             custom_save_dir: str | None = None
-    ) -> None:
-        self.prior.to(device)
-        self.prior, num_parameters, prior_returns_numpy = process_prior(
-            self.prior,
-            custom_prior_wrapper_kwargs={
-                'lower_bound': torch.as_tensor(
-                    self.prior.low_ranges, device=self.prior.device
-                ),
-                'upper_bound': torch.as_tensor(
-                    self.prior.high_ranges, device=self.prior.device
-                )
-            }
-        )
-        self.theta, self.x = self.model.batch_simulator(
-            self.prior,
+    ) -> None: 
+        self.simulator._batch_simulator(
+            prior_returns_numpy=False,
             n_samples=n_simulations,
-            n_workers=n_workers,
-            prior_returns_numpy=prior_returns_numpy,
+            n_workers=n_workers
         )
-
         if save:
-            save_simulation(
-                theta=self.theta,
-                x=self.x,
-                prior=self.prior,
+            self.simulator.save_simulation(
+                proposal_distribution=self.sbi_processed_prior,
                 custom_save_dir=custom_save_dir
             )
-        
-        return (self.theta, self.x)
-            
-    def run_sbi(self,
+
+    def run_healpix_sbi(self,
             sim_dir: str | None,
-            device: str = 'cpu',
+            training_device: str = 'cuda',
             load_simulations_in_vram: bool = False,
-            simulation_fraction: float = 1.0
+            simulation_fraction: float = 1.0,
+            nan_fill_value: float = 0.
     ) -> None:
         if sim_dir is not None:
-            self.load_simulation(sim_dir)
+            print(f'Loading simulations and prior from {sim_dir}...')
+
+            try:
+                self.simulator.load_simulation(sim_dir)
+            except FileNotFoundError:
+                print('Cannot find path to directory!')
+                return
+
+            prior = self.simulator.sbi_proposal_distribution
+        else:
+            print('Using current simulation data in Simulator...')
+
+            if not self.simulator._simulation_is_loaded():
+                print('Theta, x or proposal distribution are None!')
+
+            prior = self.sbi_processed_prior
+
+        # final check
+        assert self.simulator.x is not None
+        assert self.simulator.theta is not None
+        assert isinstance(prior, CustomPriorWrapper) 
         
-        n_train_indices = int(simulation_fraction * len(self.x))
-        self.x = self.x[:n_train_indices]
-        self.theta = self.theta[:n_train_indices]
+        self.n_train_indices = int(simulation_fraction * len(self.simulator.x))
         print(
-            f'Using {n_train_indices} simulations ({simulation_fraction*100}%)...'
+            f'Using {self.n_train_indices} simulations ({simulation_fraction*100}%)...'
         )
         
         # calling this again here should put the mean and variance attributes
         # on the right device, as well as the support boundaries (thanks to
         # the custom to method we defined)
-        self.prior.to(device)
+        prior.to(training_device)
 
-        self._check_for_mask_nans()
-
-        if not hasattr(self, 'nside'):
-            self.nside = hp.npix2nside(self.x.shape[-1])
+        # data process healpy maps
+        self._check_for_mask_nans(nan_fill_value)
+        self.nside = hp.npix2nside(self.simulator.x.shape[-1])
         
         embedding_net = hpCNNEmbedding(
             nside=self.nside,
             dropout_rate=0.2,
             out_channels_per_layer=[2, 4, 8, 16, 32, 64]
         )
-
         neural_posterior = posterior_nn(
             model="maf",
             embedding_net=embedding_net,
             z_score_x='structured'
         )
         inference = NPE(
-            prior=self.prior,
+            prior=self.sbi_processed_prior,
             density_estimator=neural_posterior,
-            device=device
+            device=training_device
         )
 
         # by specifying data_device = 'cpu', we can train on the GPU
         # while transferring data from host memory to VRAM
         self.inference = inference.append_simulations(
-            self.theta,
-            self.x,
+            self.simulator.theta[:self.n_train_indices],
+            self.simulator.x[:self.n_train_indices],
             data_device='cpu' if not load_simulations_in_vram else 'cuda'
         )
         self.density_estimator = self.inference.train(show_train_summary=True)
         self.posterior = inference.build_posterior(
             self.density_estimator,
-            prior=self.prior,
+            prior=self.sbi_processed_prior,
         )
         print(self.posterior)
-    
-    def load_simulation(self, sim_dir: str) -> None:
-        if not os.path.exists(f'simulations/{sim_dir}/'):
-            raise FileNotFoundError(f'Cannot find {sim_dir}.')
-        
-        print(f'Opening {sim_dir}...')
-        sim_path = f'simulations/{sim_dir}/theta_and_x.pt'
-        self.theta, self.x = torch.load(sim_path)
-        
-        prior_path = f'simulations/{sim_dir}/prior.pkl'
-        print(f'Opening {prior_path}...')
-        with open(prior_path, "rb") as handle:
-            self.prior = pickle.load(handle)
-    
+
     def save_posterior(self, file_path: str) -> None:
         print(f'Saving to {file_path}...')
         with open(file_path, "wb") as handle:
             pickle.dump(self.posterior, handle)
-    
+
     def load_posterior(self, file_path: str) -> None:
         print(f'Opening {file_path}...')
         with open(file_path, "rb") as handle:
@@ -195,13 +150,16 @@ class Inference:
             n_samps: int = 10_000,
             **kwargs
     ) -> NDArray[np.float64]:
+        assert self.posterior is not None, 'Posterior not infered or loaded.'
         return self.posterior.sample((n_samps,), x=x_obs, **kwargs).cpu().detach().numpy()
-    
-    def _check_for_mask_nans(self) -> None:
-        assert hasattr(self, 'x'), 'Load the data first.'
 
-        if torch.isnan(self.x).any():
-            self.x = torch.nan_to_num(self.x, nan=0.0)
+    def _check_for_mask_nans(self, fill_value: float = 0.) -> None:
+        x = self.simulator.x
+        assert x is not None, 'Simulator has no data!' 
+        assert type(x) is Tensor, 'Convert simulator data to Tensor.'
+
+        if torch.isnan(x).any():
+            x = torch.nan_to_num(x, nan=fill_value)
             print('Replaced masked nan values with 0.')
         else:
             print('No masked nan values detected.')
@@ -210,50 +168,48 @@ class Inference:
             n_samples: int,
             x: Tensor,
             samples: Optional[Tensor] = None,
-            simulator=None,
             num_workers: int = 16
         ) -> None:
-        
-        if not self.model:
-            assert simulator, 'Pass a simulator to this function.'
-        else:
-            simulator = self.model.simulator
         
         if type(samples) is Tensor:
             samples_obj = Samples(samples)
         else:
-            assert hasattr(self, 'posterior'), (
+            assert self.posterior is not None, (
                 'Since no posterior attribute exists for this instance to sample from, '
                 'please pass a Tensor of samples to the function.'
             )
             samples = self.posterior.sample((n_samples,), x)
             assert type(samples) is Tensor 
-            sample_obj = Samples(samples)
+            samples_obj = Samples(samples)
 
-        simulator = process_simulator(
-            simulator, sample_obj, is_numpy_simulator=False
+        _, x = self.simulator._batch_simulator(
+            sbi_processed_prior=samples_obj, # type: ignore
+            prior_returns_numpy=False,
+            n_samples=n_samples,
+            n_workers=num_workers
         )
-        theta, x = simulate_for_sbi(
-            simulator=simulator,
-            proposal=sample_obj,
-            num_simulations=n_samples,
-            num_workers=num_workers)
         
         for i in range(n_samples):
             print(f'Samples: {samples[i, :]}')
             smooth_map(x[i, :])
             plt.show()
-    
+
     def run_simulation_based_calibration(self,
             num_posterior_samples: int = 1000,
             use_multidim_sbc: bool = False,
             num_sbc_samples: int = 200
         ) -> None:
-        assert hasattr(self, 'posterior')
+        assert self.posterior is not None, 'Posterior not infered or loaded.'
+        assert self.simulator._simulation_is_loaded()
 
-        indices = np.random.choice(self.theta.shape[0], num_sbc_samples, replace=False)
-        theta = self.theta[indices]
-        x = self.x[indices]
+        # simulator variables will not be None due to the above assertion
+        indices = np.random.choice(
+            self.simulator.theta.shape[0], # type: ignore 
+            num_sbc_samples,
+            replace=False
+        )
+        theta = self.simulator.theta[indices] # type: ignore
+        x = self.simulator.x[indices] # type: ignore
 
         ranks, dap_samples = run_sbc(
             theta,
@@ -261,7 +217,8 @@ class Inference:
             self.posterior,
             num_posterior_samples=num_posterior_samples,
             num_workers=1,
-            reduce_fns=self.posterior.log_prob if use_multidim_sbc else 'marginals'
+            # should have log prob method as per NeuralPosterior docstring
+            reduce_fns=self.posterior.log_prob if use_multidim_sbc else 'marginals' # type: ignore
         )
         check_stats = check_sbc(
             ranks, theta, dap_samples,
@@ -278,7 +235,7 @@ class Inference:
             f"c2st accuracies check_stats['c2st_dap'] = {check_stats['c2st_dap'].numpy()}"
         )
 
-        f, ax = sbc_rank_plot(
+        sbc_rank_plot(
             ranks=ranks,
             num_posterior_samples=num_posterior_samples,
             plot_type="hist",
@@ -304,3 +261,57 @@ class Inference:
 
         plot_tarp(self.ecp, self.alpha)
         plt.show()
+
+class LikelihoodBasedInferer:
+    def __init__(self, prior, model):
+        self.prior = prior
+        self.model = model
+        self.ndim = self.prior.ndim
+
+    def run_mcmc(self,
+        nwalkers: int = 32,
+        n_steps: int = 2000,
+        burn_in: int = 100
+    ) -> None:
+        '''
+        Run MCMC with emcee and save posterior in samples attribute.
+        '''
+
+        def log_prob(Theta):
+            log_prior = self.prior.log_prior_likelihood(Theta)
+            if not np.isfinite(log_prior):
+                return -np.inf
+            return log_prior + self.model.log_likelihood(Theta)
+
+        pos = np.zeros((nwalkers, self.ndim))
+        for i in range(0, nwalkers):
+            unifs = np.random.rand(self.ndim)
+            pos[i, :] = self.prior.prior_transform(unifs)
+
+        self.sampler = emcee.EnsembleSampler(nwalkers, self.ndim, log_prob)
+        self.sampler.run_mcmc(pos, n_steps, progress=True)
+        self.samples = self.sampler.get_chain(discard=burn_in, flat=True)
+
+    def run_dynesty(self,
+        sample_method: str = 'auto',
+        print_info: bool = True,
+        **kwargs
+    ):
+        '''
+        Begin the nested sampling process and save results in dresults attribute.
+        '''
+        dsampler = dynesty.NestedSampler(
+            self.model.log_likelihood,
+            self.model.prior_transform,
+            **{
+                'ndim': self.ndim,
+               'sample': sample_method,
+               **kwargs
+            }
+        )
+
+        dsampler.run_nested(print_progress=print_info)
+        self.model_evidence = dsampler.results.logz[-1] # type: ignore
+        print('Model evidence: {:.2f}'.format(self.model_evidence))
+        self.dresults = dsampler.results
+      

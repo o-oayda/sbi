@@ -6,7 +6,7 @@ import pickle
 
 prior = DipolePrior(
     mean_count_range=[30_000_000, 40_000_000],
-    amplitude_range=[0, 0.01]
+    speed_range=[0, 0.01]
 )
 prior.add_prior(
     prior=BoxUniform(
