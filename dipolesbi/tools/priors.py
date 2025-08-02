@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 class Prior(ABC):
     def __init__(self) -> None:
         self._ndim = 0
+        self.device = None
 
     @property
     def ndim(self) -> int:
@@ -135,6 +136,7 @@ class DipolePrior(Prior):
             longitude_range:  list[float] = [0,    360. ],
             latitude_range:   list[float] = [-90., 90.  ],
     ) -> None:
+        super().__init__()
         ranges = [mean_count_range, speed_range, longitude_range, latitude_range]
         self._prior_names = ['N', 'D', 'phi', 'theta']
         kwargs = [
