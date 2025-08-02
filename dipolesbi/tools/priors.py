@@ -69,7 +69,7 @@ class Prior(ABC):
             }
 
     def sample(self, sample_size=torch.Size([])) -> Tensor:
-        samples = torch.empty(*sample_size, self.ndim,) 
+        samples = torch.empty(*sample_size, self.ndim, device=self.device) 
         for i, name in enumerate(self.prior_names):
             samples[..., i] = (
                 self.prior_dict[name]['dist'].sample(sample_size).flatten()

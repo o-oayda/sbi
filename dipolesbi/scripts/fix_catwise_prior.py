@@ -6,26 +6,41 @@ import pickle
 
 prior = DipolePrior(
     mean_count_range=[30_000_000, 40_000_000],
-    speed_range=[0, 0.01]
+    speed_range=[0, 8]
 )
 prior.add_prior(
     prior=BoxUniform(
-        low=torch.ones(1),
-        high=3 * torch.ones(1)
+        low= 0 * torch.ones(1),
+        high=8 * torch.ones(1)
     ),
+    short_name='etaW1',
+    simulator_kwarg='w1_extra_error',
     index=1
 )
-prior.to('cpu')
+prior.add_prior(
+    prior=BoxUniform(
+        low= 0 * torch.ones(1),
+        high=8 * torch.ones(1)
+    ),
+    short_name='etaW2',
+    simulator_kwarg='w2_extra_error',
+    index=2
+)
+prior.add_prior(
+    prior=BoxUniform(
+        low=-1 * torch.ones(1),
+        high=3 * torch.ones(1)
+    ),
+    short_name='nu',
+    simulator_kwarg='log10_magnitude_error_shape_param',
+    index=3
+)
 
 prior, num_parameters, prior_returns_numpy = process_prior(
     prior, # type: ignore
     custom_prior_wrapper_kwargs={
-        'lower_bound': torch.as_tensor(
-            prior.low_ranges, device=prior.device
-        ),
-        'upper_bound': torch.as_tensor(
-            prior.high_ranges, device=prior.device
-        )
+        'lower_bound': prior.low_ranges,
+        'upper_bound': prior.high_ranges 
     }
 )
 
