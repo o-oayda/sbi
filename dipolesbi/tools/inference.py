@@ -5,7 +5,6 @@ import torch
 from sbi.inference import NPE
 from sbi.neural_nets import posterior_nn
 from sbi.neural_nets.embedding_nets import hpCNNEmbedding
-from sbi.utils.user_input_checks import process_prior
 from sbi.diagnostics import check_sbc, run_sbc, check_tarp, run_tarp
 from sbi.analysis.plot import sbc_rank_plot
 from sbi.inference.posteriors.base_posterior import NeuralPosterior
@@ -14,84 +13,36 @@ import pickle
 import healpy as hp
 from numpy.typing import NDArray
 from torch.types import Tensor
-from typing import Callable, Optional, cast
+from typing import Optional
 from dipolesbi.tools import Samples
 from dipolesbi.tools.plotting import smooth_map
-from dipolesbi.tools import Prior
 from dipolesbi.tools import Simulator 
 import matplotlib.pyplot as plt
 from sbi.analysis.plot import plot_tarp
 
+
 class LikelihoodFreeInferer:
-    def __init__(self, 
-            prior: Prior,
-            simulation_model: Callable[..., NDArray | Tensor]
-    ) -> None:
-        self.prior = prior
-        self.sbi_processed_prior = self._process_prior()
-        self.simulator = Simulator(self.sbi_processed_prior, simulation_model)
+    def __init__(self, simulator: Simulator) -> None:
+        self.simulator = simulator
         self.posterior: NeuralPosterior | None = None
 
-    def _process_prior(self) -> CustomPriorWrapper:
-        sbi_processed_prior, *_ = process_prior(self.prior, #type: ignore
-            custom_prior_wrapper_kwargs={
-                'lower_bound': self.prior.low_ranges,    
-                'upper_bound': self.prior.high_ranges
-            }
-        )
-        # since we pass a custom Prior from prior.py,
-        # this should be a CustomPriorWrapper
-        sbi_processed_prior = cast(CustomPriorWrapper, sbi_processed_prior)
-        return sbi_processed_prior
-
-    def make_batch_simulations(self,
-            n_simulations: int = 2000,
-            n_workers: int = 32,
-            save: bool = False,
-            custom_save_dir: str | None = None
-    ) -> None: 
-        self.simulator._batch_simulator(
-            prior_returns_numpy=False,
-            n_samples=n_simulations,
-            n_workers=n_workers
-        )
-        if save:
-            self.simulator.save_simulation(
-                proposal_distribution=self.sbi_processed_prior,
-                custom_save_dir=custom_save_dir
-            )
-
     def run_healpix_sbi(self,
-            sim_dir: str | None,
             training_device: str = 'cuda',
             load_simulations_in_vram: bool = False,
             simulation_fraction: float = 1.0,
             nan_fill_value: float = 0.
     ) -> None:
-        if sim_dir is not None:
-            print(f'Loading simulations and prior from {sim_dir}...')
+        x = self.simulator.x; theta = self.simulator.theta
+        prior = self.simulator.sbi_processed_prior
 
-            try:
-                self.simulator.load_simulation(sim_dir)
-            except FileNotFoundError:
-                print('Cannot find path to directory!')
-                return
-
-            prior = self.simulator.sbi_proposal_distribution
-        else:
-            print('Using current simulation data in Simulator...')
-
-            if not self.simulator._simulation_is_loaded():
-                print('Theta, x or proposal distribution are None!')
-
-            prior = self.sbi_processed_prior
-
-        # final check
-        assert self.simulator.x is not None
-        assert self.simulator.theta is not None
-        assert isinstance(prior, CustomPriorWrapper) 
+        assert (x is not None) and (theta is not None), (
+            'Theta and x have not been assigned in the Simulator instance!'
+        )
+        assert isinstance(prior, CustomPriorWrapper), (
+            "The simulator's prior has not been processed by sbi."
+        )
         
-        self.n_train_indices = int(simulation_fraction * len(self.simulator.x))
+        self.n_train_indices = int(simulation_fraction * len(x))
         print(
             f'Using {self.n_train_indices} simulations ({simulation_fraction*100}%)...'
         )
@@ -103,7 +54,7 @@ class LikelihoodFreeInferer:
 
         # data process healpy maps
         self._check_for_mask_nans(nan_fill_value)
-        self.nside = hp.npix2nside(self.simulator.x.shape[-1])
+        self.nside = hp.npix2nside(x.shape[-1])
         
         embedding_net = hpCNNEmbedding(
             nside=self.nside,
@@ -116,7 +67,7 @@ class LikelihoodFreeInferer:
             z_score_x='structured'
         )
         inference = NPE(
-            prior=self.sbi_processed_prior,
+            prior=prior,
             density_estimator=neural_posterior,
             device=training_device
         )
@@ -124,14 +75,14 @@ class LikelihoodFreeInferer:
         # by specifying data_device = 'cpu', we can train on the GPU
         # while transferring data from host memory to VRAM
         self.inference = inference.append_simulations(
-            self.simulator.theta[:self.n_train_indices],
-            self.simulator.x[:self.n_train_indices],
+            theta[:self.n_train_indices],
+            x[:self.n_train_indices],
             data_device='cpu' if not load_simulations_in_vram else 'cuda'
         )
         self.density_estimator = self.inference.train(show_train_summary=True)
         self.posterior = inference.build_posterior(
             self.density_estimator,
-            prior=self.sbi_processed_prior,
+            prior=prior
         )
         print(self.posterior)
 
@@ -175,17 +126,17 @@ class LikelihoodFreeInferer:
             samples_obj = Samples(samples)
         else:
             assert self.posterior is not None, (
-                'Since no posterior attribute exists for this instance to sample from, '
-                'please pass a Tensor of samples to the function.'
+                'Since no posterior attribute exists for this instance to '
+                'sample from, please pass a Tensor of samples to the function.'
             )
             samples = self.posterior.sample((n_samples,), x)
             assert type(samples) is Tensor 
             samples_obj = Samples(samples)
 
-        _, x = self.simulator._batch_simulator(
+        _, x = self.simulator.make_batch_simulations(
             sbi_processed_prior=samples_obj, # type: ignore
             prior_returns_numpy=False,
-            n_samples=n_samples,
+            n_simulations=n_samples,
             n_workers=num_workers
         )
         

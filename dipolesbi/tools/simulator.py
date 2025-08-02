@@ -1,71 +1,96 @@
-from typing import Callable
+from typing import Callable, Optional, cast
 from numpy.typing import NDArray
 from sbi.inference import simulate_for_sbi
 from sbi.inference.trainers.base import check_sbi_inputs
 from sbi.utils import process_simulator
 from sbi.utils.user_input_checks import CustomPriorWrapper
 from torch import Tensor
-from torch.distributions.distribution import Distribution
 import os
 import pickle
 import torch
 import numpy as np
+from dipolesbi.tools import Prior
 
 
 class Simulator:
     def __init__(
             self,
-            sbi_processed_prior: CustomPriorWrapper,
-            simulation_model: Callable[..., NDArray | Tensor]
+            prior: Optional[Prior] = None,
+            simulation_model: Optional[Callable[..., NDArray | Tensor]] = None,
+            path_to_saved_simulations: Optional[str] = None
     ) -> None:
         self.theta: Tensor | None = None
         self.x: Tensor | None = None
-        self.simulation_model = simulation_model
-        self.sbi_proposal_distribution = sbi_processed_prior
+        
+        if path_to_saved_simulations is not None:
+            assert (prior is None) and (simulation_model is None), (
+                'Either specify a path to simulations or a prior and model.'
+            )
+            self.load_simulation(path_to_saved_simulations)
+        else:
+            assert path_to_saved_simulations is None, (
+                'Either specify a path to simulations or a prior and model.'
+            )
+            assert prior is not None and simulation_model is not None
+            self.simulation_model = simulation_model
+            self.prior = prior
+            self.sbi_processed_prior = self._process_prior()
 
     def _interface_with_simulator(self, Theta: Tensor) -> NDArray | Tensor:
         mapping = {
             kwarg: np.float64(Theta[i]) for i, kwarg in enumerate(
-                self.sbi_proposal_distribution.custom_prior.simulator_kwargs
+                self.sbi_processed_prior.custom_prior.simulator_kwargs
             )
         } 
         return self.simulation_model(**mapping)
 
-    def _batch_simulator(self,
-            prior_returns_numpy: bool,
-            n_samples: int,
-            n_workers: int
-    ) -> None:
+    def _process_prior(self) -> CustomPriorWrapper:
+        sbi_processed_prior, *_ = process_prior(self.prior, #type: ignore
+            custom_prior_wrapper_kwargs={
+                'lower_bound': self.prior.low_ranges,    
+                'upper_bound': self.prior.high_ranges
+            }
+        )
+        # since we pass a custom Prior from prior.py,
+        # this should be a CustomPriorWrapper
+        sbi_processed_prior = cast(CustomPriorWrapper, sbi_processed_prior)
+        return sbi_processed_prior
+
+    def make_batch_simulations(self,
+            n_simulations: int,
+            n_workers: int,
+            prior_returns_numpy: bool = False
+    ) -> tuple[Tensor, Tensor]:
         # self.make_simulation can return NDArrays as process_simulator will
         # wrap function with conversion torch tensors (probable slowdown though)
         sbi_processed_simulator = process_simulator(
             self._interface_with_simulator,
-            self.sbi_proposal_distribution, 
+            self.sbi_processed_prior, 
             prior_returns_numpy
         )
         check_sbi_inputs(
             simulator=sbi_processed_simulator,
-            prior=self.sbi_proposal_distribution
+            prior=self.sbi_processed_prior
         )
         self.theta, self.x = simulate_for_sbi(
             simulator=sbi_processed_simulator,
-            proposal=self.sbi_proposal_distribution,
+            proposal=self.prior,
             num_workers=n_workers,
-            num_simulations=n_samples
+            num_simulations=n_simulations
         )
+        return self.theta, self.x
 
     def _simulation_is_loaded(self):
         if (
                (self.x is None)
             or (self.theta is None)
-            or (self.sbi_proposal_distribution is None)
+            or (self.prior is None)
         ):
             return False
         else:
             return True
 
     def save_simulation(self,
-            proposal_distribution: Distribution,
             custom_save_dir: str | None = None
     ) -> None:
         assert self.theta is not None and self.x is not None, (
@@ -99,7 +124,7 @@ class Simulator:
 
         print(f'Saving prior to {prior_path}...')
         with open(prior_path, "wb") as handle:
-            pickle.dump(proposal_distribution, handle)
+            pickle.dump(self.prior, handle)
 
     def load_simulation(self, sim_dir: str) -> None:
         if not os.path.exists(f'simulations/{sim_dir}/'):
@@ -112,4 +137,4 @@ class Simulator:
         prior_path = f'simulations/{sim_dir}/prior.pkl'
         print(f'Opening {prior_path}...')
         with open(prior_path, "rb") as handle:
-            self.sbi_proposal_distribution = pickle.load(handle)
+            self.prior = pickle.load(handle)

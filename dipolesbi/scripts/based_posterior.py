@@ -1,4 +1,5 @@
 from dipolesbi.tools.inference import LikelihoodFreeInferer
+from dipolesbi.tools.simulator import Simulator
 import argparse
 
 parser = argparse.ArgumentParser()
@@ -32,10 +33,10 @@ DEVICE = args.device
 LOAD_IN_VRAM = args.load_in_vram
 SIM_FRACTION = args.simulation_fraction
 
-inference = LikelihoodFreeInferer()
-inference.run_sbi(
-    sim_dir=SAVE_DIR,
-    device=DEVICE,
+sim = Simulator(path_to_saved_simulations=SAVE_DIR)
+inference = LikelihoodFreeInferer(sim)
+inference.run_healpix_sbi(
+    training_device=DEVICE,
     load_simulations_in_vram=LOAD_IN_VRAM,
     simulation_fraction=SIM_FRACTION
 )

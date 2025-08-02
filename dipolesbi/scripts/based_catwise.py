@@ -1,6 +1,7 @@
 from dipolesbi.catwise.maps import Catwise
 from dipolesbi.tools.priors import DipolePrior
 from dipolesbi.tools.inference import LikelihoodFreeInferer
+from dipolesbi.tools.simulator import Simulator
 from sbi.utils import BoxUniform
 import torch
 import argparse
@@ -79,10 +80,9 @@ prior.add_prior(
     index=3
 )
 
-inferer = LikelihoodFreeInferer(prior, model.generate_dipole)
-inferer.make_batch_simulations(
+simulator = Simulator(prior, model.generate_dipole)
+simulator.make_batch_simulations(
     n_simulations=N_SIM,
     n_workers=N_WORKERS,
-    save=True,
-    custom_save_dir=SAVE_DIR
 )
+simulator.save_simulation(SAVE_DIR)
