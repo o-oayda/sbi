@@ -1,6 +1,5 @@
 from dipolesbi.catwise.maps import Catwise
 from dipolesbi.tools.priors import DipolePrior
-from dipolesbi.tools.inference import LikelihoodFreeInferer
 from dipolesbi.tools.simulator import Simulator
 from sbi.utils import BoxUniform
 import torch

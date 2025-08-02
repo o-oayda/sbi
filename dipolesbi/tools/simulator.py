@@ -3,7 +3,7 @@ from numpy.typing import NDArray
 from sbi.inference import simulate_for_sbi
 from sbi.inference.trainers.base import check_sbi_inputs
 from sbi.utils import process_simulator
-from sbi.utils.user_input_checks import CustomPriorWrapper
+from sbi.utils.user_input_checks import CustomPriorWrapper, process_prior
 from torch import Tensor
 import os
 import pickle
@@ -124,7 +124,7 @@ class Simulator:
 
         print(f'Saving prior to {prior_path}...')
         with open(prior_path, "wb") as handle:
-            pickle.dump(self.prior, handle)
+            pickle.dump(self.sbi_processed_prior, handle)
 
     def load_simulation(self, sim_dir: str) -> None:
         if not os.path.exists(f'simulations/{sim_dir}/'):
@@ -137,4 +137,4 @@ class Simulator:
         prior_path = f'simulations/{sim_dir}/prior.pkl'
         print(f'Opening {prior_path}...')
         with open(prior_path, "rb") as handle:
-            self.prior = pickle.load(handle)
+            self.sbi_processed_prior = pickle.load(handle)

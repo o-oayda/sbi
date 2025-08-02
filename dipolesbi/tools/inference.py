@@ -53,7 +53,7 @@ class LikelihoodFreeInferer:
         prior.to(training_device)
 
         # data process healpy maps
-        self._check_for_mask_nans(nan_fill_value)
+        x = self._check_for_mask_nans(x, nan_fill_value)
         self.nside = hp.npix2nside(x.shape[-1])
         
         embedding_net = hpCNNEmbedding(
@@ -104,8 +104,7 @@ class LikelihoodFreeInferer:
         assert self.posterior is not None, 'Posterior not infered or loaded.'
         return self.posterior.sample((n_samps,), x=x_obs, **kwargs).cpu().detach().numpy()
 
-    def _check_for_mask_nans(self, fill_value: float = 0.) -> None:
-        x = self.simulator.x
+    def _check_for_mask_nans(self, x: Tensor, fill_value: float = 0.) -> Tensor:
         assert x is not None, 'Simulator has no data!' 
         assert type(x) is Tensor, 'Convert simulator data to Tensor.'
 
@@ -114,6 +113,8 @@ class LikelihoodFreeInferer:
             print('Replaced masked nan values with 0.')
         else:
             print('No masked nan values detected.')
+
+        return x
 
     def posterior_predictive_check(self,
             n_samples: int,
