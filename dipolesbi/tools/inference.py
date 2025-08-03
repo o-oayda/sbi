@@ -22,7 +22,7 @@ from sbi.analysis.plot import plot_tarp
 
 
 class LikelihoodFreeInferer:
-    def __init__(self, simulator: Simulator) -> None:
+    def __init__(self, simulator: Optional[Simulator] = None) -> None:
         self.simulator = simulator
         self.posterior: NeuralPosterior | None = None
 
@@ -32,6 +32,7 @@ class LikelihoodFreeInferer:
             simulation_fraction: float = 1.0,
             nan_fill_value: float = 0.
     ) -> None:
+        assert self.simulator is not None, 'Pass an instance of Simulator at init.'
         x = self.simulator.x; theta = self.simulator.theta
         prior = self.simulator.sbi_processed_prior
 
@@ -95,14 +96,15 @@ class LikelihoodFreeInferer:
         print(f'Opening {file_path}...')
         with open(file_path, "rb") as handle:
             self.posterior = pickle.load(handle)
+        assert self.posterior is not None
 
     def sample_amortized_posterior(self,
             x_obs,
             n_samps: int = 10_000,
             **kwargs
-    ) -> NDArray[np.float64]:
+        ) -> Tensor:
         assert self.posterior is not None, 'Posterior not infered or loaded.'
-        return self.posterior.sample((n_samps,), x=x_obs, **kwargs).cpu().detach().numpy()
+        return self.posterior.sample((n_samps,), x=x_obs, **kwargs)
 
     def _check_for_mask_nans(self, x: Tensor, fill_value: float = 0.) -> Tensor:
         assert x is not None, 'Simulator has no data!' 
@@ -122,7 +124,8 @@ class LikelihoodFreeInferer:
             samples: Optional[Tensor] = None,
             num_workers: int = 16
         ) -> None:
-        
+        assert self.simulator is not None, 'Pass an instance of Simulator at init.'
+
         if type(samples) is Tensor:
             samples_obj = Samples(samples)
         else:
@@ -143,7 +146,7 @@ class LikelihoodFreeInferer:
         
         for i in range(n_samples):
             print(f'Samples: {samples[i, :]}')
-            smooth_map(x[i, :])
+            smooth_map(x[i, :].numpy())
             plt.show()
 
     def run_simulation_based_calibration(self,
@@ -152,6 +155,7 @@ class LikelihoodFreeInferer:
             num_sbc_samples: int = 200
         ) -> None:
         assert self.posterior is not None, 'Posterior not infered or loaded.'
+        assert self.simulator is not None, 'Pass an instance of Simulator at init.'
         assert self.simulator._simulation_is_loaded()
 
         # simulator variables will not be None due to the above assertion

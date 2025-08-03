@@ -29,70 +29,6 @@ from memory_profiler import profile
 import warnings
 
 
-class CatwiseReal:
-    # TODO: refactor due to code duplication with CatwiseSim
-    def __init__(self, nside: int = 64):
-        self.file_path = (
-            'dipolesbi/catwise/catwise_agns_masked_final_w1lt16p5_alpha.fits'
-        )
-        self.nside = nside
-
-        self.load_catalogue()
-        self.make_cuts()
-        self.make_density_map()
-        self.mask_pixels()
-    
-    def load_catalogue(self) -> None:
-        print(f'Reading in CatWISE2020 from {self.file_path}...')
-        self.catalogue = Table.read(self.file_path)
-        print(f'Loaded CatWISE2020.')
-
-
-    def make_cuts(self) -> None:
-        print('Making flux cuts...')
-        flux_cuts = (self.catalogue['w1'] < 16.4) & (self.catalogue['w1'] > 9)
-        self.catalogue = self.catalogue[flux_cuts]
-
-    def make_density_map(self) -> None:
-        print('Computing density map...')
-        source_indices = hp.ang2pix(
-            self.nside,
-            self.catalogue['l'].data,
-            self.catalogue['b'].data,
-            lonlat=True,
-            nest=True
-        )
-        self.source_indices = torch.as_tensor(source_indices)
-        self._density_map =  torch.bincount(
-            self.source_indices,
-            minlength=hp.nside2npix(self.nside)
-        )
-    
-    @property
-    def density_map(self):
-        out = self._density_map.to(dtype=torch.float32)
-        out[self.mask_map == 1] = self.fill_value
-        return out
-
-    def mask_pixels(self, fill_value = None, mask_north_ecliptic: bool = True) -> None:
-        print('Masking pixels...')
-        self.mask = Mask(nside=self.nside)
-        self.mask_map = torch.zeros(self.mask.npix)
-        masked_pixel_indices = set(self.mask.catwise_mask())
-
-        if mask_north_ecliptic:
-            north_pole_pixels = self.mask.north_ecliptic_mask()
-            masked_pixel_indices.update(north_pole_pixels)
-        
-        self.masked_pixel_indices_set = masked_pixel_indices
-        self.masked_pixel_indices_list = list(masked_pixel_indices)
-        self.mask_map[self.masked_pixel_indices_list] = 1
-        
-        if fill_value == None:
-            self.fill_value = torch.nan
-        else:
-            self.fill_value = fill_value
-
 class Catwise:
     def __init__(self,
             cat_w1_max: float,
@@ -120,6 +56,9 @@ class Catwise:
             f'catwise2020_corr_w12{self.cat_w12_min_str}_w1{self.cat_w1_max_str}.fits'
         )
         self.catalogue_is_loaded = False
+        self.real_file_path = (
+            'dipolesbi/catwise/catwise_agns_masked_final_w1lt16p5_alpha.fits'
+        )
     
     def _get_cut_path(self,
             cat_w1_max: float,
@@ -181,17 +120,10 @@ class Catwise:
         del rest_source_lon_deg, rest_source_lat_deg
 
         # mask now for efficiency
-        source_pixel_indices = hp.ang2pix(
-            self.nside,
-            boosted_source_lon_deg,
-            boosted_source_lat_deg,
-            lonlat=True,
-            nest=True
-        ).astype(np.uint16) # unsigned 16-bit can represent all pixels in nside=64 map
-        is_masked = self.mask_map == 1
-        masked_pixel_indices = np.squeeze(np.nonzero(is_masked))
-        mask_slice = ~np.isin(source_pixel_indices, masked_pixel_indices)
-
+        mask_slice, source_pixel_indices = self._source_isin_mask(
+            boosted_source_lon_deg, 
+            boosted_source_lat_deg
+        )
         rest_w1_samples = rest_w1_samples[mask_slice]
         rest_w2_samples = rest_w2_samples[mask_slice]
         boosted_source_lon_deg = boosted_source_lon_deg[mask_slice]
@@ -296,6 +228,24 @@ class Catwise:
 
         return self.density_map
     
+    def make_real_sample(self) -> NDArray[np.float32]:
+        print(f'Reading in CatWISE2020 from {self.real_file_path}...')
+        self.real_catalogue = Table.read(self.real_file_path)
+        print(f'Loaded CatWISE2020.')
+
+        print('Making flux cuts...')
+        flux_cuts = (
+                (self.real_catalogue['w1'] < 16.4)
+              & (self.real_catalogue['w1'] > 9)
+        )
+        self.real_catalogue = self.real_catalogue[flux_cuts]
+        
+        self._real_density_map = self.make_density_map(
+            longitudes=self.real_catalogue['l'].data,
+            latitudes=self.real_catalogue['b'].data
+        )
+        return self.real_density_map
+
     def make_density_map(self,
         longitudes: NDArray,
         latitudes: NDArray
@@ -314,7 +264,13 @@ class Catwise:
         out[self.mask_map == 1] = self.fill_value
         return out
 
-    def mask_pixels(self,
+    @property
+    def real_density_map(self) -> NDArray[np.float32]:
+        out = self._real_density_map
+        out[self.mask_map == 1] = self.fill_value
+        return out
+
+    def determine_masked_pixels(self,
             fill_value = None,
             mask_north_ecliptic: bool = True
     ) -> None:
@@ -336,6 +292,23 @@ class Catwise:
             self.fill_value = np.nan
         else:
             self.fill_value = fill_value
+
+    def _source_isin_mask(
+            self,
+            longitudes: NDArray,
+            latitudes: NDArray
+    ) -> tuple[NDArray[np.bool_], NDArray[np.int64]]:
+        source_pixel_indices = hp.ang2pix(
+            self.nside,
+            longitudes,
+            latitudes,
+            lonlat=True,
+            nest=True
+        ).astype(np.uint16) # unsigned 16-bit can represent all pixels in nside=64 map
+        is_masked = self.mask_map == 1
+        masked_pixel_indices = np.squeeze(np.nonzero(is_masked))
+        mask_slice = ~np.isin(source_pixel_indices, masked_pixel_indices)
+        return mask_slice, source_pixel_indices
 
     def add_error(self,
             w1: tuple[NDArray, NDArray],
@@ -408,7 +381,7 @@ class Catwise:
         # load catalogue and mask
         if not self.catalogue_is_loaded:
             self.load_catalogue()
-        self.mask_pixels()
+        self.determine_masked_pixels()
         self.make_masked_catalogue()
 
         self.create_w1_w2_distribution()
@@ -666,7 +639,7 @@ class Catwise:
         self.spectral_lookup = AlphaLookup(no_check=True)
         
         # mask now instead of during each loop
-        self.mask_pixels()
+        self.determine_masked_pixels()
         
     def create_error_map(self) -> None:
         assert self.catalogue_is_loaded
@@ -783,7 +756,7 @@ class Catwise:
             self.load_catalogue()
         
         if not hasattr(self, 'masked_catalogue'):
-            self.mask_pixels()
+            self.determine_masked_pixels()
             self.make_masked_catalogue()
         
         w1_real, w2_real = self.masked_catalogue['w1'], self.masked_catalogue['w2']

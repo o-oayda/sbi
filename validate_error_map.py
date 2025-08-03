@@ -9,7 +9,7 @@ from dipolesbi.tools.utils import ParameterMap
 
 sim = Catwise(cat_w1_max=17.0, cat_w12_min=0.5)
 sim.initialise_data()
-sim.mask_pixels()
+sim.determine_masked_pixels()
 
 error_map = sim.w1_error_map.numpy()
 mask = sim.mask_map.numpy()
@@ -19,7 +19,7 @@ plt.show()
 # %%
 if not sim.catalogue_is_loaded:
     sim.load_catalogue()
-sim.mask_pixels()
+sim.determine_masked_pixels()
 sim.make_masked_catalogue()
 
 # make cuts

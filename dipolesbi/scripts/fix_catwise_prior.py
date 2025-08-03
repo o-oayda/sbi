@@ -44,7 +44,7 @@ prior, num_parameters, prior_returns_numpy = process_prior(
     }
 )
 
-custom_save_dir = 'catwise_0p5_17p0_error_scale'
+custom_save_dir = 'catwise_0p5_17p0_studentst'
 base_path = f'simulations/{custom_save_dir}'
 prior_path = f'{base_path}/prior.pkl'
 
