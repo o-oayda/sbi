@@ -25,8 +25,6 @@ from scipy.interpolate import RegularGridInterpolator
 from numpy.typing import NDArray
 from datetime import datetime
 import matplotlib.pyplot as plt
-from memory_profiler import profile
-import warnings
 
 
 class Catwise:
@@ -78,7 +76,6 @@ class Catwise:
         print('Finished loading CatWISE2020.')
         self.catalogue_is_loaded = True
     
-    # @profile
     def generate_dipole(self,
             n_initial_samples: int,
             w1_max: float = 16.4,
@@ -131,8 +128,8 @@ class Catwise:
         rest_source_to_dipole_angle_deg = rest_source_to_dipole_angle_deg[mask_slice]
         source_pixel_indices = source_pixel_indices[mask_slice]
 
-        rest_w12_samples = rest_w1_samples - rest_w2_samples # float64
-        spectral_indices = self.spectral_lookup.fit_alpha( # float32 
+        rest_w12_samples = rest_w1_samples - rest_w2_samples
+        spectral_indices = self.spectral_lookup.fit_alpha(
             w12_colour=rest_w12_samples
         )
         del rest_w12_samples
@@ -140,18 +137,18 @@ class Catwise:
         # oops... needs a -ve sign
         spectral_indices = -spectral_indices
 
-        boosted_w1_samples = self.boost_magnitudes( # float64
+        boosted_w1_samples = self.boost_magnitudes(
             rest_w1_samples, rest_source_to_dipole_angle_deg, spectral_indices,
             dtype=self.dtype
         )
-        boosted_w2_samples = self.boost_magnitudes( # float64
+        boosted_w2_samples = self.boost_magnitudes(
             rest_w2_samples, rest_source_to_dipole_angle_deg, spectral_indices,
             dtype=self.dtype
         )
         del rest_w1_samples, rest_w2_samples
         
-        source_logw1_cov = np.log10(self.w1cov_map[source_pixel_indices]) # float64
-        source_logw2_cov = np.log10(self.w2cov_map[source_pixel_indices]) # float64
+        source_logw1_cov = np.log10(self.w1cov_map[source_pixel_indices])
+        source_logw2_cov = np.log10(self.w2cov_map[source_pixel_indices])
 
         self.w1_error = self.w1mag_coverage_rgi(
             np.column_stack(
@@ -165,7 +162,7 @@ class Catwise:
         ).astype(np.float32)
         del source_logw1_cov, source_logw2_cov
 
-        boosted_w1_samples, boosted_w2_samples = self.add_error( # float64
+        boosted_w1_samples, boosted_w2_samples = self.add_error(
             w1=(boosted_w1_samples, self.w1_error),
             w2=(boosted_w2_samples, self.w2_error),
             w1_extra_error=w1_extra_error,
@@ -340,7 +337,7 @@ class Catwise:
         if w2_extra_error is None:
             w2_sigma = w2_error
         else:
-            w2_sigma = np.sqrt(w2_error**2 + w2_extra_error * w1_error**2)
+            w2_sigma = np.sqrt(w2_error**2 + w2_extra_error * w2_error**2)
 
         rand_sampler = {
             'gaussian': lambda mu, sigma: np.random.normal(mu, sigma),

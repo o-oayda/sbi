@@ -88,6 +88,9 @@ class LikelihoodFreeInferer:
         print(self.posterior)
 
     def save_posterior(self, file_path: str) -> None:
+        # be sure to transfer posterior to CPU, otherwise it royally fucks you
+        # if you don't load it back on a machine with cuda
+        self.posterior.to('cpu') # type: ignore
         print(f'Saving to {file_path}...')
         with open(file_path, "wb") as handle:
             pickle.dump(self.posterior, handle)

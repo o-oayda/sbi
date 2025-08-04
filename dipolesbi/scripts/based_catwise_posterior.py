@@ -1,23 +1,22 @@
-from dipolesbi.catwise.maps import Catwise, CatwiseReal
+from dipolesbi.catwise.maps import Catwise 
 from typing import Literal
-from dipolesbi.tools.priors import DipolePrior
 from dipolesbi.tools.inference import LikelihoodFreeInferer
-from dipolesbi.tools.simulator import Simulator
-from sbi.utils import BoxUniform
 from dipolesbi.tools.plotting import smooth_map, sky_probability
 import matplotlib.pyplot as plt
 import torch
 from corner import corner
-from dipolesbi.tools.constants import CMB_L, CMB_B, CMB_PHI_GAL, CMB_THETA_GAL, CMB_BETA
-import healpy as hp
+from dipolesbi.tools.constants import CMB_PHI_GAL, CMB_THETA_GAL
 import numpy as np
+
 
 SPEED_MULTIPLIER = 2
 ERROR_SCALE = 2.05
 N_SAMPLES = 36_000_000
 ERROR_DIST = 'students-t'
 SHAPE_PARAM = 1
-SAMPLE: Literal['real', 'simulated'] = 'simulated'
+SAMPLE: Literal['real', 'simulated'] = 'real'
+DIPOLE_LONGITUDE = 215
+DIPOLE_LATITUDE = 40
 
 plt.rcParams.update({
     "text.usetex": True,
@@ -27,84 +26,51 @@ plt.rcParams.update({
 sim = Catwise(cat_w1_max=17.0, cat_w12_min=0.5, magnitude_error_dist=ERROR_DIST)
 sim.initialise_data()
 
-sim.generate_dipole(
-    n_initial_samples=N_SAMPLES,
-    observer_speed=SPEED_MULTIPLIER*CMB_BETA,
-    w1_extra_error=ERROR_SCALE,
-    w2_extra_error=ERROR_SCALE,
-    dipole_longitude=215,
-    dipole_latitude=40,
-    log10_magnitude_error_shape_param=SHAPE_PARAM
-)
-smooth_map(sim.density_map)
-plt.show()
-dmap = sim.density_map
-mask = np.isnan(dmap)
-dmap[mask] = 0
+if SAMPLE == 'simulated':
+    truths = [
+        N_SAMPLES, ERROR_SCALE, ERROR_SCALE, SHAPE_PARAM, SPEED_MULTIPLIER,
+        DIPOLE_LONGITUDE, DIPOLE_LATITUDE
+    ]
 
-# catwise = CatwiseReal()
-# dmap = catwise.density_map
-# smooth_map(dmap)
-# plt.show()
-# mask = torch.isnan(dmap)
-# dmap[mask] = 0
+    sim.generate_dipole(
+        n_initial_samples=N_SAMPLES,
+        observer_speed=SPEED_MULTIPLIER,
+        w1_extra_error=ERROR_SCALE,
+        w2_extra_error=ERROR_SCALE,
+        dipole_longitude=DIPOLE_LONGITUDE,
+        dipole_latitude=DIPOLE_LATITUDE,
+        log10_magnitude_error_shape_param=SHAPE_PARAM
+    )
+    smooth_map(sim.density_map)
+    plt.show()
+    dmap = sim.density_map
+    mask = np.isnan(dmap)
+    dmap[mask] = 0
+else:
+    truths = None
 
-prior = DipolePrior(
-    mean_count_range=[30_000_000, 40_000_000],
-    speed_range=[0, 8]
-)
-prior.add_prior(
-    prior=BoxUniform(
-        low= 0 * torch.ones(1),
-        high=8 * torch.ones(1)
-    ),
-    short_name='etaW1',
-    simulator_kwarg='w1_extra_error',
-    index=1
-)
-prior.add_prior(
-    prior=BoxUniform(
-        low= 0 * torch.ones(1),
-        high=8 * torch.ones(1)
-    ),
-    short_name='etaW2',
-    simulator_kwarg='w2_extra_error',
-    index=2
-)
-prior.add_prior(
-    prior=BoxUniform(
-        low=-1 * torch.ones(1),
-        high=3 * torch.ones(1)
-    ),
-    short_name='nu',
-    simulator_kwarg='log10_magnitude_error_shape_param',
-    index=3
-)
+    catwise = sim
+    sim.make_real_sample()
+    dmap = catwise.real_density_map
+    smooth_map(dmap)
+    plt.show()
+    mask = np.isnan(dmap)
+    dmap[mask] = 0
 
 inferer = LikelihoodFreeInferer()
-inferer.load_posterior('based_posterior_catwise_0p5_17p0_error_scale.pkl')
-inferer.posterior.prior.custom_prior = prior
-inferer.posterior.to('cpu')
-samples = inferer.sample_amortized_posterior(x_obs=dmap, n_samps=20_000)
-
-# hack rn
-# samples[:, -1] = samples[:, -1] % torch.pi
-
-sky_probability(samples, truth_star=[CMB_PHI_GAL, CMB_THETA_GAL])
+inferer.load_posterior('based_posterior_catwise_0p5_17p0_studentst.pkl')
+samples = inferer.sample_amortized_posterior(x_obs=dmap, n_samps=100_000)
+sky_probability(samples, truth_star=[CMB_PHI_GAL, CMB_THETA_GAL], lonlat=True)
 plt.show()
 
-# transform samples
-# samples[:, -2] = np.rad2deg(samples[:, -2])
-# samples[:, -1] = np.rad2deg(np.pi / 2 - samples[:, -1])
-# samples[:, -3] = samples[:, -3] / 0.00123
-
 corner(
-    samples,
-    # truths=[None, None, 1, CMB_L, CMB_B],
-    truths=[N_SAMPLES, ERROR_SCALE, SPEED_MULTIPLIER, CMB_L, CMB_B],
+    samples.numpy(),
+    truths=truths,
     labels=[
         r'$N_{\mathrm{init.}}$',
-        r'$\eta$',
+        r'$\eta_{W1}$',
+        r'$\eta_{W2}$',
+        r'$\nu$',
         r'$v_{\mathrm{obs.}} / v_{\mathrm{CMB}}$',
         r'$l$ ($^\circ$)',
         r'$b$ ($^\circ$)'

@@ -123,6 +123,7 @@ class Simulator:
         torch.save([self.theta, self.x], simulation_path)
 
         print(f'Saving prior to {prior_path}...')
+        self.sbi_processed_prior.to('cpu') # so I don't get fucked later
         with open(prior_path, "wb") as handle:
             pickle.dump(self.sbi_processed_prior, handle)
 
