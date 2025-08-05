@@ -3,54 +3,57 @@ from typing import Literal
 from dipolesbi.tools.inference import LikelihoodFreeInferer
 from dipolesbi.tools.plotting import smooth_map, sky_probability
 import matplotlib.pyplot as plt
-import torch
 from corner import corner
 from dipolesbi.tools.constants import CMB_PHI_GAL, CMB_THETA_GAL
 import numpy as np
+from dipolesbi.tools.simulator import Simulator
+import torch
 
 
 SPEED_MULTIPLIER = 2
-ERROR_SCALE = 2.05
+ERROR_SCALE_W1 = 2.05
+ERROR_SCALE_W2 = 2.2
 N_SAMPLES = 36_000_000
 ERROR_DIST = 'students-t'
 SHAPE_PARAM = 1
-SAMPLE: Literal['real', 'simulated'] = 'real'
+SAMPLE: Literal['real', 'simulated'] = 'simulated'
 DIPOLE_LONGITUDE = 215
 DIPOLE_LATITUDE = 40
+POSTERIOR_FILE = 'based_posterior_catwise_0p5_17p0_studentst_corrected.pkl'
 
 plt.rcParams.update({
     "text.usetex": True,
     "font.family": "serif",
     "text.latex.preamble": r"\usepackage{amsmath}"
 })
-sim = Catwise(cat_w1_max=17.0, cat_w12_min=0.5, magnitude_error_dist=ERROR_DIST)
-sim.initialise_data()
+model = Catwise(cat_w1_max=17.0, cat_w12_min=0.5, magnitude_error_dist=ERROR_DIST)
+model.initialise_data()
 
 if SAMPLE == 'simulated':
     truths = [
-        N_SAMPLES, ERROR_SCALE, ERROR_SCALE, SHAPE_PARAM, SPEED_MULTIPLIER,
+        N_SAMPLES, ERROR_SCALE_W1, ERROR_SCALE_W2, SHAPE_PARAM, SPEED_MULTIPLIER,
         DIPOLE_LONGITUDE, DIPOLE_LATITUDE
     ]
 
-    sim.generate_dipole(
+    model.generate_dipole(
         n_initial_samples=N_SAMPLES,
         observer_speed=SPEED_MULTIPLIER,
-        w1_extra_error=ERROR_SCALE,
-        w2_extra_error=ERROR_SCALE,
+        w1_extra_error=ERROR_SCALE_W1,
+        w2_extra_error=ERROR_SCALE_W2,
         dipole_longitude=DIPOLE_LONGITUDE,
         dipole_latitude=DIPOLE_LATITUDE,
         log10_magnitude_error_shape_param=SHAPE_PARAM
     )
-    smooth_map(sim.density_map)
+    smooth_map(model.density_map)
     plt.show()
-    dmap = sim.density_map
+    dmap = model.density_map
     mask = np.isnan(dmap)
     dmap[mask] = 0
 else:
     truths = None
 
-    catwise = sim
-    sim.make_real_sample()
+    catwise = model
+    model.make_real_sample()
     dmap = catwise.real_density_map
     smooth_map(dmap)
     plt.show()
@@ -58,7 +61,9 @@ else:
     dmap[mask] = 0
 
 inferer = LikelihoodFreeInferer()
-inferer.load_posterior('based_posterior_catwise_0p5_17p0_studentst.pkl')
+inferer.load_posterior(POSTERIOR_FILE)
+sim = Simulator(prior=inferer.posterior.prior.custom_prior, simulation_model=model.generate_dipole)
+inferer.load_simulator(sim)
 samples = inferer.sample_amortized_posterior(x_obs=dmap, n_samps=100_000)
 sky_probability(samples, truth_star=[CMB_PHI_GAL, CMB_THETA_GAL], lonlat=True)
 plt.show()
@@ -82,11 +87,10 @@ corner(
 )
 plt.show()
 
-# inferer.posterior_predictive_check(
-#     n_samples=10,
-#     x=dmap.to('cuda'),
-#     simulator=sim.simulator
-# )
+inferer.posterior_predictive_check(
+    n_samples=10,
+    x=torch.as_tensor(dmap)
+)
 #
 # inferer.load_simulation('catwise_0p5_17p0_error_scale')
 # inferer._check_for_mask_nans()

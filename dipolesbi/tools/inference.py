@@ -99,6 +99,7 @@ class LikelihoodFreeInferer:
         print(f'Opening {file_path}...')
         with open(file_path, "rb") as handle:
             self.posterior = pickle.load(handle)
+        self.posterior.to('cpu')
         assert self.posterior is not None
 
     def sample_amortized_posterior(self,
