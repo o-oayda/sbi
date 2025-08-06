@@ -22,6 +22,8 @@ import matplotlib.pyplot as plt
 from sbi.analysis.plot import plot_tarp
 from tqdm import tqdm
 
+from dipolesbi.tools.priors import Prior
+
 
 class LikelihoodFreeInferer:
     def __init__(self, simulator: Optional[Simulator] = None) -> None:
@@ -101,7 +103,7 @@ class LikelihoodFreeInferer:
         print(f'Opening {file_path}...')
         with open(file_path, "rb") as handle:
             self.posterior = pickle.load(handle)
-        self.posterior.to('cpu')
+        self.posterior.to('cpu') # type: ignore
         assert self.posterior is not None
 
     def sample_amortized_posterior(self,
@@ -125,20 +127,35 @@ class LikelihoodFreeInferer:
         return x
 
     def _quick_simulate(self,
-            theta: NDArray,
-            model_callable: Callable[..., NDArray]
+            theta: Tensor,
+            model_callable: Callable[..., NDArray],
+            custom_prior: Prior
     ) -> Tensor:
-        n_simulations = len(theta)
-        theta = theta.reshape((n_simulations, 1))
-        theta = np.asarray(theta)
+        n_simulations = theta.shape[0]
+        simulation_batch_size = 1
+        n_batches = n_simulations // simulation_batch_size # batch size of 1 by default in simulate_for_sbi
+        theta_np = theta.detach().cpu().numpy()
+        batches = np.array_split(theta_np, n_batches, axis=0)
         n_workers = n_simulations
-        simulation_wrapper = lambda samples: list(map(model_callable, samples))
+
+        def model_wrapper(Theta: NDArray) -> NDArray:
+            mapping = {
+                kwarg: np.float64(Theta[i]) for i, kwarg in enumerate(
+                    custom_prior.simulator_kwargs
+                )
+            }
+            return model_callable(**mapping)
+
+        def simulation_wrapper(Theta: NDArray) -> NDArray:
+            xs = list(map(model_wrapper, Theta))
+            return np.stack(xs)
        
-        simulation_outputs: list[NDArray] = [
+        simulation_outputs: list[NDArray] = [ # type: ignore
             xx
             for xx in tqdm(
                 Parallel(return_as='generator', n_jobs=n_workers)(
-                    delayed(simulation_wrapper)(theta)
+                    delayed(simulation_wrapper)(batch)
+                    for batch in batches
                 ),
                 total=n_simulations
             )
@@ -151,30 +168,22 @@ class LikelihoodFreeInferer:
             n_samples: int,
             x: Tensor,
             model_callable: Callable[..., NDArray],
-            samples: Optional[Tensor] = None,
-            num_workers: int = 16
+            samples: Optional[Tensor] = None
         ) -> None:
-        assert self.simulator is not None, 'Pass an instance of Simulator at init.'
-
-        if type(samples) is Tensor:
-            samples_obj = Samples(samples)
-        else:
-            assert self.posterior is not None, (
-                'Since no posterior attribute exists for this instance to '
-                'sample from, please pass a Tensor of samples to the function.'
-            )
-            samples = self.posterior.sample((n_samples,), x)
-            assert type(samples) is Tensor 
-            samples_obj = Samples(samples)
+        assert n_samples <= 10, (
+            'n_workers = n_samples by design; avoid setting too many samples'
+        )
+        assert self.posterior is not None, 'Load a posterior distribution first.'
+        samples = self.posterior.sample((n_samples,), x)
+        custom_prior = self.posterior.prior.custom_prior # type: ignore
+        assert isinstance(custom_prior, Prior)
+        assert type(samples) is Tensor 
+        samples_obj = Samples(samples)
 
         x = self._quick_simulate(
             theta=samples_obj.sample((n_samples,)),
-        )
-        _, x = self.simulator.make_batch_simulations(
-            sbi_processed_prior=samples_obj, # type: ignore
-            prior_returns_numpy=False,
-            n_simulations=n_samples,
-            n_workers=num_workers
+            model_callable=model_callable,
+            custom_prior=custom_prior
         )
         
         for i in range(n_samples):

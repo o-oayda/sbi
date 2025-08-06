@@ -86,7 +86,7 @@ corner(
 plt.show()
 
 inferer.posterior_predictive_check(
-    n_samples=10,
+    n_samples=5,
     model_callable=model.generate_dipole,
     x=torch.as_tensor(dmap)
 )
