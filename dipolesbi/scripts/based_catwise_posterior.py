@@ -62,8 +62,6 @@ else:
 
 inferer = LikelihoodFreeInferer()
 inferer.load_posterior(POSTERIOR_FILE)
-sim = Simulator(prior=inferer.posterior.prior.custom_prior, simulation_model=model.generate_dipole)
-inferer.load_simulator(sim)
 samples = inferer.sample_amortized_posterior(x_obs=dmap, n_samps=100_000)
 sky_probability(samples, truth_star=[CMB_PHI_GAL, CMB_THETA_GAL], lonlat=True)
 plt.show()
@@ -89,6 +87,7 @@ plt.show()
 
 inferer.posterior_predictive_check(
     n_samples=10,
+    model_callable=model.generate_dipole,
     x=torch.as_tensor(dmap)
 )
 #

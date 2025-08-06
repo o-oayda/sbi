@@ -1,5 +1,6 @@
 import dynesty
 import emcee
+from joblib.parallel import Parallel, delayed
 import numpy as np
 import torch
 from sbi.inference import NPE
@@ -13,12 +14,13 @@ import pickle
 import healpy as hp
 from numpy.typing import NDArray
 from torch.types import Tensor
-from typing import Optional
+from typing import Callable, Optional
 from dipolesbi.tools import Samples
 from dipolesbi.tools.plotting import smooth_map
 from dipolesbi.tools import Simulator 
 import matplotlib.pyplot as plt
 from sbi.analysis.plot import plot_tarp
+from tqdm import tqdm
 
 
 class LikelihoodFreeInferer:
@@ -122,9 +124,33 @@ class LikelihoodFreeInferer:
 
         return x
 
+    def _quick_simulate(self,
+            theta: NDArray,
+            model_callable: Callable[..., NDArray]
+    ) -> Tensor:
+        n_simulations = len(theta)
+        theta = theta.reshape((n_simulations, 1))
+        theta = np.asarray(theta)
+        n_workers = n_simulations
+        simulation_wrapper = lambda samples: list(map(model_callable, samples))
+       
+        simulation_outputs: list[NDArray] = [
+            xx
+            for xx in tqdm(
+                Parallel(return_as='generator', n_jobs=n_workers)(
+                    delayed(simulation_wrapper)(theta)
+                ),
+                total=n_simulations
+            )
+        ]
+
+        x = np.vstack(simulation_outputs)
+        return torch.as_tensor(x)
+
     def posterior_predictive_check(self,
             n_samples: int,
             x: Tensor,
+            model_callable: Callable[..., NDArray],
             samples: Optional[Tensor] = None,
             num_workers: int = 16
         ) -> None:
@@ -141,6 +167,9 @@ class LikelihoodFreeInferer:
             assert type(samples) is Tensor 
             samples_obj = Samples(samples)
 
+        x = self._quick_simulate(
+            theta=samples_obj.sample((n_samples,)),
+        )
         _, x = self.simulator.make_batch_simulations(
             sbi_processed_prior=samples_obj, # type: ignore
             prior_returns_numpy=False,
