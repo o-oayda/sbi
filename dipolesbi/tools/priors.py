@@ -2,31 +2,32 @@ import torch
 from torch.types import Tensor
 from sbi.utils import BoxUniform
 from abc import ABC, abstractmethod
+from typing import Literal
+
 
 class Prior(ABC):
     def __init__(self) -> None:
-        self._ndim = 0
         self.device = None
-
-    @property
-    def ndim(self) -> int:
-        return self._ndim
 
     @property
     @abstractmethod
     def prior_dict(self) -> dict[str, dict]:
         '''
-        Format like {
-            '<short_name>': {
-                '<simulator_kwarg>': str,
-                '<low_range>': float,
-                '<high_range': float,
-                'dist': Distribution    
-            },
-            ...
-        }
+        Contains information about each variable and their sampling distribution.
         '''
         pass
+
+    @property
+    @abstractmethod
+    def prior_names(self) -> list[str]:
+        '''
+        Controls the order of sampling, i.e. order of access to prior_dict.
+        '''
+        pass
+
+    @property
+    def ndim(self) -> int:
+        return len(self.prior_dict)
 
     @property
     def low_ranges(self) -> Tensor:
@@ -46,20 +47,27 @@ class Prior(ABC):
     def simulator_kwargs(self) -> list[str]:
         return [self.prior_dict[name]['simulator_kwarg'] for name in self.prior_names]
 
-    @property
-    @abstractmethod
-    def prior_names(self) -> list[str]:
-        pass
-
     def _construct_prior_dict(
             self,
             short_names: list[str],            
             simulator_kwargs: list[str],
             ranges: list[list[float]],
             distributions: list
-    ) -> None:
+    ) -> dict[str, dict]:
+        '''
+        Format like {
+            '<short_name>': {
+                '<simulator_kwarg>': str,
+                '<low_range>': float,
+                '<high_range': float,
+                'dist': Distribution    
+            },
+            ...
+        }
+        '''
+        prior_dict = {}
         for i, name in enumerate(short_names):
-            self.prior_dict[name] = {
+            prior_dict[name] = {
                 'simulator_kwarg': simulator_kwargs[i],
                 'low_range': ranges[i][0],
                 'high_range': ranges[i][1],
@@ -68,6 +76,7 @@ class Prior(ABC):
                     ranges[i][1] * torch.ones(1)
                 )
             }
+        return prior_dict
 
     def sample(self, sample_size=torch.Size([])) -> Tensor:
         samples = torch.empty(*sample_size, self.ndim, device=self.device) 
@@ -76,10 +85,6 @@ class Prior(ABC):
                 self.prior_dict[name]['dist'].sample(sample_size).flatten()
             )
         return samples
-        # samples = []
-        # for prior in self.prior_list:
-        #     samples.append( prior.sample(sample_size).flatten() )
-        # return torch.stack(samples, dim=1)
     
     def to(self, device: str) -> None:
         for name in self.prior_names: 
@@ -117,23 +122,32 @@ class Prior(ABC):
             'high_range': float(prior.high),
             'dist': prior
         }
-        self._ndim += 1
         self.prior_names.insert(index, short_name)
     
-    def write_out(self, path):
+    def write_prior_info(self, path):
         with open(path, "w") as f:
             f.write(f"Dimension: {self.ndim}\n")
-            f.write("Ranges:\n")
+            f.write("Variables:\n")
             for name in self.prior_names:
                 low = self.prior_dict[name]['low_range']
                 high = self.prior_dict[name]['high_range']
-                f.write(f"  {name}: [{low}, {high}]\n")
+                kwarg = self.prior_dict[name]['simulator_kwarg']
+                dist = self.prior_dict[name]['dist']
+                dist_label = self._dist_to_label(dist.__class__.__name__)
+                f.write(f"  {name} ({kwarg}): {dist_label}[{low}, {high}]\n")
+
+    def _dist_to_label(self, dist: Literal['BoxUniform', 'PolarPrior']):
+        mapping = {
+            'BoxUniform': 'Uniform',
+            'PolarPrior': 'Polar'
+        }
+        return mapping[dist]
     
 class DipolePrior(Prior):
     def __init__(self,
-            mean_count_range: list[float] = [0,    100. ],
-            speed_range:      list[float] = [0.0,  0.01 ],
-            longitude_range:  list[float] = [0,    360. ],
+            mean_count_range: list[float] = [0.,   100. ],
+            speed_range:      list[float] = [0.,   5.   ],
+            longitude_range:  list[float] = [0.,   360. ],
             latitude_range:   list[float] = [-90., 90.  ],
     ) -> None:
         super().__init__()
@@ -144,9 +158,7 @@ class DipolePrior(Prior):
             'dipole_longitude', 'dipole_latitude'
         ]
         distributions = [BoxUniform, BoxUniform, BoxUniform, PolarPrior]
-        self._prior_dict = {}
-        self._ndim = 4
-        self._construct_prior_dict(
+        self._prior_dict = self._construct_prior_dict(
             self._prior_names,
             kwargs,
             ranges,

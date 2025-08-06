@@ -7,6 +7,7 @@ launch.json
 *.fits
 *.sh
 !setup_pytorch.sh
+simulations/*
 
 !dipolesbi/catwise/0p5_17p0/data/**
 !dipolesbi/catwise/0p7_16p8/data/**

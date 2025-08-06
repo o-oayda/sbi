@@ -118,6 +118,7 @@ class Simulator:
         os.makedirs(f'{base_path}/')
         simulation_path = f'{base_path}/theta_and_x.pt'
         prior_path = f'{base_path}/prior.pkl'
+        prior_info_path = f'{base_path}/prior_info.txt'
 
         print(f'Saving theta and x to {simulation_path}...')
         torch.save([self.theta, self.x], simulation_path)
@@ -126,6 +127,9 @@ class Simulator:
         self.sbi_processed_prior.to('cpu') # so I don't get fucked later
         with open(prior_path, "wb") as handle:
             pickle.dump(self.sbi_processed_prior, handle)
+
+        print(f'Saving prior info to {prior_info_path}...')
+        self.sbi_processed_prior.custom_prior.write_prior_info(prior_info_path)
 
     def load_simulation(self, sim_dir: str) -> None:
         if not os.path.exists(f'simulations/{sim_dir}/'):
