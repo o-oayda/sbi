@@ -168,13 +168,18 @@ def smooth_map(
         healpy_map: NDArray,
         weights: NDArray | None = None,
         angle_scale: float = 1.,
+        only_return_data: bool = False,
         **kwargs
-    ) -> None:
+    ) -> NDArray | None:
     smoothed_map_to_plot = average_smooth_map(
         healpy_map,
         weights=weights,
         angle_scale=angle_scale
     )
+
+    if only_return_data:
+        return smoothed_map_to_plot
+
     hp.projview(
         smoothed_map_to_plot,
         nest=True,

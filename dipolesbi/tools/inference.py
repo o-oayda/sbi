@@ -166,7 +166,8 @@ class LikelihoodFreeInferer:
 
     def posterior_predictive_check(self,
             n_samples: int,
-            x: Tensor,
+            x_real: NDArray,
+            mask: NDArray,
             model_callable: Callable[..., NDArray],
             samples: Optional[Tensor] = None
         ) -> None:
@@ -174,22 +175,51 @@ class LikelihoodFreeInferer:
             'n_workers = n_samples by design; avoid setting too many samples'
         )
         assert self.posterior is not None, 'Load a posterior distribution first.'
-        samples = self.posterior.sample((n_samples,), x)
+        samples = self.posterior.sample((n_samples,), torch.as_tensor(x_real))
         custom_prior = self.posterior.prior.custom_prior # type: ignore
         assert isinstance(custom_prior, Prior)
         assert type(samples) is Tensor 
         samples_obj = Samples(samples)
 
-        x = self._quick_simulate(
+        x_sim = self._quick_simulate(
             theta=samples_obj.sample((n_samples,)),
             model_callable=model_callable,
             custom_prior=custom_prior
         )
         
-        for i in range(n_samples):
-            print(f'Samples: {samples[i, :]}')
-            smooth_map(x[i, :].numpy())
-            plt.show()
+        x_real[mask] = np.nan
+        real_smooth_map = smooth_map(x_real, only_return_data=True)
+        sub = f'{n_samples + 1}1'
+        initial_subplot = int( sub + str(1) )
+        hp.projview(
+            real_smooth_map,
+            sub=initial_subplot, 
+            title='Real data', 
+            nest=True,
+            cb_orientation='vertical'
+        )
+
+        for i in range(1, n_samples+1):
+            smooth_map_to_plot = smooth_map(
+                x_sim[i-1, :].numpy(), 
+                only_return_data=True
+            )
+
+            sample_readout = f'Sample {i}:'
+            for idx, param in enumerate(samples[i-1, :]):
+                kwarg = custom_prior.simulator_kwargs[idx]
+                sample_readout += f'\n\t{kwarg}: {param:.4g}'
+            print(sample_readout)
+
+            hp.projview(
+                smooth_map_to_plot, 
+                sub=int( sub + str(i+1) ), 
+                title=f'Predictive {i}',
+                nest=True,
+                cb_orientation='vertical'
+            )
+
+        plt.show()
 
     def run_simulation_based_calibration(self,
             num_posterior_samples: int = 1000,
