@@ -6,10 +6,10 @@ from dipolesbi.tools.points import (
 )
 import healpy as hp
 import torch
-from torch import poisson
+from numpy.random import poisson
 from torch.types import Tensor
 from dipolesbi.tools.utils import (
-    check_vectorised_input, spherical_to_cartesian, omega_to_theta,
+    enforce_batchwise_input, spherical_to_cartesian, omega_to_theta,
     equatorial_to_ecliptic
 )
 from dipolesbi.tools.physics import ellis_baldwin_amplitude
@@ -78,6 +78,55 @@ class Mask:
         )
         return list(north_pole_disc_pixels)
 
+class SimpleDipoleMap:
+    def __init__(self, nside: int = 64, device: str = 'cpu'):
+        self.nside = nside
+        self.device = device
+        self.fiducial_amplitude = 0.005
+        self.nest = True
+
+    def generate_dipole(self,
+            mean_density: NDArray[np.floating],
+            observer_speed: NDArray[np.floating],
+            dipole_longitude: NDArray[np.floating],
+            dipole_latitude: NDArray[np.floating]
+    ) -> NDArray[np.float32]:
+        Theta = np.stack(
+            [mean_density, observer_speed, dipole_longitude, dipole_latitude],
+            axis=1
+        ) # shape (n_batches, n_dim)
+        poisson_mean = self.dipole_signal(Theta)
+        self._density_map = poisson(poisson_mean).astype('float32')
+        return self._density_map
+
+    @property
+    def density_map(self) -> NDArray[np.float32]:
+        return self._density_map
+
+    def dipole_signal(self, Theta: NDArray) -> NDArray:
+        Theta = enforce_batchwise_input(Theta, ndim=4)
+
+        n_batches = Theta.shape[0]
+        pixel_indices = np.arange(hp.nside2npix(self.nside))
+        pixel_vectors = np.stack(
+            hp.pix2vec(self.nside, pixel_indices, nest=True)
+        )
+
+        mean_count = Theta[:, 0]
+        dipole_amplitude = Theta[:, 1] * self.fiducial_amplitude
+        dipole_longitude_rad = np.deg2rad(Theta[:, 2])
+        dipole_colatitude_rad = np.pi / 2 - np.deg2rad(Theta[:, 3])
+
+        dipole_unit_vector = spherical_to_cartesian(
+            (dipole_colatitude_rad, dipole_longitude_rad)
+        )
+        # shape (xyz=3, n_batches)
+        dipole_vector = dipole_amplitude.reshape((1, n_batches)) * dipole_unit_vector
+        poisson_mean = mean_count.reshape((n_batches,1)) * (
+            1 + np.einsum('ji,jk', dipole_vector, pixel_vectors)
+        )
+        return poisson_mean
+
 class SkyMap:
     def __init__(self, nside: int = 32, device: str = 'cpu'):
         self.nside = nside
@@ -106,7 +155,7 @@ class SkyMap:
         self._density_map = poisson(poisson_mean)
 
     def dipole_signal(self, Theta: Tensor) -> Tensor:
-        Theta = check_vectorised_input(Theta, ndim=4)
+        Theta = enforce_batchwise_input(Theta, ndim=4)
 
         n_batches = Theta.shape[0]
         pixel_indices = torch.arange(hp.nside2npix(self.nside))

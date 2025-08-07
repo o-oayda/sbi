@@ -14,12 +14,12 @@ SPEED_MULTIPLIER = 2
 ERROR_SCALE_W1 = 2.05
 ERROR_SCALE_W2 = 2.2
 N_SAMPLES = 36_000_000
-ERROR_DIST = 'students-t'
+ERROR_DIST = 'gaussian'
 SHAPE_PARAM = 1
 SAMPLE: Literal['real', 'simulated'] = 'simulated'
 DIPOLE_LONGITUDE = 215
 DIPOLE_LATITUDE = 40
-POSTERIOR_FILE = 'based_posterior_catwise_0p5_17p0_studentst_corrected.pkl'
+POSTERIOR_FILE = 'based_posterior_catwise_0p5_17p0_gaussian_etaw1w2.pkl'
 
 plt.rcParams.update({
     "text.usetex": True,
@@ -34,6 +34,8 @@ if SAMPLE == 'simulated':
         N_SAMPLES, ERROR_SCALE_W1, ERROR_SCALE_W2, SHAPE_PARAM, SPEED_MULTIPLIER,
         DIPOLE_LONGITUDE, DIPOLE_LATITUDE
     ]
+    if ERROR_DIST != 'students-t':
+        truths.pop(3)
 
     model.generate_dipole(
         n_initial_samples=N_SAMPLES,
@@ -66,18 +68,16 @@ samples = inferer.sample_amortized_posterior(x_obs=dmap, n_samps=100_000)
 sky_probability(samples, truth_star=[CMB_PHI_GAL, CMB_THETA_GAL], lonlat=True)
 plt.show()
 
+labels = [
+    r'$N_{\mathrm{init.}}$', r'$\eta_{W1}$', r'$\eta_{W2}$', r'$\nu$',
+    r'$v_{\mathrm{obs.}} / v_{\mathrm{CMB}}$', r'$l$ ($^\circ$)', r'$b$ ($^\circ$)'
+]
+if ERROR_DIST != 'students-t':
+    labels.pop(3)
 corner(
     samples.numpy(),
     truths=truths,
-    labels=[
-        r'$N_{\mathrm{init.}}$',
-        r'$\eta_{W1}$',
-        r'$\eta_{W2}$',
-        r'$\nu$',
-        r'$v_{\mathrm{obs.}} / v_{\mathrm{CMB}}$',
-        r'$l$ ($^\circ$)',
-        r'$b$ ($^\circ$)'
-    ],
+    labels=labels,
     label_kwargs={
         'size': 20
     },
@@ -88,7 +88,8 @@ plt.show()
 inferer.posterior_predictive_check(
     n_samples=5,
     model_callable=model.generate_dipole,
-    x=torch.as_tensor(dmap)
+    x_real=dmap,
+    mask=mask
 )
 #
 # inferer.load_simulation('catwise_0p5_17p0_error_scale')

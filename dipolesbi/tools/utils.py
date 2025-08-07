@@ -13,18 +13,18 @@ import dill as pickle
 from numpy.typing import NDArray
 from collections import defaultdict
 
-def spherical_to_cartesian(theta_phi, device='cpu'):
+def spherical_to_cartesian(theta_phi: tuple[NDArray, NDArray]) -> NDArray:
     '''
     Transform spherical coordinates in the form (theta, phi) to Cartesian
     coordinates given r = 1. Theta is the polar angle and phi the azimuthal
     angle. The polar angle runs from 0 to 180 degrees, where zero degrees
     corresponds to z = 1 in Cartesian coordinates. From Honours code.
     '''
-    x = torch.sin(theta_phi[0]) * torch.cos(theta_phi[1])
-    y = torch.sin(theta_phi[0]) * torch.sin(theta_phi[1])
-    z = torch.cos(theta_phi[0])
-    xyz = torch.stack([x, y, z], dim=1)
-    return xyz.to(device=device)
+    x = np.sin(theta_phi[0]) * np.cos(theta_phi[1])
+    y = np.sin(theta_phi[0]) * np.sin(theta_phi[1])
+    z = np.cos(theta_phi[0])
+    xyz = np.stack([x, y, z])
+    return xyz
 
 def sample_unif(unif: float, low_high: list[float]) -> float:
     '''
@@ -63,7 +63,7 @@ def simulation(Theta, nside=32, device='cpu'):
     poisson_mean = dipole_signal(Theta, nside, device)
     return poisson(poisson_mean)
 
-def check_vectorised_input(Theta: Tensor, ndim: int) -> Tensor:
+def enforce_batchwise_input(Theta: NDArray, ndim: int) -> NDArray:
         if Theta.shape == (ndim,):
             Theta = Theta.reshape(1, ndim)
         return Theta

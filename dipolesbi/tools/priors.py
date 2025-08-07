@@ -47,6 +47,9 @@ class Prior(ABC):
     def simulator_kwargs(self) -> list[str]:
         return [self.prior_dict[name]['simulator_kwarg'] for name in self.prior_names]
 
+    def change_kwarg(self, param_short_name: str, new_kwarg: str) -> None:
+        self.prior_dict[param_short_name]['simulator_kwarg'] = new_kwarg
+
     def _construct_prior_dict(
             self,
             short_names: list[str],            

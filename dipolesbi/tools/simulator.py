@@ -38,9 +38,9 @@ class Simulator:
 
     def _interface_with_simulator(self, Theta: Tensor) -> NDArray | Tensor:
         mapping = {
-            kwarg: np.float64(Theta[i]) for i, kwarg in enumerate(
+            kwarg: Theta[..., i].numpy() for i, kwarg in enumerate(
                 self.sbi_processed_prior.custom_prior.simulator_kwargs
-            )
+            ) # ... ensures we slice down the parameter axis; ok for 1 dim arrays
         } 
         return self.simulation_model(**mapping)
 
@@ -59,14 +59,14 @@ class Simulator:
     def make_batch_simulations(self,
             n_simulations: int,
             n_workers: int,
-            prior_returns_numpy: bool = False
+            **kwargs
     ) -> tuple[Tensor, Tensor]:
         # self.make_simulation can return NDArrays as process_simulator will
         # wrap function with conversion torch tensors (probable slowdown though)
         sbi_processed_simulator = process_simulator(
             self._interface_with_simulator,
             self.sbi_processed_prior, 
-            prior_returns_numpy
+            is_numpy_simulator=False
         )
         check_sbi_inputs(
             simulator=sbi_processed_simulator,
@@ -76,7 +76,8 @@ class Simulator:
             simulator=sbi_processed_simulator,
             proposal=self.prior,
             num_workers=n_workers,
-            num_simulations=n_simulations
+            num_simulations=n_simulations,
+            **kwargs
         )
         return self.theta, self.x
 
