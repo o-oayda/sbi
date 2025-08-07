@@ -114,6 +114,16 @@ class LikelihoodFreeInferer:
         assert self.posterior is not None, 'Posterior not infered or loaded.'
         return self.posterior.sample((n_samps,), x=x_obs, **kwargs)
 
+    def plot_loss_curve(self) -> None:
+        summary = self.inference.summary
+        training_loss = summary['training_loss']
+        validation_loss = summary['validation_loss']
+        
+        plt.plot(training_loss, c='tab:blue', label='Training loss')
+        plt.plot(validation_loss, c='tab:orange', label='Validation loss')
+        plt.legend()
+        plt.show()
+
     def _check_for_mask_nans(self, x: Tensor, fill_value: float = 0.) -> Tensor:
         assert x is not None, 'Simulator has no data!' 
         assert type(x) is Tensor, 'Convert simulator data to Tensor.'
