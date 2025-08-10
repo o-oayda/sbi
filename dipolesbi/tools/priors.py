@@ -1,6 +1,6 @@
 import torch
 from torch.types import Tensor
-from sbi.utils import BoxUniform
+from torch.distributions import Uniform
 from abc import ABC, abstractmethod
 from typing import Literal
 
@@ -109,13 +109,13 @@ class Prior(ABC):
         return torch.as_tensor(log_prob)
     
     def add_prior(self,
-            prior: BoxUniform,
+            prior: Uniform,
             short_name: str,
             simulator_kwarg: str,
             index: int
     ) -> None:
         '''
-        :param prior: Torch distribution, like BoxUniform.
+        :param prior: Torch distribution, like Uniform.
         :param index: Index at which to add the prior. E.g. specifying 0
             makes the prior the first in the prior list, 1 the 2nd, and so on...
         '''
@@ -139,9 +139,9 @@ class Prior(ABC):
                 dist_label = self._dist_to_label(dist.__class__.__name__)
                 f.write(f"  {name} ({kwarg}): {dist_label}[{low}, {high}]\n")
 
-    def _dist_to_label(self, dist: Literal['BoxUniform', 'PolarPrior']):
+    def _dist_to_label(self, dist: Literal['Uniform', 'PolarPrior']):
         mapping = {
-            'BoxUniform': 'Uniform',
+            'Uniform': 'Uniform',
             'PolarPrior': 'Polar'
         }
         return mapping[dist]
@@ -160,7 +160,8 @@ class DipolePrior(Prior):
             'n_initial_samples', 'observer_speed',
             'dipole_longitude', 'dipole_latitude'
         ]
-        distributions = [BoxUniform, BoxUniform, BoxUniform, PolarPrior]
+        # do not use BoxUniform otherwise sbi fucks you in the ass with the log prob
+        distributions = [Uniform, Uniform, Uniform, PolarPrior]
         self._prior_dict = self._construct_prior_dict(
             self._prior_names,
             kwargs,
