@@ -109,13 +109,13 @@ class Prior(ABC):
         return torch.as_tensor(log_prob)
     
     def add_prior(self,
-            prior: Uniform,
+            prior: 'UniformWrapper',
             short_name: str,
             simulator_kwarg: str,
             index: int
     ) -> None:
         '''
-        :param prior: Torch distribution, like Uniform.
+        :param prior: Torch distribution, like UniformWrapper.
         :param index: Index at which to add the prior. E.g. specifying 0
             makes the prior the first in the prior list, 1 the 2nd, and so on...
         '''
@@ -139,9 +139,9 @@ class Prior(ABC):
                 dist_label = self._dist_to_label(dist.__class__.__name__)
                 f.write(f"  {name} ({kwarg}): {dist_label}[{low}, {high}]\n")
 
-    def _dist_to_label(self, dist: Literal['Uniform', 'PolarPrior']):
+    def _dist_to_label(self, dist: Literal['UniformWrapper', 'PolarPrior']):
         mapping = {
-            'Uniform': 'Uniform',
+            'UniformWrapper': 'Uniform',
             'PolarPrior': 'Polar'
         }
         return mapping[dist]
@@ -161,7 +161,7 @@ class DipolePrior(Prior):
             'dipole_longitude', 'dipole_latitude'
         ]
         # do not use BoxUniform otherwise sbi fucks you in the ass with the log prob
-        distributions = [Uniform, Uniform, Uniform, PolarPrior]
+        distributions = [UniformWrapper, UniformWrapper, UniformWrapper, PolarPrior]
         self._prior_dict = self._construct_prior_dict(
             self._prior_names,
             kwargs,
@@ -176,6 +176,26 @@ class DipolePrior(Prior):
     @property
     def prior_dict(self) -> dict[str, dict]:
         return self._prior_dict
+
+class UniformWrapper:
+    def __init__(self, low: Tensor, high: Tensor, device: str = 'cpu') -> None:
+        self.low = low
+        self.high = high
+        self.distribution = Uniform(low, high)
+        self.device = device
+
+    def to(self, device: str) -> None:
+        self.device = device
+        self.distribution = Uniform(
+            self.low.to(self.device), 
+            self.high.to(self.device)
+        )
+
+    def sample(self, sample_shape=torch.Size([])) -> Tensor:
+        return self.distribution.sample(sample_shape)
+
+    def log_prob(self, values: Tensor) -> Tensor:
+        return self.distribution.log_prob(values)
 
 class PolarPrior:
     def __init__(self,
@@ -216,16 +236,22 @@ class PolarPrior:
 
     def polar_logpdf(self, theta):
         '''Probably density of polar angle evaluated at theta for polar angles
-        between [theta_low, theta_high]'''
+        between [theta_low, theta_high].
+
+        :param theta: Polar angle in radians (colatitude).
+        '''
         p_theta = - torch.sin(theta) / (
             torch.cos(self.theta_high) - torch.cos(self.theta_low)
         )
         return torch.log(p_theta)
 
     def log_prob(self, values):
+        '''
+        Introduce factor of pi/180 at the end to map P(theta_rad) to P(theta_deg).
+        '''
         values = torch.deg2rad(90. - values)
         log_probs = self.polar_logpdf(values)
-        return log_probs
+        return log_probs + torch.log(torch.as_tensor(torch.pi / 180.))
     
     def to(self, device: str) -> None:
         self.theta_low = self.theta_low.to(device)
