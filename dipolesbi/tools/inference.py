@@ -2,9 +2,11 @@ import dynesty
 import emcee
 from joblib.parallel import Parallel, delayed
 import numpy as np
+from sbi.neural_nets.factory import build_maf
 import torch
-from sbi.inference import NPE
-from sbi.neural_nets import posterior_nn
+from sbi.inference import NPE, NLE, NRE
+from sbi.neural_nets import likelihood_nn, posterior_nn
+from sbi.neural_nets import classifier_nn
 from sbi.neural_nets.embedding_nets import hpCNNEmbedding
 from sbi.diagnostics import check_sbc, run_sbc, check_tarp, run_tarp
 from sbi.analysis.plot import sbc_rank_plot
@@ -14,14 +16,15 @@ import pickle
 import healpy as hp
 from numpy.typing import NDArray
 from torch.types import Tensor
-from typing import Callable, Optional
+from typing import Callable, Optional, Literal
 from dipolesbi.tools import Samples
 from dipolesbi.tools.plotting import smooth_map
 from dipolesbi.tools import Simulator 
+from dipolesbi.tools.custom import SBICompatibleWrapper
 import matplotlib.pyplot as plt
 from sbi.analysis.plot import plot_tarp
 from tqdm import tqdm
-
+import torch.nn as nn
 from dipolesbi.tools.priors import Prior
 
 
@@ -31,6 +34,7 @@ class LikelihoodFreeInferer:
         self.posterior: NeuralPosterior | None = None
 
     def run_healpix_sbi(self,
+            estimator_type: Literal['NPE', 'NLE', 'NRE'] = 'NPE',
             training_device: str = 'cuda',
             load_simulations_in_vram: bool = False,
             simulation_fraction: float = 1.0,
@@ -66,29 +70,62 @@ class LikelihoodFreeInferer:
             dropout_rate=0.2,
             out_channels_per_layer=[2, 4, 8, 16, 32, 64]
         )
-        neural_posterior = posterior_nn(
-            model="maf",
-            embedding_net=embedding_net,
-            z_score_x='structured'
-        )
-        inference = NPE(
-            prior=prior,
-            density_estimator=neural_posterior,
-            device=training_device
-        )
+
+        if estimator_type == 'NPE':
+            neural_posterior = posterior_nn(
+                model="maf",
+                embedding_net=embedding_net,
+                z_score_x='structured'
+            )
+            inference = NPE(
+                prior=prior,
+                density_estimator=neural_posterior,
+                device=training_device
+            )
+        elif estimator_type == 'NLE':
+            raise NotImplementedError 
+        elif estimator_type == 'NRE':
+            neural_classifier = classifier_nn(
+                model="resnet",
+                embedding_net_x=embedding_net,
+                z_score_x='structured',
+                z_score_theta='independent'
+            )
+            inference = NRE(
+                prior=prior,
+                classifier=neural_classifier,
+                device=training_device
+            )
+        else:
+            raise Exception(f'Choose from NPE, NLE, or NRE ({estimator_type} chosen).')
 
         # by specifying data_device = 'cpu', we can train on the GPU
         # while transferring data from host memory to VRAM
         self.inference = inference.append_simulations(
-            theta[:self.n_train_indices],
-            x[:self.n_train_indices],
+            x=x[:self.n_train_indices],
+            theta=theta[:self.n_train_indices],
             data_device='cpu' if not load_simulations_in_vram else 'cuda'
         )
-        self.density_estimator = self.inference.train(show_train_summary=True)
-        self.posterior = inference.build_posterior(
-            self.density_estimator,
-            prior=prior
+        self.density_estimator = self.inference.train(
+            show_train_summary=True,
+            stop_after_epochs=30
         )
+
+        if estimator_type == 'NPE':
+            self.posterior = inference.build_posterior(
+                self.density_estimator,
+                prior=prior
+            )
+        elif estimator_type in ['NLE', 'NRE']:
+            self.posterior = inference.build_posterior(
+                density_estimator=self.density_estimator,
+                prior=prior,
+                sample_with='mcmc',
+                mcmc_method='slice_np_vectorized'
+            )
+        else:
+            raise Exception(f'Unknown estimator type: {estimator_type}')
+
         print(self.posterior)
 
     def save_posterior(self, file_path: str) -> None:
