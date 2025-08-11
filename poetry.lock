@@ -5143,6 +5143,23 @@ files = [
 ]
 
 [[package]]
+name = "ultranest"
+version = "4.4.0"
+description = "Fit and compare complex models reliably and rapidly. Advanced Nested Sampling."
+optional = false
+python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,>=2.7"
+groups = ["main"]
+files = [
+    {file = "ultranest-4.4.0.tar.gz", hash = "sha256:dfebdc4b2bc0138238f65e8f957b70fe296cb094c895172f4a368e792a59b501"},
+]
+
+[package.dependencies]
+corner = "*"
+cython = "*"
+matplotlib = "*"
+numpy = "*"
+
+[[package]]
 name = "uri-template"
 version = "1.3.0"
 description = "RFC 6570 URI Template Processor"
@@ -5456,4 +5473,4 @@ test = ["pytest (>=8.0.0)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.14"
-content-hash = "f4129cf792e3ef22c7d431a779e4c6d405caf074886643536788da400d225114"
+content-hash = "868b473f58d74dfe84c2e915e964bb6266faf3802ac15bd6a45a0014938d003a"

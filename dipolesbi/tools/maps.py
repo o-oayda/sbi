@@ -89,14 +89,20 @@ class SimpleDipoleMap:
             mean_density: NDArray[np.floating],
             observer_speed: NDArray[np.floating],
             dipole_longitude: NDArray[np.floating],
-            dipole_latitude: NDArray[np.floating]
+            dipole_latitude: NDArray[np.floating],
+            make_poisson_draws: bool = True
     ) -> NDArray[np.float32]:
         Theta = np.stack(
             [mean_density, observer_speed, dipole_longitude, dipole_latitude],
             axis=1
         ) # shape (n_batches, n_dim)
         poisson_mean = self.dipole_signal(Theta)
-        self._density_map = poisson(poisson_mean).astype('float32')
+
+        if make_poisson_draws:
+            self._density_map = poisson(poisson_mean).astype('float32')
+        else:
+            self._density_map = poisson_mean.astype('float32')
+
         return self._density_map
 
     @property

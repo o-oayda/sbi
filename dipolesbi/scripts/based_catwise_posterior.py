@@ -14,12 +14,12 @@ SPEED_MULTIPLIER = 2
 ERROR_SCALE_W1 = 2.05
 ERROR_SCALE_W2 = 2.2
 N_SAMPLES = 36_000_000
-ERROR_DIST = 'gaussian'
+ERROR_DIST = 'students-t'
 SHAPE_PARAM = 1
-SAMPLE: Literal['real', 'simulated'] = 'simulated'
+SAMPLE: Literal['real', 'simulated'] = 'real'
 DIPOLE_LONGITUDE = 215
 DIPOLE_LATITUDE = 40
-POSTERIOR_FILE = 'based_posterior_catwise_0p5_17p0_gaussian_etaw1w2.pkl'
+POSTERIOR_FILE = 'based_posterior_catwise_0p5_17p0_studentst_corrected.pkl'
 
 plt.rcParams.update({
     "text.usetex": True,
@@ -65,8 +65,7 @@ else:
 inferer = LikelihoodFreeInferer()
 inferer.load_posterior(POSTERIOR_FILE)
 samples = inferer.sample_amortized_posterior(x_obs=dmap, n_samps=100_000)
-sky_probability(samples, truth_star=[CMB_PHI_GAL, CMB_THETA_GAL], lonlat=True)
-plt.show()
+sky_probability(samples, truth_star=[CMB_PHI_GAL, CMB_THETA_GAL], lonlat=True, save_path='studentst_sky.png')
 
 labels = [
     r'$N_{\mathrm{init.}}$', r'$\eta_{W1}$', r'$\eta_{W2}$', r'$\nu$',
@@ -83,6 +82,7 @@ corner(
     },
     truth_color='cornflowerblue'
 )
+plt.savefig('studentst_corner', dpi=300, bbox_inches='tight')
 plt.show()
 
 inferer.posterior_predictive_check(
@@ -91,6 +91,8 @@ inferer.posterior_predictive_check(
     x_real=dmap,
     mask=mask
 )
+plt.savefig('gaussian_predictive.png', dpi=300, bbox_inches='tight')
+plt.show()
 #
 # inferer.load_simulation('catwise_0p5_17p0_error_scale')
 # inferer._check_for_mask_nans()

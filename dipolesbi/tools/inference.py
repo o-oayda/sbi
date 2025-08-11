@@ -2,7 +2,6 @@ import dynesty
 import emcee
 from joblib.parallel import Parallel, delayed
 import numpy as np
-from sbi.neural_nets.factory import build_maf
 import torch
 from sbi.inference import NPE, NLE, NRE
 from sbi.neural_nets import likelihood_nn, posterior_nn
@@ -18,14 +17,14 @@ from numpy.typing import NDArray
 from torch.types import Tensor
 from typing import Callable, Optional, Literal
 from dipolesbi.tools import Samples
+from dipolesbi.tools.models import LikelihoodBasedModel
 from dipolesbi.tools.plotting import smooth_map
 from dipolesbi.tools import Simulator 
-from dipolesbi.tools.custom import SBICompatibleWrapper
 import matplotlib.pyplot as plt
 from sbi.analysis.plot import plot_tarp
 from tqdm import tqdm
-import torch.nn as nn
 from dipolesbi.tools.priors import Prior
+import ultranest
 
 
 class LikelihoodFreeInferer:
@@ -83,7 +82,21 @@ class LikelihoodFreeInferer:
                 device=training_device
             )
         elif estimator_type == 'NLE':
-            raise NotImplementedError 
+            assert self.nside <= 4, (
+                'Embedding network not supported for NLE; '
+                'be sure to keep nside low'
+            )
+            neural_posterior = likelihood_nn(
+                model='maf',
+                z_score_x='structured',
+                z_score_theta='independent'
+            )
+            inference = NLE(
+                prior=prior,
+                density_estimator=neural_posterior,
+                device=training_device
+            )
+            # raise NotImplementedError 
         elif estimator_type == 'NRE':
             neural_classifier = classifier_nn(
                 model="resnet",
@@ -266,7 +279,7 @@ class LikelihoodFreeInferer:
                 cb_orientation='vertical'
             )
 
-        plt.show()
+        # plt.show()
 
     def run_simulation_based_calibration(self,
             num_posterior_samples: int = 1000,
@@ -338,10 +351,11 @@ class LikelihoodFreeInferer:
         plt.show()
 
 class LikelihoodBasedInferer:
-    def __init__(self, prior, model):
-        self.prior = prior
+    def __init__(self, data: NDArray, model: LikelihoodBasedModel):
         self.model = model
-        self.ndim = self.prior.ndim
+        self.prior = model.prior
+        self.data = data
+        self.ndim = self.model.ndim
 
     def run_mcmc(self,
         nwalkers: int = 32,
@@ -353,15 +367,15 @@ class LikelihoodBasedInferer:
         '''
 
         def log_prob(Theta):
-            log_prior = self.prior.log_prior_likelihood(Theta)
+            log_prior = self.model.log_prior_likelihood(Theta)
             if not np.isfinite(log_prior):
                 return -np.inf
-            return log_prior + self.model.log_likelihood(Theta)
+            return log_prior + self.model.log_likelihood(self.data, Theta)
 
         pos = np.zeros((nwalkers, self.ndim))
         for i in range(0, nwalkers):
             unifs = np.random.rand(self.ndim)
-            pos[i, :] = self.prior.prior_transform(unifs)
+            pos[i, :] = self.model.prior_transform(unifs)
 
         self.sampler = emcee.EnsembleSampler(nwalkers, self.ndim, log_prob)
         self.sampler.run_mcmc(pos, n_steps, progress=True)
@@ -375,8 +389,11 @@ class LikelihoodBasedInferer:
         '''
         Begin the nested sampling process and save results in dresults attribute.
         '''
+        def log_likelihood_wrapper(theta: NDArray) -> NDArray:
+            return self.model.log_likelihood(data=self.data, theta=theta)
+
         dsampler = dynesty.NestedSampler(
-            self.model.log_likelihood,
+            log_likelihood_wrapper,
             self.model.prior_transform,
             **{
                 'ndim': self.ndim,
@@ -390,3 +407,55 @@ class LikelihoodBasedInferer:
         print('Model evidence: {:.2f}'.format(self.model_evidence))
         self.dresults = dsampler.results
       
+
+    def run_ultranest(self,
+            step: bool = False,
+            n_steps: int | None = None,
+            reactive_sampler_kwargs: dict = {},
+            run_kwargs: dict = {}
+        ) -> None:
+        '''
+        Perform Nested Sampling using ultranest's `ReactiveNestedSampler`.
+        Results are saved in the results attribute.
+
+        :param step: Specify whether or not to use the random step method.
+        :param n_steps: If the random step method is specified, this is the
+            number of steps as used by `SliceSampler`.
+        :param reactive_sampler_kwargs: Keyword arguments for the
+            `ReactiveNestedSampler`.
+        :param run_kwargs: Keyword arguments for the sampler's run method.
+        '''
+        def log_likelihood_wrapper(theta: NDArray) -> NDArray:
+            return self.model.log_likelihood(data=self.data, theta=theta)
+
+        self.ultranest_sampler = ultranest.ReactiveNestedSampler(
+            param_names=self.prior.prior_names,
+            loglike=log_likelihood_wrapper,
+            transform=self.model.prior_transform,
+            **{
+                'log_dir': 'ultranest_logs',
+                'resume': 'subfolder',
+                'vectorized': True,
+                **reactive_sampler_kwargs
+            }
+        )
+
+        # if step:
+        #     self._switch_to_step_sampling(n_steps)
+        
+        self.results = self.ultranest_sampler.run(**run_kwargs)
+        self.ultranest_sampler.print_results()
+
+        # there is an issue with ultranest plotting when the log likelihood is
+        # very negative (e.g. for the point-by-point likelihood)
+        # this catches the ValueError raised
+        try:
+            self.ultranest_sampler.plot()
+        except ValueError as e:
+            print(e)
+        
+        if self.results is not None:
+            self._samples = self.results['samples']
+            self.log_bayesian_evidence = self.results['logz']
+        else:
+            raise Exception('Ultranest results are undefined.')

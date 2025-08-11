@@ -322,8 +322,10 @@ class Catwise:
         :param w2: Tuple of (magnitudes, errors) for the W2 band.
         :param w1_extra_error: Optional extra error (added in quadrature) for W1.
         :param w2_extra_error: Optional extra error (added in quadrature) for W2.
-        :param error_dist: Distribution to sample errors from ('gaussian' or 'students-t').
-        :param log10_shape_param: Log10 of shape parameter (degrees of freedom) for Student's t-distribution.
+        :param error_dist: Distribution to sample errors from
+            ('gaussian' or 'students-t').
+        :param log10_shape_param: Log10 of shape parameter (degrees of freedom)
+            for Student's t-distribution.
         :returns: Tuple of arrays: (noisy_w1_magnitudes, noisy_w2_magnitudes)
         """
         w1_magnitudes, w1_error = w1

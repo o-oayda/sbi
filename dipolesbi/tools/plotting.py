@@ -38,7 +38,7 @@ def posterior_predictive_check(
             **projview_kwargs
         )
     
-    plt.show()
+    # plt.show()
 
 def sky_probability(
     X: Tensor,

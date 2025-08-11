@@ -26,7 +26,7 @@ def spherical_to_cartesian(theta_phi: tuple[NDArray, NDArray]) -> NDArray:
     xyz = np.stack([x, y, z])
     return xyz
 
-def sample_unif(unif: float, low_high: list[float]) -> float:
+def sample_unif(unif: Tensor, low_high: tuple[Tensor, Tensor]) -> Tensor:
     '''
     (b - a) * u + a
     '''
@@ -37,9 +37,14 @@ def unif_pdf(low_high: list[float]) -> float:
     low = low_high[0]; high = low_high[1]
     return 1 / (high - low)
 
-def sample_polar(unif: float, low_high: list[float]) -> float:
+def sample_polar(unif: Tensor, low_high: tuple[Tensor, Tensor]) -> Tensor:
+    '''
+    :param unif: Uniform deviates on [0, 1).
+    :param low_high: Tuple of minimum and maximum polar angle (colatitude, radians).
+    :return: Samples on [0, pi).
+    '''
     low = low_high[0]; high = low_high[1]
-    unif_theta = np.arccos(np.cos(low) + unif * (np.cos(high) - np.cos(low)))
+    unif_theta = torch.arccos(torch.cos(low) + unif * (torch.cos(high) - torch.cos(low)))
     return unif_theta
 
 def polar_pdf(theta: float, low_high: list[float]):

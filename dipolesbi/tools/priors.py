@@ -3,6 +3,7 @@ from torch.types import Tensor
 from torch.distributions import Uniform
 from abc import ABC, abstractmethod
 from typing import Literal
+from dipolesbi.tools.utils import sample_polar, sample_unif
 
 
 class Prior(ABC):
@@ -89,6 +90,14 @@ class Prior(ABC):
             )
         return samples
     
+    def transform(self, uniform_deviates: Tensor) -> Tensor:
+        native_samples = torch.empty_like(uniform_deviates)
+        for i, name in enumerate(self.prior_names):
+            native_samples[..., i] = (
+                self.prior_dict[name]['dist'].transform(uniform_deviates[..., i])
+            )
+        return native_samples
+
     def to(self, device: str) -> None:
         for name in self.prior_names: 
             self.prior_dict[name]['dist'].to(device)
@@ -193,6 +202,9 @@ class UniformWrapper:
 
     def sample(self, sample_shape=torch.Size([])) -> Tensor:
         return self.distribution.sample(sample_shape)
+    
+    def transform(self, uniform_deviates: Tensor) -> Tensor:
+        return sample_unif(uniform_deviates, low_high=(self.low, self.high))
 
     def log_prob(self, values: Tensor) -> Tensor:
         return self.distribution.log_prob(values)
@@ -233,6 +245,14 @@ class PolarPrior:
             return 90. - torch.rad2deg(unif_theta[:, None])
         else:
             return 90. - torch.rad2deg(unif_theta)
+
+    def transform(self, uniform_deviates: Tensor) -> Tensor:
+        return 90. - torch.rad2deg(
+            sample_polar(
+                uniform_deviates, 
+                low_high=(self.theta_low, self.theta_high)
+            )
+        )
 
     def polar_logpdf(self, theta):
         '''Probably density of polar angle evaluated at theta for polar angles
