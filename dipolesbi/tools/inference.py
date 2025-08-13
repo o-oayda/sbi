@@ -37,7 +37,9 @@ class LikelihoodFreeInferer:
             training_device: str = 'cuda',
             load_simulations_in_vram: bool = False,
             simulation_fraction: float = 1.0,
-            nan_fill_value: float = 0.
+            nan_handle_method: Literal['fill', 'truncate'] = 'fill',
+            nan_fill_value: float = 0.,
+            z_score_x: Literal['structured', 'independent'] | None = None
     ) -> None:
         assert self.simulator is not None, 'Pass an instance of Simulator at init.'
         x = self.simulator.x; theta = self.simulator.theta
@@ -61,20 +63,23 @@ class LikelihoodFreeInferer:
         prior.to(training_device)
 
         # data process healpy maps
-        x = self._check_for_mask_nans(x, nan_fill_value)
         self.nside = hp.npix2nside(x.shape[-1])
-        
-        embedding_net = hpCNNEmbedding(
-            nside=self.nside,
-            dropout_rate=0.2,
-            out_channels_per_layer=[2, 4, 8, 16, 32, 64]
+        x = self._check_for_mask_nans(
+            x,
+            nan_handle_method=nan_handle_method, 
+            fill_value=nan_fill_value
         )
 
         if estimator_type == 'NPE':
+            embedding_net = hpCNNEmbedding(
+                nside=self.nside,
+                dropout_rate=0.2,
+                out_channels_per_layer=[2, 4, 8, 16, 32, 64]
+            )
             neural_posterior = posterior_nn(
                 model="maf",
                 embedding_net=embedding_net,
-                z_score_x='structured'
+                z_score_x=z_score_x
             )
             inference = NPE(
                 prior=prior,
@@ -82,13 +87,13 @@ class LikelihoodFreeInferer:
                 device=training_device
             )
         elif estimator_type == 'NLE':
-            assert self.nside <= 4, (
-                'Embedding network not supported for NLE; '
-                'be sure to keep nside low'
-            )
+            # assert self.nside <= 4, (
+            #     'Embedding network not supported for NLE; '
+            #     'be sure to keep nside low'
+            # )
             neural_posterior = likelihood_nn(
                 model='maf',
-                z_score_x='structured',
+                z_score_x=z_score_x,
                 z_score_theta='independent'
             )
             inference = NLE(
@@ -98,10 +103,15 @@ class LikelihoodFreeInferer:
             )
             # raise NotImplementedError 
         elif estimator_type == 'NRE':
+            embedding_net = hpCNNEmbedding(
+                nside=self.nside,
+                dropout_rate=0.2,
+                out_channels_per_layer=[2, 4, 8, 16, 32, 64]
+            )
             neural_classifier = classifier_nn(
                 model="resnet",
                 embedding_net_x=embedding_net,
-                z_score_x='structured',
+                z_score_x=z_score_x,
                 z_score_theta='independent'
             )
             inference = NRE(
@@ -126,12 +136,12 @@ class LikelihoodFreeInferer:
 
         if estimator_type == 'NPE':
             self.posterior = inference.build_posterior(
-                self.density_estimator,
+                self.density_estimator, # type: ignore
                 prior=prior
             )
         elif estimator_type in ['NLE', 'NRE']:
             self.posterior = inference.build_posterior(
-                density_estimator=self.density_estimator,
+                density_estimator=self.density_estimator, # type: ignore
                 prior=prior,
                 sample_with='mcmc',
                 mcmc_method='slice_np_vectorized'
@@ -174,13 +184,25 @@ class LikelihoodFreeInferer:
         plt.legend()
         plt.show()
 
-    def _check_for_mask_nans(self, x: Tensor, fill_value: float = 0.) -> Tensor:
+    def _check_for_mask_nans(
+            self, 
+            x: Tensor, 
+            nan_handle_method: Literal['fill', 'truncate'] = 'fill', 
+            fill_value: float = 0.
+    ) -> Tensor:
         assert x is not None, 'Simulator has no data!' 
         assert type(x) is Tensor, 'Convert simulator data to Tensor.'
 
         if torch.isnan(x).any():
-            x = torch.nan_to_num(x, nan=fill_value)
-            print('Replaced masked nan values with 0.')
+
+            if nan_handle_method == 'fill':
+                x = torch.nan_to_num(x, nan=fill_value)
+                print('Replaced masked nan values with 0.')
+            elif nan_handle_method == 'truncate':
+                valid_columns = ~torch.isnan(x).any(dim=0)
+                x = x[:, valid_columns]
+                print('Truncated dataset by removing masked nan values.')
+
         else:
             print('No masked nan values detected.')
 
@@ -457,5 +479,6 @@ class LikelihoodBasedInferer:
         if self.results is not None:
             self._samples = self.results['samples']
             self.log_bayesian_evidence = self.results['logz']
+            self.log_bayesian_evidence_err = self.results['logzerr']
         else:
             raise Exception('Ultranest results are undefined.')

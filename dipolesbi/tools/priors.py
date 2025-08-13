@@ -104,9 +104,8 @@ class Prior(ABC):
         
         # these are estimated by sbi later and cause FUCKED problems if they
         # aren't on the right device
-        if hasattr(self, 'mean'):
-            self.mean = self.mean.to(device)
-            self.variance = self.variance.to(device)
+        # self.mean = self.mean.to(device)
+        # self.variance = self.variance.to(device)
         
         self.device = device
 
@@ -116,6 +115,20 @@ class Prior(ABC):
         for i, name in enumerate(self.prior_names): 
             log_prob += self.prior_dict[name]['dist'].log_prob(sample_values[:, i])
         return torch.as_tensor(log_prob)
+
+    @property
+    def mean(self) -> Tensor:
+        mean_vals = torch.nan * torch.empty(self.ndim, device=self.device)
+        for i, name in enumerate(self.prior_names):
+            mean_vals[i] = self.prior_dict[name]['dist'].mean()
+        return mean_vals
+
+    @property
+    def variance(self) -> Tensor:
+        variance_vals = torch.nan * torch.empty(self.ndim, device=self.device)
+        for i, name in enumerate(self.prior_names):
+            variance_vals[i] = self.prior_dict[name]['dist'].variance()
+        return variance_vals
     
     def add_prior(self,
             prior: 'UniformWrapper',
@@ -209,6 +222,12 @@ class UniformWrapper:
     def log_prob(self, values: Tensor) -> Tensor:
         return self.distribution.log_prob(values)
 
+    def mean(self) -> Tensor:
+        return self.distribution.mean
+
+    def variance(self) -> Tensor:
+        return self.distribution.variance
+
 class PolarPrior:
     def __init__(self,
          theta_low: Tensor, theta_high: Tensor
@@ -277,3 +296,36 @@ class PolarPrior:
         self.theta_low = self.theta_low.to(device)
         self.theta_high = self.theta_high.to(device)
         self.device = device
+
+    def mean(self) -> Tensor:
+        th = self.theta_high
+        tl = self.theta_low
+        cos_th = torch.cos(self.theta_high)
+        cos_tl = torch.cos(self.theta_low)
+        sin_th = torch.sin(self.theta_high)
+        sin_tl = torch.sin(self.theta_low)
+
+        prefactor = - 1 / (cos_th - cos_tl)
+        postfactor = sin_th - th * cos_th - sin_tl + tl * cos_tl
+        return 90. - torch.rad2deg(prefactor * postfactor)
+
+    def variance(self) -> Tensor:
+        th = self.theta_high
+        tl = self.theta_low
+        cos_th = torch.cos(self.theta_high)
+        cos_tl = torch.cos(self.theta_low)
+        sin_th = torch.sin(self.theta_high)
+        sin_tl = torch.sin(self.theta_low)
+        mean_deg = self.mean()
+        mean_rad = torch.deg2rad(90. - mean_deg)
+
+        theta_sq_prefactor = - 1 / (cos_th - cos_tl)
+        theta_sq_postfactor = (
+            2 * th * sin_th + (2 - th**2) * cos_th
+          - 2 * tl * sin_tl - (2 - tl**2) * cos_tl
+        )
+        expectation_theta_sq = theta_sq_prefactor * theta_sq_postfactor
+        variance = expectation_theta_sq - mean_rad**2
+        variance_deg = torch.rad2deg(torch.sqrt(variance))**2
+
+        return variance_deg

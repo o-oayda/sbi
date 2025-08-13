@@ -84,6 +84,12 @@ class SimpleDipoleMap:
         self.device = device
         self.fiducial_amplitude = 0.005
         self.nest = True
+        self.mask = Mask(nside=nside)
+        self.masked_pixels = set()
+        self.fill_value = np.nan
+    
+    def equatorial_plane_mask(self, angle: float) -> None:
+        self.masked_pixels |= set(self.mask.equator_mask(angle))
 
     def generate_dipole(self,
             mean_density: NDArray[np.floating],
@@ -103,11 +109,13 @@ class SimpleDipoleMap:
         else:
             self._density_map = poisson_mean.astype('float32')
 
-        return self._density_map
+        return self.density_map
 
     @property
     def density_map(self) -> NDArray[np.float32]:
-        return self._density_map
+        out_map = self._density_map.copy()
+        out_map[:, list(self.masked_pixels)] = self.fill_value
+        return out_map
 
     def dipole_signal(self, Theta: NDArray) -> NDArray:
         Theta = enforce_batchwise_input(Theta, ndim=4)

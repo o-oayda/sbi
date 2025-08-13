@@ -1,4 +1,5 @@
-from typing import Any, Callable
+from typing import Any, Callable, Optional
+from jax._src.dtypes import dtype
 from numpy.typing import NDArray
 from torch.types import Tensor
 from dipolesbi.tools.maps import SimpleDipoleMap
@@ -7,6 +8,7 @@ import numpy as np
 import torch
 from scipy.stats import poisson as sp_poisson
 from abc import ABC, abstractmethod
+import healpy as hp
 
 
 class LikelihoodBasedModel(ABC):
@@ -45,9 +47,21 @@ class LikelihoodBasedModel(ABC):
         pass
 
 class DipolePoisson(LikelihoodBasedModel):
-    def __init__(self, prior: Prior, nside: int = 64) -> None:
+    def __init__(
+            self, 
+            prior: Prior, 
+            nside: int = 64, 
+            mask_map: Optional[NDArray[np.bool_]] = None
+    ) -> None:
         super().__init__(prior)
         self.map_model = SimpleDipoleMap(nside)
+        self.npix = hp.nside2npix(nside)
+
+        if mask_map is None:
+            self.mask_map = np.ones(self.npix, dtype=np.bool_)
+        else:
+            self.mask_map = mask_map
+
         self._ndim = 4
     
     @property
@@ -61,7 +75,10 @@ class DipolePoisson(LikelihoodBasedModel):
             hyper_parameters={'make_poisson_draws': False}
         )
         return np.sum(
-            sp_poisson.logpmf(k=data, mu=dipole_signal),
+            sp_poisson.logpmf(
+                k=data[self.mask_map], 
+                mu=dipole_signal[:, self.mask_map]
+            ),
             axis=1
         )
 
