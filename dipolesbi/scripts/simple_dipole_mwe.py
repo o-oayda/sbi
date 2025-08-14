@@ -1,5 +1,6 @@
 from typing import Optional
 from torch.types import Tensor
+from dipolesbi.scripts.glow_test import HealpixHaarPyramid
 from dipolesbi.tools.maps import SimpleDipoleMap
 from dipolesbi.tools.models import CustomModel, DipolePoisson
 from dipolesbi.tools.priors import DipolePrior
@@ -12,6 +13,7 @@ import torch
 import healpy as hp
 from getdist import plots, MCSamples
 from tabulate import tabulate
+from dipolesbi.tools.transforms import AnscombeTransform
 
 # TODO
 # - compare with no Affine transform (sbi native structured)
@@ -58,21 +60,32 @@ theta, x = simulator.make_batch_simulations(
 ## AFFINE TRANSFORM
 # Average over all samples for batch std.
 logx = torch.log1p(x)
-mu = torch.mean(logx)
+mu_logx = torch.mean(logx)
 sample_std = torch.std(logx, dim=1)
 sample_std[sample_std < 1e-14] = 1e-14
+t_std_logx = torch.mean(sample_std)
+mu = torch.mean(x)
+sample_std = torch.std(x, dim=1)
+sample_std[sample_std < 1e-14] = 1e-14
 t_std = torch.mean(sample_std)
-transform = LogAffineTransform(mu, t_std, learn_mu=False) 
-z, _ = transform.forward(simulator.x)
+
+# transform = LogAffineTransform(mu, t_std, learn_mu=False) 
+# transform = AnscombeTransform() # a bit shitter than LogAffineTransform
+transform = HealpixHaarPyramid(nside_fine=NSIDE)
+z, *_ = transform.forward( ( simulator.x - mu ) / t_std )
 
 # MOCK TRUE SAMPLE
 x0 = model.generate_dipole(*theta0)
 x0_flat = x0.flatten()
 mask_map = ~np.isnan(x0_flat)
 x0_truncated = x0_flat[mask_map]
-z0_truncated, _ = transform.forward(torch.as_tensor(x0_truncated))
+x0_truncated_batchwise = x0_truncated.reshape(1, len(x0_truncated))
+z0_truncated, *_ = transform.forward(( torch.as_tensor(x0_truncated_batchwise) - mu ) / t_std)
 z0_truncated = z0_truncated.numpy()
+
 hp.projview(x0_flat, nest=True)
+plt.show()
+hp.projview(z0_truncated.squeeze(), nest=True)
 plt.show()
 
 # TRAIN NLEs
@@ -127,7 +140,12 @@ def transformed_lnlike(theta: Tensor, z: Tensor) -> Tensor:
     '''
     _, logabsdet = transform.inverse(z)
     # -ve sign for log abs det
-    return transformed_inferer.posterior.potential(theta, z) - prior.log_prob(theta) - logabsdet
+    return (
+        transformed_inferer.posterior.potential(theta, z)
+      - prior.log_prob(theta)
+      - logabsdet
+      - (torch.log(t_std) * torch.ones(z.shape[-1])).sum(dim=-1) # to be explicit
+    )
 
 # compute marginal likelihood using NS
 prior.to('cpu')
