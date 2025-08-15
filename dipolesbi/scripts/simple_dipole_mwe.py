@@ -1,6 +1,7 @@
 from typing import Optional
 from torch.types import Tensor
-from dipolesbi.scripts.glow_test import HealpixHaarPyramid
+from dipolesbi.scripts.healpix_transform1 import HealpixHaarPyramid
+from dipolesbi.scripts.healpix_transform2 import HealpixSO4Pyramid, learn_transformation, pretrain
 from dipolesbi.tools.maps import SimpleDipoleMap
 from dipolesbi.tools.models import CustomModel, DipolePoisson
 from dipolesbi.tools.priors import DipolePrior
@@ -28,6 +29,7 @@ LOAD_PATH_TRANS: Optional[str] = None # 'trans_NLE_nside8.pkl'
 # nside 16 we start to see very significant discrepancy with log z
 # transforming the data seems to make no difference or is slightly worse
 NSIDE = 16
+NPIX = hp.nside2npix(NSIDE)
 TOTAL_SOURCES = 1_920_000
 MEAN_DENSITY = TOTAL_SOURCES / hp.nside2npix(NSIDE)
 OBSERVER_SPEED = 2.
@@ -71,22 +73,27 @@ t_std = torch.mean(sample_std)
 
 # transform = LogAffineTransform(mu, t_std, learn_mu=False) 
 # transform = AnscombeTransform() # a bit shitter than LogAffineTransform
-transform = HealpixHaarPyramid(nside_fine=NSIDE)
-z, *_ = transform.forward( ( simulator.x - mu ) / t_std )
-
-# MOCK TRUE SAMPLE
-x0 = model.generate_dipole(*theta0)
-x0_flat = x0.flatten()
-mask_map = ~np.isnan(x0_flat)
-x0_truncated = x0_flat[mask_map]
-x0_truncated_batchwise = x0_truncated.reshape(1, len(x0_truncated))
-z0_truncated, *_ = transform.forward(( torch.as_tensor(x0_truncated_batchwise) - mu ) / t_std)
-z0_truncated = z0_truncated.numpy()
-
-hp.projview(x0_flat, nest=True)
+# transform = HealpixHaarPyramid(nside_fine=NSIDE)
+transform = HealpixSO4Pyramid(NSIDE)
+transform, history, validation = learn_transformation(transform, data=(x - mu) / t_std)
+# losses = pretrain(transform, data=(x - mu) / t_std, steps=500, batch_size=64, lr=1e-3)
+plt.plot(history['train'])
+plt.title('Training loss')
 plt.show()
-hp.projview(z0_truncated.squeeze(), nest=True)
+plt.plot(history['val'])
+plt.title('Validation loss')
 plt.show()
+z, *_ = transform.forward( ( simulator.x - mu ) / t_std ) # type: ignore
+z = z.detach()
+
+# CHECK RECONSTRUCTION ERROR
+D = simulator.x[1, :].reshape(1, NPIX) # type: ignore
+D_norm = ( D - mu ) / t_std
+z_test, *_ = transform.forward(D_norm)
+D_norm_rec, *_ = transform.inverse(z_test)
+D_rec = D_norm_rec * t_std + mu
+recon_err = (D - D_rec).abs().max().item()
+print(f"Max |reconstruction error|: {recon_err:.3e}")
 
 # TRAIN NLEs
 raw_data_simulator = simulator
@@ -107,10 +114,6 @@ else:
     )
     raw_inferer.posterior.to('cpu') # type: ignore
     raw_inferer.plot_loss_curve()
-raw_samples = raw_inferer.sample_amortized_posterior(
-    torch.as_tensor(x0_truncated),
-    n_samps=10_000
-)
 
 transformed_inferer = LikelihoodFreeInferer(transformed_simulator)
 if LOAD_PATH_TRANS is not None:
@@ -125,6 +128,25 @@ else:
     )
     transformed_inferer.posterior.to('cpu') # type: ignore
     transformed_inferer.plot_loss_curve()
+
+# MOCK TRUE SAMPLE
+x0 = model.generate_dipole(*theta0)
+x0_flat = x0.flatten()
+mask_map = ~np.isnan(x0_flat)
+x0_truncated = x0_flat[mask_map]
+x0_truncated_batchwise = x0_truncated.reshape(1, len(x0_truncated))
+z0_truncated, *_ = transform.forward(( torch.as_tensor(x0_truncated_batchwise) - mu ) / t_std)
+z0_truncated = z0_truncated.detach().numpy()
+
+hp.projview(x0_flat, nest=True)
+plt.show()
+hp.projview(z0_truncated.squeeze(), nest=True)
+plt.show()
+
+raw_samples = raw_inferer.sample_amortized_posterior(
+    torch.as_tensor(x0_truncated),
+    n_samps=10_000
+)
 transformed_samples = transformed_inferer.sample_amortized_posterior(
     torch.as_tensor(z0_truncated),
     n_samps=10_000
@@ -143,7 +165,7 @@ def transformed_lnlike(theta: Tensor, z: Tensor) -> Tensor:
     return (
         transformed_inferer.posterior.potential(theta, z)
       - prior.log_prob(theta)
-      - logabsdet
+      - logabsdet.detach()
       - (torch.log(t_std) * torch.ones(z.shape[-1])).sum(dim=-1) # to be explicit
     )
 
