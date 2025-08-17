@@ -1,7 +1,7 @@
 from typing import Optional
 from torch.types import Tensor
 from dipolesbi.scripts.healpix_transform1 import HealpixHaarPyramid
-from dipolesbi.scripts.healpix_transform2 import HealpixSO4Pyramid, learn_transformation, pretrain
+from dipolesbi.scripts.healpix_transform2 import HealpixSOPyramid, learn_transformation
 from dipolesbi.tools.maps import SimpleDipoleMap
 from dipolesbi.tools.models import CustomModel, DipolePoisson
 from dipolesbi.tools.priors import DipolePrior
@@ -28,7 +28,7 @@ LOAD_PATH_TRANS: Optional[str] = None # 'trans_NLE_nside8.pkl'
 # nside 4 ok
 # nside 16 we start to see very significant discrepancy with log z
 # transforming the data seems to make no difference or is slightly worse
-NSIDE = 16
+NSIDE = 4
 NPIX = hp.nside2npix(NSIDE)
 TOTAL_SOURCES = 1_920_000
 MEAN_DENSITY = TOTAL_SOURCES / hp.nside2npix(NSIDE)
@@ -66,6 +66,13 @@ mu_logx = torch.mean(logx)
 sample_std = torch.std(logx, dim=1)
 sample_std[sample_std < 1e-14] = 1e-14
 t_std_logx = torch.mean(sample_std)
+
+ans_x = 2 * torch.sqrt(x + 0.375)
+mu_ansx = torch.mean(ans_x)
+sample_std = torch.std(ans_x, dim=1)
+sample_std[sample_std < 1e-14] = 1e-14
+t_std_ansx = torch.mean(sample_std)
+
 mu = torch.mean(x)
 sample_std = torch.std(x, dim=1)
 sample_std[sample_std < 1e-14] = 1e-14
@@ -74,8 +81,24 @@ t_std = torch.mean(sample_std)
 # transform = LogAffineTransform(mu, t_std, learn_mu=False) 
 # transform = AnscombeTransform() # a bit shitter than LogAffineTransform
 # transform = HealpixHaarPyramid(nside_fine=NSIDE)
-transform = HealpixSO4Pyramid(NSIDE)
-transform, history, validation = learn_transformation(transform, data=(x - mu) / t_std)
+transform = HealpixSOPyramid(NSIDE)
+normalise = lambda input: (input - mu) / t_std
+unnormalise = lambda input: t_std * input + mu
+# normalise = lambda input: (2 * torch.sqrt(input + 0.375) - mu_ansx) / t_std_ansx
+# unnormalise = lambda input: (
+#     0.125 * (
+#         2 * mu_ansx**2
+#       + 2 * t_std_ansx**2 * input**2
+#       + 4 * mu_ansx * t_std_ansx * input
+#       - 3
+#     )
+# )
+x_normalised = normalise(x)
+transform, history, validation = learn_transformation(
+    transform, 
+    data=x_normalised, 
+    epochs=10
+)
 # losses = pretrain(transform, data=(x - mu) / t_std, steps=500, batch_size=64, lr=1e-3)
 plt.plot(history['train'])
 plt.title('Training loss')
@@ -83,16 +106,16 @@ plt.show()
 plt.plot(history['val'])
 plt.title('Validation loss')
 plt.show()
-z, *_ = transform.forward( ( simulator.x - mu ) / t_std ) # type: ignore
-z = z.detach()
 
 # CHECK RECONSTRUCTION ERROR
-D = simulator.x[1, :].reshape(1, NPIX) # type: ignore
-D_norm = ( D - mu ) / t_std
-z_test, *_ = transform.forward(D_norm)
-D_norm_rec, *_ = transform.inverse(z_test)
-D_rec = D_norm_rec * t_std + mu
-recon_err = (D - D_rec).abs().max().item()
+# D = simulator.x
+# D_norm = ( D - mu ) / t_std
+z, per_level_coeffs, _, totlogdet = transform.forward(x_normalised)
+z = z.detach()
+x_rec_norm, itotlogdet = transform.inverse(z)
+x_rec = unnormalise(x_rec_norm)
+# D_rec = D_norm_rec * t_std + mu
+recon_err = (x_rec - x).abs().max().item()
 print(f"Max |reconstruction error|: {recon_err:.3e}")
 
 # TRAIN NLEs
@@ -135,7 +158,7 @@ x0_flat = x0.flatten()
 mask_map = ~np.isnan(x0_flat)
 x0_truncated = x0_flat[mask_map]
 x0_truncated_batchwise = x0_truncated.reshape(1, len(x0_truncated))
-z0_truncated, *_ = transform.forward(( torch.as_tensor(x0_truncated_batchwise) - mu ) / t_std)
+z0_truncated, *_ = transform.forward(normalise(torch.as_tensor(x0_truncated_batchwise)))
 z0_truncated = z0_truncated.detach().numpy()
 
 hp.projview(x0_flat, nest=True)
@@ -143,14 +166,14 @@ plt.show()
 hp.projview(z0_truncated.squeeze(), nest=True)
 plt.show()
 
-raw_samples = raw_inferer.sample_amortized_posterior(
-    torch.as_tensor(x0_truncated),
-    n_samps=10_000
-)
-transformed_samples = transformed_inferer.sample_amortized_posterior(
-    torch.as_tensor(z0_truncated),
-    n_samps=10_000
-)
+# raw_samples = raw_inferer.sample_amortized_posterior(
+#     torch.as_tensor(x0_truncated),
+#     n_samps=10_000
+# )
+# transformed_samples = transformed_inferer.sample_amortized_posterior(
+#     torch.as_tensor(z0_truncated),
+#     n_samps=10_000
+# )
 
 def raw_lnlike(theta: Tensor, x: Tensor) -> Tensor:
     return raw_inferer.posterior.potential(theta, x) - prior.log_prob(theta)
@@ -160,13 +183,15 @@ def transformed_lnlike(theta: Tensor, z: Tensor) -> Tensor:
     SBI NLE returns unnormalised posterior = L(theta) * pi(theta), so subtract
     off the prior term.
     '''
-    _, logabsdet = transform.inverse(z)
+    x_norm, logabsdet = transform.inverse(z)
+    x_original = unnormalise(x_norm).detach()
     # -ve sign for log abs det
     return (
         transformed_inferer.posterior.potential(theta, z)
       - prior.log_prob(theta)
       - logabsdet.detach()
-      - (torch.log(t_std) * torch.ones(z.shape[-1])).sum(dim=-1) # to be explicit
+      - (torch.log(t_std) * torch.ones(z.shape[-1])).sum(dim=-1) # from normalisation
+      # - 0.5 * torch.log(x_original + 0.375).sum(dim=-1) # from Anscombe
     )
 
 # compute marginal likelihood using NS
@@ -244,29 +269,29 @@ for i, row in enumerate(results):
 
 print(tabulate(results, headers=headers, tablefmt="github"))
 
-raw_sbi_samples = MCSamples(
-    samples=raw_samples.detach().cpu().numpy(),
-    names=prior.prior_names,
-    labels=prior.prior_names
-)
-transformed_sbi_samples = MCSamples(
-    samples=transformed_samples.detach().cpu().numpy(),
-    names=prior.prior_names,
-    labels=prior.prior_names
-)
-classic_samples = MCSamples(
-    samples=classic_inferer._samples, # type: ignore
-    names=prior.prior_names,
-    labels=prior.prior_names,
-    sampler='nested'
-)
-g = plots.get_subplot_plotter()
-g.triangle_plot(
-    [raw_sbi_samples, transformed_sbi_samples, classic_samples],
-    filled=True,
-    markers=theta0.flatten(),
-    marker_args={'lw': 1}, # type: ignore
-    legend_labels=['Raw SBI samples', 'Transformed SBI samples', 'Classic samples']
-)
-plt.show()
+# raw_sbi_samples = MCSamples(
+#     samples=raw_samples.detach().cpu().numpy(),
+#     names=prior.prior_names,
+#     labels=prior.prior_names
+# )
+# transformed_sbi_samples = MCSamples(
+#     samples=transformed_samples.detach().cpu().numpy(),
+#     names=prior.prior_names,
+#     labels=prior.prior_names
+# )
+# classic_samples = MCSamples(
+#     samples=classic_inferer._samples, # type: ignore
+#     names=prior.prior_names,
+#     labels=prior.prior_names,
+#     sampler='nested'
+# )
+# g = plots.get_subplot_plotter()
+# g.triangle_plot(
+#     [raw_sbi_samples, transformed_sbi_samples, classic_samples],
+#     filled=True,
+#     markers=theta0.flatten(),
+#     marker_args={'lw': 1}, # type: ignore
+#     legend_labels=['Raw SBI samples', 'Transformed SBI samples', 'Classic samples']
+# )
+# plt.show()
 

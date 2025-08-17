@@ -1,10 +1,13 @@
-from typing import Tuple
-from healpy import nside2npix
+from typing import Optional, Tuple, cast, Literal
+from healpy import isnsideok, nside2npix
+from numpy.typing import NDArray
 import torch
 from torch import Tensor
 from nflows.transforms.base import Transform
 from torch.utils.data import Dataset, DataLoader, random_split
 import math
+import numpy as np
+from dipolesbi.tools.utils import softplus_pos
 
 
 class LogAffineTransform(Transform):
@@ -30,12 +33,12 @@ class AnscombeTransform(Transform):
     def __init__(self):
         super().__init__()
 
-    def forward(self, x, context=None):
+    def forward(self, x, context=None): # type: ignore
         z = 2 * torch.sqrt(x + 0.375)
         logabsdet = self.log_abs_det_jacobian(x, z)
         return z, logabsdet
 
-    def inverse(self, z, context=None):
+    def inverse(self, z, context=None): # type: ignore
         x = z**2 / 4 - 0.375
         logabsdet = -self.log_abs_det_jacobian(x, z)
         return x, logabsdet
@@ -43,180 +46,210 @@ class AnscombeTransform(Transform):
     def log_abs_det_jacobian(self, x, z):
         return - 0.5 * torch.log(x + 0.375).sum(dim=-1)
 
-class MonotoneAsinh1D(torch.nn.Module):
-    """
-    y = asinh(s*(x - mu));  s = softplus(w) + s_min  (to keep s>0)
-    log|dy/dx| = log s - 0.5*log(1 + (s*(x-mu))^2)
-    """
-    def __init__(self, s_min=1e-3):
+class LearnableSOn(torch.nn.Module):
+    def __init__(self, n: int = 4):
         super().__init__()
-        self.mu = torch.nn.Parameter(torch.zeros(()))          # scalar
-        self.w  = torch.nn.Parameter(torch.zeros(()))          # scalar -> s via softplus
-        self.s_min = s_min
-
-    def _s(self):
-        return torch.nn.functional.softplus(self.w) + self.s_min
-
-    def forward(self, x):
-        # x: arbitrary shape
-        s = self._s()
-        u = s * (x - self.mu)
-        y = torch.asinh(u)
-        logdet = torch.log(s).expand_as(x) - 0.5*torch.log1p(u*u)
-        return y, logdet
-
-    def inverse(self, y):
-        s = self._s()
-        u = torch.sinh(y)
-        x = self.mu + u / s
-        # inverse logdet is negative of forward
-        inv_logdet = - (torch.log(s).expand_as(y) - 0.5*torch.log1p((s*(x - self.mu))**2))
-        return x, inv_logdet
-
-class LearnableSO4(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.A = torch.nn.Parameter(0.01 * torch.randn(4,4))
+        self.A = torch.nn.Parameter(0.01 * torch.randn(n,n))
 
     def forward(self):
         S = self.A - self.A.T # subtracting transpose gives skew-sym. (any nxn)
         return torch.matrix_exp(S) # Q ∈ SO(4)
 
-class HealpixSO4Pyramid(torch.nn.Module):
-    def __init__(self, nside_fine: int = 16):
+class HealpixSOPyramid(torch.nn.Module):
+    def __init__(
+            self,
+            nside_fine: int = 16,
+            nside_at_levels: Optional[list[int]] = None
+    ) -> None:
         super().__init__()
-        assert nside_fine >= 1
         self.nside_fine = nside_fine
-        self.Npix_fine = nside2npix(self.nside_fine)
-        print(f'Transform NSIDE: {self.nside_fine}')
+        self.npix_fine = nside2npix(self.nside_fine)
+        print(f'Input NSIDE: {self.nside_fine}')
         self.dtype = torch.float32
 
-        # nsides per level: [nside_fine, nside_fine/2, ..., 1]
-        self.level_nsides = []
-        n = nside_fine
-        while n >= 1:
-            self.level_nsides.append(n)
-            n //= 2
-        print(f'NSIDE levels: {self.level_nsides}')
+        # compute nside per level; by default nside is reduced by a factor of
+        # 2 per level unless downgrade_factors is set
+        if nside_at_levels is None:
+            self.n_downscales = int(np.log2(nside_fine))
+            self.level_nsides = list(
+                reversed([2**n for n in range(self.n_downscales+1)])
+            )
+        else:
+            assert nside_at_levels[-1] == 1, 'Final nside must be 1.'
+            assert nside_at_levels[0] == nside_fine, (
+                'First nside must be equal to input map nside.'
+            )
+            nside_ok = cast(NDArray[np.bool_], isnsideok(nside_at_levels))
+            assert nside_ok.all(), 'Invalid nside in nside_at_levels.'
 
-        # for each level, we use one learnable SO(4) matrix
-        self.SO4_matrices = torch.nn.ModuleList(
-            [LearnableSO4() for _ in range(self.levels)]
+            self.level_nsides = nside_at_levels
+            
+        self.downscale_factors: list[int] = [
+            nside2npix(in_nside) // nside2npix(out_nside)
+            for in_nside, out_nside in zip(
+                self.level_nsides[:-1], self.level_nsides[1:]
+            )
+        ]
+        print(f'NSIDE levels: {self.level_nsides}')
+        print(f'Downscale factors: {self.downscale_factors}') # len(level_nsides)-1
+
+        # for each level, we choose a matrix in SO(n) such that n corresponds
+        # to the downscale factor from coarse to fine
+        self.SO_matrices = torch.nn.ModuleList(
+            [LearnableSOn(n) for n in self.downscale_factors]
         )
 
-        # Gaussian stats (for loss only), one (mu, sigma) per level
+        # # Gaussian stats for loss function, one (mu, sigma) per level
         self.mu_list = torch.nn.ParameterList(
             [
-                torch.nn.Parameter(torch.zeros(4, dtype=self.dtype))
-                for _ in range(self.levels)
+                torch.nn.Parameter(torch.zeros(n, dtype=self.dtype))
+                for n in self.downscale_factors
             ]
         )
         self.log_sigma_list = torch.nn.ParameterList(
             [
-                torch.nn.Parameter(torch.zeros(4, dtype=self.dtype))
-                for _ in range(self.levels)
+                torch.nn.Parameter(torch.zeros(n, dtype=self.dtype))
+                for n in self.downscale_factors
             ]
         )
+        # self.alpha_list = torch.nn.ParameterList(
+        #     [
+        #         torch.nn.Parameter(torch.zeros(n, dtype=self.dtype))
+        #         for n in self.downscale_factors
+        #     ]
+        # )
+        # self.nu_list = torch.nn.ParameterList(
+        #     [
+        #         torch.nn.Parameter(30 * torch.rand(n, dtype=self.dtype))
+        #         for n in self.downscale_factors
+        #     ]
+        # )
 
     @property
     def levels(self):
         return len(self.level_nsides) - 1  # number of downsamplings
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor) -> tuple[Tensor, list, list, Tensor]:
         """
-        param x: (batches, npix) in nest order
-        Returns:
+        :param x: (n_batches, n_pix) in nest ordering
+        :returns:
           z: (batches, npix) with layout [a(NSIDE=1) | details (coarse->fine)]
-          per_level_quads: list length=levels, each (B, P, 4) AFTER rotation,
-            ordered coarse->fine
-          logdet: zeros (B,) since by construction the log Jacobian is 0
+          per_level_coefficients: list length=levels, each (B, P, n_coefficients) 
+            ordered fine->coarse.
+          logdets_at_each_level: value of log determinant Jacobian at each level
+          logdet: (n_batches,) value of log determinant Jacobian, 0 by construction
         """
         batches, npix = x.shape
-        assert npix == self.Npix_fine
-        v = x
-        cur_npix = self.Npix_fine
+        assert npix == self.npix_fine
+        downstream_coefficients = x
+        cur_npix = self.npix_fine
 
-        quads_f2c = []   # store rotated quads (fine->coarse) to later reverse
+        coefficients_fine2coarse = [] 
         a_list = []
+        logdets_at_each_level = []
 
         # LOGIC
-        # - for each healpix map, group the 4 pixels corresponding to the children
-        #   of the lower res (cur_nside / 2) map (together in nest ordering)
+        # - for each healpix map, group the pixels corresponding to the children
+        #   of the lower res map (potentially many orders lower)
 
-        # - this group goes into 3rd dimension (shape batches, pix / 4, 4)
+        # - this group goes into 3rd dimension
+            # (shape batches, pix / n_coefficients, n_coefficients)
 
         # - hit each pixel four vector with matrix vector product, the matrix
-        #   being the learnt SO4 matrix; this extracts four coefficients which
+        #   being the learnt SOn matrix; this extracts n coefficients which
         #   live in the 3rd dimension; this is done batchwise with matmul
 
-        # - the four coefficients are appended to quads_f2c, the a coefficients
-        #   (first coefficients in 3rd dim) are passed downstream to lower res
+        # - the n coefficients are appended to coefficients_fine2coarse,
+            # the a coefficients (first coefficients in 3rd dim) are passed
+            # downstream to lower res
 
-        # - at the end, append the coarsest a coefficients + all the 3 detail
+        # - at the end, append the coarsest a coefficients + all the n-1 detail
         #   coefficients from each level; this ensures the output shape of z
         #   has the same pixel count as the input shape
 
-        # Apply SO(4) to every 4-child group, fine -> coarse
-        for lvl in range(self.levels):
-            P = cur_npix // 4 # downsampled npix
-            quads = v.view(batches, P, 4)                   # (B,P,4)
-            # pick the matrix for this fine level_nsides
-            # (index from the end so that mixes[0] corresponds to coarsest)
-            Q = self.SO4_matrices[self.levels - 1 - lvl]()  # (4,4)
-            y = torch.matmul(quads, Q.T)                    # (B,P,4)
-            a = y[..., 0]                                   # (B,P)
-            quads_f2c.append(y)
+        # Apply SO(n) to every n-child group, fine -> coarse
+        logdet = torch.zeros(batches, dtype=x.dtype, device=x.device)
+
+        for level, factor in zip(range(self.levels), self.downscale_factors):
+            P = cur_npix // factor
+            child_pixels = downstream_coefficients.view(batches, P, factor)
+
+            Q = self.SO_matrices[level]()
+
+            y = torch.matmul(child_pixels, Q.T)
+            a = y[..., 0]
+            a_for_cond = y[..., :1]
+            d = y[..., 1:]
+
+            y = torch.cat([a_for_cond, d], dim=-1)
+
+            per_level_logdet = 0.
+            logdets_at_each_level.append(per_level_logdet)
+            logdet += per_level_logdet
+
+            coefficients_fine2coarse.append(y)
             a_list.append(a)
-            v = a
+            downstream_coefficients = a
             cur_npix = P
 
-        a_coarse = v  # (B, 12)
+        a_coarse = downstream_coefficients # (batches, 12)
 
         # Build z: keep a_coarse, then details from coarse->fine
         # (drop the a's there)
         z_parts = [a_coarse.reshape(batches, -1)]  # list[ (B, 12) ]
-        for y in reversed(quads_f2c):              # now coarse->fine
+        for y in reversed(coefficients_fine2coarse): # now coarse->fine
             z_parts.append(y[...,1:].reshape(batches, -1))
         z = torch.cat(z_parts, dim=1)
-        logdet = torch.zeros(batches, dtype=x.dtype, device=x.device)
 
-        per_level_quads = list(reversed(quads_f2c))  # coarse->fine order for loss
-        return z, per_level_quads, logdet
+        per_level_coefficients = coefficients_fine2coarse  # fine to coarse ordering
+        return z, per_level_coefficients, logdets_at_each_level, logdet
 
     def inverse(self, z: torch.Tensor):
-        """Exact inverse (uses the same Q_ell); logdet=0."""
+        """
+        Exact inverse (uses the same SO(n) matrix); logdet=0.
+        """
         batches, npix = z.shape
-        assert npix == self.Npix_fine
+        assert npix == self.npix_fine
 
         # parents per fine->coarse level
         P_levels = []
-        cur = self.Npix_fine
-        for _ in range(self.levels):
-            P_levels.append(cur // 4)
-            cur //= 4
+        cur = self.npix_fine
+        for dscale_factor in self.downscale_factors:
+            P_levels.append(cur // dscale_factor)
+            cur //= dscale_factor
 
         # parse z
+        # z = [a_coarse | d_coarse ... d_fine ]
         offset = 12
         a = z[:, :offset]  # (B,12)
 
-        details_c2f = []
-        for P in P_levels[::-1]:  # coarse->fine
-            dsize = P * 3
-            d = z[:, offset:offset+dsize].view(batches, P, 3)
+        details_coarse2fine = []
+        # iterate from high resolution to low resolution
+        for npix, dscale_factor in zip(P_levels[::-1], self.downscale_factors[::-1]):
+            dsize = npix * (dscale_factor - 1) # detail coefficients always 1 less 
+            d = z[:, offset:offset+dsize].view(batches, npix, dscale_factor - 1)
             offset += dsize
-            details_c2f.append(d)
+            details_coarse2fine.append(d)
 
         # reconstruct coarse->fine
-        v = a
-        for lvl, d in enumerate(details_c2f):     # lvl goes 0..coarsest to finer
-            Q = self.SO4_matrices[lvl]()                 # this indexing matches coarse->fine
-            y = torch.cat([v.unsqueeze(-1), d], dim=-1)   # (B,P,4)
-            quads = torch.matmul(y, Q)            # inverse of (· @ Q.T) is (· @ Q)
-            v = quads.reshape(batches, -1)
-        x_rec = v
-        logdet = torch.zeros(batches, dtype=z.dtype, device=z.device)
+        downstream_coefficients = a
+        inv_logdet = torch.zeros(batches, dtype=z.dtype, device=z.device)
 
-        return x_rec, logdet
+        # reconstruct coarse to fine
+        for lvl, d_out in enumerate(details_coarse2fine):
+            # y_out is what forward produced after coupling: [a | d_out]
+            a_here = downstream_coefficients.unsqueeze(-1) # (B, npix_level, 1)
+            y_pre = torch.cat([a_here, d_out], dim=-1)  # (B, P_l, n_coefficients)
+
+            # undo the SO(n) matrix product
+            Q = self.SO_matrices[self.levels - 1 - lvl]() # inverse of (· @ Q.T) is (· @ Q)
+            coefficients = torch.matmul(y_pre, Q) # (B, npix_level, n_coefficients)
+
+            # upsample to next finer 'a'
+            downstream_coefficients = coefficients.reshape(batches, -1)
+
+        x_rec = downstream_coefficients
+        return x_rec, inv_logdet
 
 class MapDataset(Dataset):
     def __init__(self, D_all: torch.Tensor):
@@ -235,21 +268,62 @@ def gaussian_nll(y, mu, log_sigma):
     nll = 0.5 * ((y - mu)**2 * inv_var + 2*log_sigma + math.log(2*math.pi))
     return nll.sum(dim=-1)  # sum over 4 dims
 
-def loss_balanced(per_level_quads, mu_list, log_sigma_list):
-    """
-    Average the mean NLL per level so all scales weigh equally.
-    per_level_quads: list length L, each (B, P_l, 4)   (coarse->fine)
-    mu_list/log_sigma_list: list length L, each (4,)
-    """
+def studentst_nll(y, mu, log_sigma, nu):
+    sigma = torch.exp(log_sigma)
+    r = (y - mu) / sigma
+    nll = 0.5 * (nu + 1) * torch.log(1 + r**2 / nu) + torch.log(sigma)
+    return nll.sum(dim=-1)
+
+def skew_gaussian_nll(y, mu, log_sigma, alpha):
+    sigma = torch.exp(log_sigma)
+    sigma = softplus_pos(sigma)
+    delta = torch.tanh(alpha)
+    alpha = delta / torch.clamp(torch.sqrt(1 - delta*delta), min=1e-8)
+
+    r = (y - mu) / sigma
+    nll = 0.5 * r ** 2 + log_sigma - torch.special.log_ndtr(alpha * r)
+    return nll.sum(dim=-1)
+
+def compute_nll(
+        per_level_quads: Tensor,
+        distribution: Literal['gaussian', 'studentst', 'skew_gaussian'] = 'gaussian',
+        **distribution_kwargs
+) -> Tensor:
+    '''
+    Compute the mean NLL per level (averaging across these again) given a choice
+    of underlying distribution.
+
+    :param per_level_quads: Coefficients computed at each level, of shape
+        (n_batches, npix_level, n_coefficients).
+    :param distribution: Underlying distribution for loss function.
+    :param **distribution_kwargs: Kwargs to pass to distribution.
+    '''
+    distribution_to_nll_func = {
+        'gaussian': gaussian_nll,
+        'studentst': studentst_nll,
+        'skew_gaussian': skew_gaussian_nll
+    }
+    valid_distribution_kwargs = {
+        'gaussian': ['mu', 'log_sigma'],
+        'studentst': ['mu', 'log_sigma', 'nu'],
+        'skew_gaussian': ['mu', 'log_sigma', 'alpha']
+    }
+    kwargs = valid_distribution_kwargs[distribution]
+    for kwarg in kwargs:
+        assert kwarg in distribution_kwargs, f'Invalid kwargs for {distribution}.'
+
+    loss_function = distribution_to_nll_func[distribution]
     level_losses = []
-    for lvl, y in enumerate(per_level_quads):
-        mu, log_sigma = mu_list[lvl], log_sigma_list[lvl]
-        nll = gaussian_nll(y, mu, log_sigma)    # (B, P_l)
-        level_losses.append(nll.mean())              # scalar
-    return torch.stack(level_losses).mean()          # scalar
+    for level, y in enumerate(per_level_quads):
+        nll = loss_function(
+            y,
+            **{kwarg: val[level] for kwarg, val in distribution_kwargs.items()}
+        )
+        level_losses.append(nll.mean())
+    return torch.stack(level_losses).mean()
 
 def learn_transformation(
-        model: HealpixSO4Pyramid,
+        model,
         data: Tensor,
         batch_size: int = 128,
         epochs: int = 3,
@@ -257,7 +331,7 @@ def learn_transformation(
         validation_frac=0.1,
         min_delta_rel=0.001, 
         patience=100
-) -> Tuple[HealpixSO4Pyramid, dict, dict]:
+) -> Tuple[HealpixSOPyramid, dict, dict]:
     dataset = MapDataset(data)
     n_simulations = len(dataset)
     n_validation = int(validation_frac * n_simulations)
@@ -276,9 +350,10 @@ def learn_transformation(
     )
 
     opt = torch.optim.Adam(
-        list(model.SO4_matrices.parameters())
+        list(model.SO_matrices.parameters())
       + list(model.mu_list)
-      + list(model.log_sigma_list), lr=lr
+      + list(model.log_sigma_list),
+        lr=lr
     )
 
     best_val = float("inf")
@@ -292,11 +367,12 @@ def learn_transformation(
         cnt = 0
         with torch.no_grad():
             for D in loader:
-                _, per_level_quads, _ = model(D)   # list of (B, P_l, 4)
-                loss = loss_balanced(
+                _, per_level_quads, *_ = model(D)   # list of (B, P_l, 4)
+                loss = compute_nll(
                     per_level_quads, 
-                    model.mu_list, 
-                    model.log_sigma_list
+                    distribution='gaussian',
+                    mu=model.mu_list, 
+                    log_sigma=model.log_sigma_list,
                 )
                 bs = D.size(0)
                 tot += float(loss) * bs
@@ -312,11 +388,12 @@ def learn_transformation(
         print(f'Start of epoch {epoch}.')
         model.train()
         for D in training_loader:
-            _, per_level_quads, _ = model(D)
-            loss = loss_balanced(
-                per_level_quads,
-                model.mu_list,
-                model.log_sigma_list
+            _, per_level_quads, *_ = model(D)
+            loss = compute_nll(
+                per_level_quads, 
+                distribution='gaussian',
+                mu=model.mu_list, 
+                log_sigma=model.log_sigma_list,
             )
             opt.zero_grad(set_to_none=True)
             loss.backward()

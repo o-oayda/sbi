@@ -12,6 +12,8 @@ from operator import itemgetter
 import dill as pickle
 from numpy.typing import NDArray
 from collections import defaultdict
+import torch.nn.functional as F
+
 
 def spherical_to_cartesian(theta_phi: tuple[NDArray, NDArray]) -> NDArray:
     '''
@@ -50,6 +52,9 @@ def sample_polar(unif: Tensor, low_high: tuple[Tensor, Tensor]) -> Tensor:
 def polar_pdf(theta: float, low_high: list[float]):
     low = low_high[0]; high = low_high[1]
     return - np.sin(theta) / (np.cos(high) - np.cos(low))
+
+def softplus_pos(x):  # avoids zero scales
+    return F.softplus(x) + 1e-8
 
 def dipole_signal(Theta, nside=32, device='cpu'):
     Nbar, D, phi, theta = torch.as_tensor(Theta, device=device, dtype=torch.float64)
@@ -203,6 +208,50 @@ def equatorial_to_ecliptic(ra, dec, output_unit='radians'):
     else:
         raise Exception(
             'Not a valid unit. Select either radians of degrees.')
+
+def group_healpix_children(
+        healpix_map: NDArray, 
+        super_pixel_nside: int
+) -> NDArray:
+    '''
+    :param healpix_map: Input healpix map, of shape (npix,)
+        or (n_batches, n_pix) if passing batchwise.
+    return: Input healpix map grouped by child pixels, of original_shape
+        (super_npix, n_children) if no batches or
+        (n_batches, super_npix, n_children) if passing batchwise.
+    '''
+    if len(healpix_map.shape) == 1:
+        n_batches: int = 0
+    else:
+        n_batches: int = healpix_map.shape[0]
+
+    input_npix: int = healpix_map.shape[-1]
+    input_nside: int = hp.npix2nside(input_npix)
+    output_npix: int = hp.nside2npix(super_pixel_nside)
+    total_possible_levels: np.int64 = np.log2(input_nside).astype(np.int64)
+    all_levels = []
+
+    n = input_nside
+    for _ in range(total_possible_levels):
+        all_levels.append(n)
+        n //= 2
+
+    assert super_pixel_nside in all_levels, (
+        'Super pixel nside not valid (must be larger an input nside).'
+    )
+    # # get indices of parents for each child through bit shifts
+    # n_right_bit_shifts = 2 * coarse_order
+    # parent_indices = input_ipix >> n_right_bit_shifts
+
+    # get number of downscales to reach desired coarse nside
+    coarse_order: int = (
+        np.log2(input_nside) - np.log2(super_pixel_nside)
+    ).astype(int)
+    n_children: int = 4 ** coarse_order
+    if n_batches == 0:
+        return healpix_map.reshape(output_npix, n_children)
+    else:
+        return healpix_map.reshape(n_batches, output_npix, n_children)
 
 class ParameterMap:
     def __init__(self,

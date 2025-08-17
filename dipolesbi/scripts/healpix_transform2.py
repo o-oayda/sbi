@@ -1,6 +1,7 @@
+from healpy import nside2npix
 import torch
 import matplotlib.pyplot as plt
-from dipolesbi.tools.transforms import HealpixSO4Pyramid, learn_transformation
+from dipolesbi.tools.transforms import HealpixSOPyramid, learn_transformation
 import matplotlib.pyplot as plt
 
 torch.manual_seed(0)
@@ -20,17 +21,17 @@ def make_batch(batch_size: int, Npix: int):
 if __name__ == "__main__":
     # torch.autograd.set_detect_anomaly(True)
     nside = 16
-    model = HealpixSO4Pyramid(nside_fine=nside)
+    model = HealpixSOPyramid(nside_fine=nside)
     data = make_batch(50_000, 12 * nside * nside)
 
     # Pretrain Q_l to increase Gaussianity (diagonal NLL)
     # losses = pretrain(model, data, steps=500, batch_size=64, lr=1e-3)
-    model, history, validation = learn_transformation(model, data)
+    model, history, validation = learn_transformation(model, data, epochs=3)
 
     # Check exact invertibility
-    D = make_batch(4, model.Npix_fine)
-    z, _, _ = model(D)
-    D_rec, _ = model.inverse(z)
+    D = make_batch(4, nside2npix(nside))
+    z, *_ = model(D)
+    D_rec, *_ = model.inverse(z)
     recon_err = (D - D_rec).abs().max().item()
     print(f"Max |reconstruction error|: {recon_err:.3e}")
 
@@ -68,8 +69,8 @@ if __name__ == "__main__":
         return y
 
     # Gather samples
-    D = make_batch(64, model.Npix_fine)
-    _, per_level_quads_after, _ = model(D)   # rotated by learned SO(4), coarse->fine order
+    D = make_batch(64, nside2npix(nside))
+    _, per_level_quads_after, *_ = model(D)   # rotated by learned SO(4), coarse->fine order
     mid_level = min(2, model.levels-1)       # pick a mid level (0=coarsest)
     y_after = per_level_quads_after[mid_level].reshape(-1, 4).detach()  # (B*P,4)
     y_haar = get_level_quads_haar(D, model.levels, mid_level).reshape(-1, 4).detach()
