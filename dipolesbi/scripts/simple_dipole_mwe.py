@@ -1,4 +1,5 @@
 from typing import Optional
+from scipy.stats import norm
 from torch.types import Tensor
 from dipolesbi.scripts.healpix_transform1 import HealpixHaarPyramid
 from dipolesbi.scripts.healpix_transform2 import HealpixSOPyramid, learn_transformation
@@ -28,7 +29,7 @@ LOAD_PATH_TRANS: Optional[str] = None # 'trans_NLE_nside8.pkl'
 # nside 4 ok
 # nside 16 we start to see very significant discrepancy with log z
 # transforming the data seems to make no difference or is slightly worse
-NSIDE = 4
+NSIDE = 8
 NPIX = hp.nside2npix(NSIDE)
 TOTAL_SOURCES = 1_920_000
 MEAN_DENSITY = TOTAL_SOURCES / hp.nside2npix(NSIDE)
@@ -118,6 +119,44 @@ x_rec = unnormalise(x_rec_norm)
 recon_err = (x_rec - x).abs().max().item()
 print(f"Max |reconstruction error|: {recon_err:.3e}")
 
+# INSPECT COEFFS
+for i, (n_parents, coeffs) in enumerate(zip(transform.parents_at_levels, per_level_coeffs)):
+    coarse_coeffs = coeffs[:, :, 0].detach().flatten()
+    detail1_coeffs = coeffs[:, :, 1].detach().flatten()
+    mu_coarse = transform.mu_list[i][0].detach()
+    sigma_coarse = torch.exp(transform.log_sigma_list[i][0]).detach()
+    mu_detail1 = transform.mu_list[i][1].detach()
+    sigma_detail1 = torch.exp(transform.log_sigma_list[i][1]).detach()
+    
+    fig, axs = plt.subplots(1, 2)
+    axs[0].hist(coarse_coeffs, bins=200, color='tab:blue', alpha=0.3, density=True)
+    axs[0].hist(coarse_coeffs, bins=200, color='tab:blue', density=True, histtype='step', label='Coarse')
+    axs[1].hist(detail1_coeffs, bins=200, color='tab:orange', alpha=0.3, density=True)
+    axs[1].hist(detail1_coeffs, bins=200, color='tab:orange', density=True, histtype='step', label='Detail 1')
+
+    x = np.linspace(-5, 5, 10000)
+    y_coarse = norm.pdf(x, loc=mu_coarse, scale=sigma_coarse)
+    axs[0].plot(x, y_coarse, c='tab:red', label='Normal (coarse fit)')
+    y_fine = norm.pdf(x, loc=mu_detail1, scale=sigma_detail1)
+    axs[1].plot(x, y_fine, c='tab:red', label='Normal (detail1 fit)')
+
+    fig.legend()
+    plt.show()
+
+# MOCK TRUE SAMPLE
+x0 = model.generate_dipole(*theta0)
+x0_flat = x0.flatten()
+mask_map = ~np.isnan(x0_flat)
+x0_truncated = x0_flat[mask_map]
+x0_truncated_batchwise = x0_truncated.reshape(1, len(x0_truncated))
+z0_truncated, *_ = transform.forward(normalise(torch.as_tensor(x0_truncated_batchwise)))
+z0_truncated = z0_truncated.detach().numpy()
+
+hp.projview(x0_flat, nest=True)
+plt.show()
+hp.projview(z0_truncated.squeeze(), nest=True)
+plt.show()
+
 # TRAIN NLEs
 raw_data_simulator = simulator
 transformed_simulator = Simulator(prior, model.generate_dipole)
@@ -128,12 +167,17 @@ if LOAD_PATH_RAW is not None:
     raw_inferer.load_posterior(LOAD_PATH_RAW)
 else:
 # inferer.load_posterior('quicktest_NLE_posterior.pkl')
+    # Cut some x
+    raw_inferer.simulator.x = raw_inferer.simulator.x[:3000] # type: ignore
+    raw_inferer.simulator.theta = raw_inferer.simulator.theta[:3000] # type: ignore
     raw_inferer.run_healpix_sbi(
         estimator_type='NLE', 
         load_simulations_in_vram=False, 
         training_device='cuda',
         nan_handle_method='truncate',
-        z_score_x='structured'
+        z_score_x='structured',
+        n_rounds=3,
+        x0_multi=torch.as_tensor(x0_truncated)
     )
     raw_inferer.posterior.to('cpu') # type: ignore
     raw_inferer.plot_loss_curve()
@@ -152,28 +196,14 @@ else:
     transformed_inferer.posterior.to('cpu') # type: ignore
     transformed_inferer.plot_loss_curve()
 
-# MOCK TRUE SAMPLE
-x0 = model.generate_dipole(*theta0)
-x0_flat = x0.flatten()
-mask_map = ~np.isnan(x0_flat)
-x0_truncated = x0_flat[mask_map]
-x0_truncated_batchwise = x0_truncated.reshape(1, len(x0_truncated))
-z0_truncated, *_ = transform.forward(normalise(torch.as_tensor(x0_truncated_batchwise)))
-z0_truncated = z0_truncated.detach().numpy()
-
-hp.projview(x0_flat, nest=True)
-plt.show()
-hp.projview(z0_truncated.squeeze(), nest=True)
-plt.show()
-
-# raw_samples = raw_inferer.sample_amortized_posterior(
-#     torch.as_tensor(x0_truncated),
-#     n_samps=10_000
-# )
-# transformed_samples = transformed_inferer.sample_amortized_posterior(
-#     torch.as_tensor(z0_truncated),
-#     n_samps=10_000
-# )
+raw_samples = raw_inferer.sample_amortized_posterior(
+    torch.as_tensor(x0_truncated),
+    n_samps=10_000
+)
+transformed_samples = transformed_inferer.sample_amortized_posterior(
+    torch.as_tensor(z0_truncated),
+    n_samps=10_000
+)
 
 def raw_lnlike(theta: Tensor, x: Tensor) -> Tensor:
     return raw_inferer.posterior.potential(theta, x) - prior.log_prob(theta)
@@ -269,29 +299,29 @@ for i, row in enumerate(results):
 
 print(tabulate(results, headers=headers, tablefmt="github"))
 
-# raw_sbi_samples = MCSamples(
-#     samples=raw_samples.detach().cpu().numpy(),
-#     names=prior.prior_names,
-#     labels=prior.prior_names
-# )
-# transformed_sbi_samples = MCSamples(
-#     samples=transformed_samples.detach().cpu().numpy(),
-#     names=prior.prior_names,
-#     labels=prior.prior_names
-# )
-# classic_samples = MCSamples(
-#     samples=classic_inferer._samples, # type: ignore
-#     names=prior.prior_names,
-#     labels=prior.prior_names,
-#     sampler='nested'
-# )
-# g = plots.get_subplot_plotter()
-# g.triangle_plot(
-#     [raw_sbi_samples, transformed_sbi_samples, classic_samples],
-#     filled=True,
-#     markers=theta0.flatten(),
-#     marker_args={'lw': 1}, # type: ignore
-#     legend_labels=['Raw SBI samples', 'Transformed SBI samples', 'Classic samples']
-# )
-# plt.show()
+raw_sbi_samples = MCSamples(
+    samples=raw_samples.detach().cpu().numpy(),
+    names=prior.prior_names,
+    labels=prior.prior_names
+)
+transformed_sbi_samples = MCSamples(
+    samples=transformed_samples.detach().cpu().numpy(),
+    names=prior.prior_names,
+    labels=prior.prior_names
+)
+classic_samples = MCSamples(
+    samples=classic_inferer._samples, # type: ignore
+    names=prior.prior_names,
+    labels=prior.prior_names,
+    sampler='nested'
+)
+g = plots.get_subplot_plotter()
+g.triangle_plot(
+    [raw_sbi_samples, transformed_sbi_samples, classic_samples],
+    filled=True,
+    markers=theta0.flatten(),
+    marker_args={'lw': 1}, # type: ignore
+    legend_labels=['Raw SBI samples', 'Transformed SBI samples', 'Classic samples']
+)
+plt.show()
 

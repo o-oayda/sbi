@@ -8,6 +8,7 @@ from torch.utils.data import Dataset, DataLoader, random_split
 import math
 import numpy as np
 from dipolesbi.tools.utils import softplus_pos
+import torch.nn.functional as F
 
 
 class LogAffineTransform(Transform):
@@ -55,6 +56,32 @@ class LearnableSOn(torch.nn.Module):
         S = self.A - self.A.T # subtracting transpose gives skew-sym. (any nxn)
         return torch.matrix_exp(S) # Q ∈ SO(4)
 
+class LearnableNormaliser(torch.nn.Module):
+    def __init__(self, init_eps: float = 0.001) -> None:
+        super().__init__()
+        self.log_kappa = torch.nn.Parameter(torch.zeros(1))
+        self.log_eps = torch.nn.Parameter(torch.log(torch.as_tensor(init_eps)))
+        self.beta0 = torch.nn.Parameter(torch.zeros(1))
+
+    def forward(
+            self, 
+            coarse_coefficients: Tensor, 
+            detail_coefficients: Tensor
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        kappa = torch.exp(self.log_kappa)
+        eps = torch.exp(self.log_eps)
+        a_pos = F.softplus(coarse_coefficients)
+        s = torch.sqrt(eps + kappa * a_pos)
+        m = self.beta0 + torch.ones_like(coarse_coefficients) # (n_batches, n_pix)
+
+        a_norm = coarse_coefficients
+        d_norm = (detail_coefficients - m.unsqueeze(-1)) / s.unsqueeze(-1) # (n_batches, n_pix, n_coefficients)
+
+        n_detail_coefficients = detail_coefficients.shape[-1]
+        logdet = - n_detail_coefficients * torch.sum(torch.log(s + 1e-12), dim=1) # (n_batches,)
+
+        return a_norm, d_norm, logdet
+
 class HealpixSOPyramid(torch.nn.Module):
     def __init__(
             self,
@@ -75,7 +102,7 @@ class HealpixSOPyramid(torch.nn.Module):
                 reversed([2**n for n in range(self.n_downscales+1)])
             )
         else:
-            assert nside_at_levels[-1] == 1, 'Final nside must be 1.'
+            # assert nside_at_levels[-1] == 1, 'Final nside must be 1.'
             assert nside_at_levels[0] == nside_fine, (
                 'First nside must be equal to input map nside.'
             )
@@ -83,6 +110,9 @@ class HealpixSOPyramid(torch.nn.Module):
             assert nside_ok.all(), 'Invalid nside in nside_at_levels.'
 
             self.level_nsides = nside_at_levels
+
+        self.out_nside = self.level_nsides[-1]
+        self.out_npix = nside2npix(self.out_nside)
             
         self.downscale_factors: list[int] = [
             nside2npix(in_nside) // nside2npix(out_nside)
@@ -112,6 +142,11 @@ class HealpixSOPyramid(torch.nn.Module):
                 for n in self.downscale_factors
             ]
         )
+        # self.normalisation_couplers = torch.nn.ModuleList(
+        #     [
+        #         LearnableNormaliser() for _ in self.downscale_factors
+        #     ]
+        # )
         # self.alpha_list = torch.nn.ParameterList(
         #     [
         #         torch.nn.Parameter(torch.zeros(n, dtype=self.dtype))
@@ -128,6 +163,15 @@ class HealpixSOPyramid(torch.nn.Module):
     @property
     def levels(self):
         return len(self.level_nsides) - 1  # number of downsamplings
+
+    @property
+    def parents_at_levels(self):
+        P_levels = []
+        cur = self.npix_fine
+        for dscale_factor in self.downscale_factors:
+            P_levels.append(cur // dscale_factor)
+            cur //= dscale_factor
+        return P_levels
 
     def forward(self, x: torch.Tensor) -> tuple[Tensor, list, list, Tensor]:
         """
@@ -192,11 +236,11 @@ class HealpixSOPyramid(torch.nn.Module):
             downstream_coefficients = a
             cur_npix = P
 
-        a_coarse = downstream_coefficients # (batches, 12)
+        a_coarse = downstream_coefficients # (batches, out_npix)
 
         # Build z: keep a_coarse, then details from coarse->fine
         # (drop the a's there)
-        z_parts = [a_coarse.reshape(batches, -1)]  # list[ (B, 12) ]
+        z_parts = [a_coarse.reshape(batches, -1)]  # list[ (B, out_npix) ]
         for y in reversed(coefficients_fine2coarse): # now coarse->fine
             z_parts.append(y[...,1:].reshape(batches, -1))
         z = torch.cat(z_parts, dim=1)
@@ -212,16 +256,12 @@ class HealpixSOPyramid(torch.nn.Module):
         assert npix == self.npix_fine
 
         # parents per fine->coarse level
-        P_levels = []
-        cur = self.npix_fine
-        for dscale_factor in self.downscale_factors:
-            P_levels.append(cur // dscale_factor)
-            cur //= dscale_factor
+        P_levels = self.parents_at_levels
 
         # parse z
         # z = [a_coarse | d_coarse ... d_fine ]
-        offset = 12
-        a = z[:, :offset]  # (B,12)
+        offset = self.out_npix
+        a = z[:, :offset]  # (B, out_npix)
 
         details_coarse2fine = []
         # iterate from high resolution to low resolution

@@ -73,11 +73,14 @@ class Simulator:
         )
         self.theta, self.x = simulate_for_sbi(
             simulator=sbi_processed_simulator,
-            proposal=self.prior,
             num_workers=n_workers,
             num_simulations=n_simulations,
-            **kwargs
+            **{
+                'proposal': self.prior,
+                **kwargs # possibility of overwriting prior proposal in kwargs
+            }
         )
+        print(f'Made {n_simulations} simulations.')
         return self.theta, self.x
 
     def _simulation_is_loaded(self):

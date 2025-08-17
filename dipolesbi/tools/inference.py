@@ -37,6 +37,9 @@ class LikelihoodFreeInferer:
             training_device: str = 'cuda',
             load_simulations_in_vram: bool = False,
             simulation_fraction: float = 1.0,
+            n_rounds: int = 1,
+            x0_multi: Optional[Tensor] = None,
+            multiround_workers: int = 32,
             nan_handle_method: Literal['fill', 'truncate'] = 'fill',
             nan_fill_value: float = 0.,
             z_score_x: Literal['structured', 'independent'] | None = None
@@ -51,6 +54,16 @@ class LikelihoodFreeInferer:
         assert isinstance(prior, CustomPriorWrapper), (
             "The simulator's prior has not been processed by sbi."
         )
+
+        assert n_rounds >= 1, 'Must specify at least 1 round of inference.'
+        if n_rounds > 1:
+            assert self.simulator.simulation_model is not None, (
+                'In multi-round inference, the simulator must have a data-generating '
+                'model to allow inference on subsequent rounds.'
+            )
+            assert x0_multi is not None, (
+                'In multi-round inference, a ground observation x0_multi must be set.'
+            )
         
         self.n_train_indices = int(simulation_fraction * len(x))
         print(
@@ -124,30 +137,48 @@ class LikelihoodFreeInferer:
 
         # by specifying data_device = 'cpu', we can train on the GPU
         # while transferring data from host memory to VRAM
-        self.inference = inference.append_simulations(
-            x=x[:self.n_train_indices],
-            theta=theta[:self.n_train_indices],
-            data_device='cpu' if not load_simulations_in_vram else 'cuda'
-        )
-        self.density_estimator = self.inference.train(
-            show_train_summary=True,
-            stop_after_epochs=30
-        )
+        posteriors = []
+        for i in range(n_rounds):
+            print(f'Starting round {i} of inference...')
+            n_sims = x.shape[0]
+            if i > 0:
+                # again because I keep getting shat on by this fucking library
+                prior.to('cpu')
+                proposal.to('cpu')
 
-        if estimator_type == 'NPE':
-            self.posterior = inference.build_posterior(
-                self.density_estimator, # type: ignore
-                prior=prior
+                theta, x = self.simulator.make_batch_simulations(
+                    n_simulations=n_sims, # set from input sim count
+                    n_workers=multiround_workers,
+                    proposal=proposal # type: ignore
+                )
+            self.inference = inference.append_simulations(
+                x=x[:self.n_train_indices],
+                theta=theta[:self.n_train_indices],
+                data_device='cpu' if not load_simulations_in_vram else 'cuda'
             )
-        elif estimator_type in ['NLE', 'NRE']:
-            self.posterior = inference.build_posterior(
-                density_estimator=self.density_estimator, # type: ignore
-                prior=prior,
-                sample_with='mcmc',
-                mcmc_method='slice_np_vectorized'
+            self.density_estimator = self.inference.train(
+                show_train_summary=True,
+                stop_after_epochs=30
             )
-        else:
-            raise Exception(f'Unknown estimator type: {estimator_type}')
+
+            if estimator_type == 'NPE':
+                self.posterior = inference.build_posterior(
+                    self.density_estimator, # type: ignore
+                    prior=prior
+                )
+            elif estimator_type in ['NLE', 'NRE']:
+                self.posterior = inference.build_posterior(
+                    density_estimator=self.density_estimator, # type: ignore
+                    prior=prior,
+                    sample_with='mcmc',
+                    mcmc_method='slice_np_vectorized'
+                )
+            else:
+                raise Exception(f'Unknown estimator type: {estimator_type}')
+
+            if n_rounds > 1:
+                posteriors.append(self.posterior)
+                proposal = self.posterior.set_default_x(x0_multi) # type: ignore
 
         print(self.posterior)
 
