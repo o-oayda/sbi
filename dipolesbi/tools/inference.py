@@ -34,6 +34,7 @@ class LikelihoodFreeInferer:
 
     def run_healpix_sbi(self,
             estimator_type: Literal['NPE', 'NLE', 'NRE'] = 'NPE',
+            flow_type: Literal['maf', 'nsf'] = 'maf',
             training_device: str = 'cuda',
             load_simulations_in_vram: bool = False,
             simulation_fraction: float = 1.0,
@@ -90,7 +91,7 @@ class LikelihoodFreeInferer:
                 out_channels_per_layer=[2, 4, 8, 16, 32, 64]
             )
             neural_posterior = posterior_nn(
-                model="maf",
+                model=flow_type,
                 embedding_net=embedding_net,
                 z_score_x=z_score_x
             )
@@ -105,7 +106,7 @@ class LikelihoodFreeInferer:
             #     'be sure to keep nside low'
             # )
             neural_posterior = likelihood_nn(
-                model='maf',
+                model=flow_type,
                 z_score_x=z_score_x,
                 z_score_theta='independent'
             )
@@ -139,7 +140,7 @@ class LikelihoodFreeInferer:
         # while transferring data from host memory to VRAM
         posteriors = []
         for i in range(n_rounds):
-            print(f'Starting round {i} of inference...')
+            print(f'Starting round {i+1} of inference...')
             n_sims = x.shape[0]
             if i > 0:
                 # again because I keep getting shat on by this fucking library
@@ -149,7 +150,8 @@ class LikelihoodFreeInferer:
                 theta, x = self.simulator.make_batch_simulations(
                     n_simulations=n_sims, # set from input sim count
                     n_workers=multiround_workers,
-                    proposal=proposal # type: ignore
+                    proposal=proposal, # type: ignore
+                    simulation_batch_size=100
                 )
             self.inference = inference.append_simulations(
                 x=x[:self.n_train_indices],

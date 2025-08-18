@@ -23,6 +23,8 @@ from dipolesbi.tools.transforms import AnscombeTransform
 
 LOAD_PATH_RAW: Optional[str] = None # 'raw_NLE_nside8.pkl'
 LOAD_PATH_TRANS: Optional[str] = None # 'trans_NLE_nside8.pkl'
+TRAINING_DEVICE: str = 'mps'
+N_WORKERS: int = 12
 
 ## ---------------------------------------------------
 ## MODEL PARAMETERS
@@ -56,7 +58,7 @@ if EQUATOR_MASK != 0.:
 simulator = Simulator(prior, model.generate_dipole)
 theta, x = simulator.make_batch_simulations(
     n_simulations=50_000, 
-    n_workers=32,
+    n_workers=N_WORKERS,
     simulation_batch_size=100
 )
 
@@ -173,11 +175,12 @@ else:
     raw_inferer.run_healpix_sbi(
         estimator_type='NLE', 
         load_simulations_in_vram=False, 
-        training_device='cuda',
+        training_device=TRAINING_DEVICE,
         nan_handle_method='truncate',
         z_score_x='structured',
         n_rounds=3,
-        x0_multi=torch.as_tensor(x0_truncated)
+        x0_multi=torch.as_tensor(x0_truncated),
+        multiround_workers=N_WORKERS
     )
     raw_inferer.posterior.to('cpu') # type: ignore
     raw_inferer.plot_loss_curve()
@@ -189,9 +192,10 @@ else:
     transformed_inferer.run_healpix_sbi(
         estimator_type='NLE', 
         load_simulations_in_vram=False, 
-        training_device='cuda',
+        training_device=TRAINING_DEVICE,
         nan_handle_method='truncate',
-        z_score_x=None
+        z_score_x=None,
+        flow_type='nsf'
     )
     transformed_inferer.posterior.to('cpu') # type: ignore
     transformed_inferer.plot_loss_curve()

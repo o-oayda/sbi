@@ -9,6 +9,7 @@ launch.json
 !setup_pytorch.sh
 simulations/*
 ultranest_logs/*
+results/*
 
 !dipolesbi/catwise/0p5_17p0/data/**
 !dipolesbi/catwise/0p7_16p8/data/**
