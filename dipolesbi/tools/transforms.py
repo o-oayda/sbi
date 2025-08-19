@@ -86,11 +86,29 @@ class IntShear4(torch.nn.Module):
         self.pairs = pairs
         self.k_raw = torch.nn.Parameter(torch.zeros(len(pairs)))  # real params
         self.k_max = float(k_max)
+        self.k_int_buffer = None
+
+    def _hysteresis_round(self, x: Tensor, prev_int=None, margin=0.1):
+        '''
+        Try to mitigate nll curve spikes during training due to integer flipping.
+        '''
+        # x: real value; prev_int: last integer used (or None)
+        x_det = x.detach()
+        base = torch.round(x_det)
+        if prev_int is None:
+            return (x - x_det) + base  # standard STE at start
+        # Keep the previous integer unless we exceed a margin beyond the boundary
+        delta = x_det - prev_int
+        update = torch.where(delta > 0.5 + margin, prev_int + 1,
+                 torch.where(delta < -0.5 - margin, prev_int - 1, prev_int))
+        return (x - x_det) + update
 
     def _ints(self):
         # tanh-cap + straight-through round to get small integers
         k_real = self.k_max * torch.tanh(self.k_raw)
-        k_int  = (k_real - k_real.detach()) + torch.round(k_real.detach())
+        k_int = self._hysteresis_round(k_real, prev_int=self.k_int_buffer, margin=0.2)
+        self.k_int_buffer = k_int.detach()
+        # k_int  = (k_real - k_real.detach()) + torch.round(k_real.detach())
         return k_int
 
     def matrix(self, dtype=torch.float32, device=None):
@@ -190,38 +208,26 @@ class HealpixSOPyramid(torch.nn.Module):
                 IntShear4(pairs=[(1,0),(2,1),(3,2),(2,0)], k_max=3)
                 for _ in self.downscale_factors
             ]
+        )        
+
+        # 1) Coarse (final out_npix entries): Negative Binomial params
+        #    Store as (r, p) in a stable way: logr, logitp
+        #    Shapes: (1, out_npix) so they broadcast over batch
+        self.nb_logr   = torch.nn.Parameter(
+            torch.zeros(1, self.out_npix, dtype=self.dtype)
+        )
+        self.nb_logitp = torch.nn.Parameter(
+            torch.zeros(1, self.out_npix, dtype=self.dtype)
         )
 
-        # # Gaussian stats for loss function, one (mu, sigma) per level
-        self.mu_list = torch.nn.ParameterList(
+        # 2) Details per level: two-sided Discrete Laplace scale b_ell > 0
+        #    (a) simplest: 1 scalar per level (shared across all parents/channels)
+        self.logb_details = torch.nn.ParameterList(
             [
-                torch.nn.Parameter(torch.zeros(n, dtype=self.dtype))
-                for n in self.downscale_factors
+                torch.nn.Parameter(torch.zeros((), dtype=self.dtype))  # scalar per level
+                for _ in self.downscale_factors
             ]
         )
-        self.log_sigma_list = torch.nn.ParameterList(
-            [
-                torch.nn.Parameter(torch.zeros(n, dtype=self.dtype))
-                for n in self.downscale_factors
-            ]
-        )
-        # self.normalisation_couplers = torch.nn.ModuleList(
-        #     [
-        #         LearnableNormaliser() for _ in self.downscale_factors
-        #     ]
-        # )
-        # self.alpha_list = torch.nn.ParameterList(
-        #     [
-        #         torch.nn.Parameter(torch.zeros(n, dtype=self.dtype))
-        #         for n in self.downscale_factors
-        #     ]
-        # )
-        # self.nu_list = torch.nn.ParameterList(
-        #     [
-        #         torch.nn.Parameter(30 * torch.rand(n, dtype=self.dtype))
-        #         for n in self.downscale_factors
-        #     ]
-        # )
 
     @property
     def levels(self):
@@ -236,7 +242,9 @@ class HealpixSOPyramid(torch.nn.Module):
             cur //= dscale_factor
         return P_levels
 
-    def forward(self, x: torch.Tensor) -> tuple[Tensor, list, list, Tensor]:
+    
+
+    def forward(self, x: torch.Tensor) -> tuple[Tensor, list[Tensor], list, Tensor]:
         """
         :param x: (n_batches, n_pix) in nest ordering
         :returns:
@@ -251,9 +259,9 @@ class HealpixSOPyramid(torch.nn.Module):
         downstream_coefficients = x
         cur_npix = self.npix_fine
 
-        coefficients_fine2coarse = [] 
-        a_list = []
-        logdets_at_each_level = []
+        coefficients_fine2coarse: list[Tensor] = [] 
+        a_list: list[Tensor] = []
+        logdets_at_each_level: list[float] = []
 
         # LOGIC
         # - for each healpix map, group the pixels corresponding to the children
@@ -393,18 +401,48 @@ def skew_gaussian_nll(y, mu, log_sigma, alpha):
     nll = 0.5 * r ** 2 + log_sigma - torch.special.log_ndtr(alpha * r)
     return nll.sum(dim=-1)
 
-def discretised_nll(y, nb_logr, nb_logitp, log_b, eps=1e-12):
+def discretised_loglike(y, nb_logr, nb_logitp, log_b) -> Tensor:
+    '''
+    :return: Batchwise loss, shape (n_batches,).
+    '''
     # y coefficients fine to coarse
     a_final = y[-1][:, :, 0] # (batch, pix, coeffs)
+    n_levels = len(y)
     
-    r = torch.exp(nb_logr)            # (1,12)
-    p = torch.sigmoid(nb_logitp)      # (1,12)
-    logp = log_negbin_pmf(a_final, r, p).sum(dim=1)  # (B,)
+    r = torch.exp(nb_logr)            # (1, out_npix)
+    p = torch.sigmoid(nb_logitp)      # (1, out_npix)
+    coarse_logp = log_negbin_pmf(a_final, r, p).sum(dim=1)  # (B,)
 
+    detail_logps = []
+    for level in range(n_levels):
+        d = y[level][..., 1:]          # (B, Np, C) typically C=3
+        # Vectorised over channels: sum over parents then channels
+        # log_discrete_laplace should broadcast a scalar log_b[level]
+        lp = log_discrete_laplace(d, log_b[level])  # (B, Np, C)
+        detail_logps.append(lp.sum(dim=(1, 2)))     # (B,)
 
+    totlogp_per_batch = coarse_logp + torch.stack(detail_logps, dim=1).sum(dim=1)  # (B,)
+    return totlogp_per_batch
 
+    # for level in range(n_levels):
+    #     logp = torch.zeros(())
+    #     level_coefficients = y[level]
+    #     detail_coefficients = level_coefficients[:, :, 1:] # (batch, pix, ncoeffs)
+    #     n_coefficients = detail_coefficients.shape[-1]
+    #
+    #     for i in range(n_coefficients):
+    #         logp += log_discrete_laplace(
+    #             detail_coefficients[..., i], log_b[level]
+    #         ).sum(dim=1)
+    #
+    #     level_losses.append(logp)
+    #
+    # losses = torch.stack(level_losses, dim=1) # (batches, nlevels) 
+    # all_losses = torch.hstack([coarse_logp.unsqueeze(1), losses]) # (batches, nlevels+1)
+    # totloss_per_batch = all_losses.sum(dim=1) # (batches,), i.e. do total across levels
+    # return totloss_per_batch
 
-def log_negbin_pmf(x, r, p, eps=1e-12):
+def log_negbin_pmf(x: Tensor, r: Tensor, p: Tensor, eps: float = 1e-12) -> Tensor:
     # x: (B, n), integers >= 0; r>0, 0<p<1 (can be broadcast)
     x = torch.clamp(x, min=0).to(torch.float32)
     r = torch.clamp(r, min=eps)
@@ -486,13 +524,14 @@ def learn_transformation(
         shuffle=True
     )
 
-    opt = torch.optim.Adam(
-        # list(model.SO_matrices.parameters())
-        list(model.shears.parameters())
-      + list(model.mu_list)
-      + list(model.log_sigma_list),
-        lr=lr
-    )
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    # opt = torch.optim.Adam(
+    #     # list(model.SO_matrices.parameters())
+    #     list(model.shears.parameters())
+    #   + list(model.mu_list)
+    #   + list(model.log_sigma_list),
+    #     lr=lr
+    # )
 
     best_val = float("inf")
     best_state = None
@@ -506,12 +545,19 @@ def learn_transformation(
         with torch.no_grad():
             for D in loader:
                 _, per_level_quads, *_ = model(D)   # list of (B, P_l, 4)
-                loss = compute_nll(
-                    per_level_quads, 
-                    distribution='gaussian',
-                    mu=model.mu_list, 
-                    log_sigma=model.log_sigma_list,
+                logp = discretised_loglike(
+                    per_level_quads,
+                    nb_logr=model.nb_logr,
+                    nb_logitp=model.nb_logitp,
+                    log_b=model.logb_details
                 )
+                loss = (-logp).mean()
+                # loss = compute_nll(
+                #     per_level_quads, 
+                #     distribution='gaussian',
+                #     mu=model.mu_list, 
+                #     log_sigma=model.log_sigma_list,
+                # )
                 bs = D.size(0)
                 tot += float(loss) * bs
                 cnt += bs
@@ -527,12 +573,19 @@ def learn_transformation(
         model.train()
         for D in training_loader:
             _, per_level_quads, *_ = model(D)
-            loss = compute_nll(
-                per_level_quads, 
-                distribution='gaussian',
-                mu=model.mu_list, 
-                log_sigma=model.log_sigma_list,
+            logp = discretised_loglike(
+                per_level_quads,
+                nb_logr=model.nb_logr,
+                nb_logitp=model.nb_logitp,
+                log_b=model.logb_details
             )
+            loss = (-logp).mean()
+            # loss = compute_nll(
+            #     per_level_quads, 
+            #     distribution='gaussian',
+            #     mu=model.mu_list, 
+            #     log_sigma=model.log_sigma_list,
+            # )
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()

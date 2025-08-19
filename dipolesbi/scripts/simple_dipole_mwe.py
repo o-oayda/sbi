@@ -31,7 +31,7 @@ N_WORKERS: int = 12
 # nside 4 ok
 # nside 16 we start to see very significant discrepancy with log z
 # transforming the data seems to make no difference or is slightly worse
-NSIDE = 32
+NSIDE = 8
 NPIX = hp.nside2npix(NSIDE)
 TOTAL_SOURCES = 1_920_000
 MEAN_DENSITY = TOTAL_SOURCES / hp.nside2npix(NSIDE)
@@ -102,14 +102,16 @@ x_normalised = normalise(x)
 transform, history, validation = learn_transformation(
     transform, 
     data=x_normalised, 
-    epochs=10
+    epochs=100
 )
 # losses = pretrain(transform, data=(x - mu) / t_std, steps=500, batch_size=64, lr=1e-3)
 plt.plot(history['train'])
 plt.title('Training loss')
+plt.yscale('log')
 plt.show()
 plt.plot(history['val'])
 plt.title('Validation loss')
+plt.yscale('log')
 plt.show()
 
 # CHECK RECONSTRUCTION ERROR
@@ -127,22 +129,24 @@ print(f"Max |reconstruction error|: {recon_err:.3e}")
 for i, (n_parents, coeffs) in enumerate(zip(transform.parents_at_levels, per_level_coeffs)):
     coarse_coeffs = coeffs[:, :, 0].detach().flatten()
     detail1_coeffs = coeffs[:, :, 1].detach().flatten()
-    mu_coarse = transform.mu_list[i][0].detach()
-    sigma_coarse = torch.exp(transform.log_sigma_list[i][0]).detach()
-    mu_detail1 = transform.mu_list[i][1].detach()
-    sigma_detail1 = torch.exp(transform.log_sigma_list[i][1]).detach()
+    # mu_coarse = transform.mu_list[i][0].detach()
+    # sigma_coarse = torch.exp(transform.log_sigma_list[i][0]).detach()
+    # mu_detail1 = transform.mu_list[i][1].detach()
+    # sigma_detail1 = torch.exp(transform.log_sigma_list[i][1]).detach()
     
     fig, axs = plt.subplots(1, 2)
-    axs[0].hist(coarse_coeffs, bins=200, color='tab:blue', alpha=0.3, density=True)
-    axs[0].hist(coarse_coeffs, bins=200, color='tab:blue', density=True, histtype='step', label='Coarse')
-    axs[1].hist(detail1_coeffs, bins=200, color='tab:orange', alpha=0.3, density=True)
-    axs[1].hist(detail1_coeffs, bins=200, color='tab:orange', density=True, histtype='step', label='Detail 1')
+    bins_coarse = np.arange(coarse_coeffs.min().numpy(), coarse_coeffs.max().numpy())
+    bins_detail1 = np.arange(detail1_coeffs.min().numpy(), detail1_coeffs.max().numpy())
+    axs[0].hist(coarse_coeffs, bins=bins_coarse, color='tab:blue', alpha=0.3, density=True)
+    axs[0].hist(coarse_coeffs, bins=bins_coarse, color='tab:blue', density=True, histtype='step', label='Coarse')
+    axs[1].hist(detail1_coeffs, bins=bins_detail1, color='tab:orange', alpha=0.3, density=True)
+    axs[1].hist(detail1_coeffs, bins=bins_detail1, color='tab:orange', density=True, histtype='step', label='Detail 1')
 
-    xs = np.linspace(-5, 5, 10000)
-    y_coarse = norm.pdf(xs, loc=mu_coarse, scale=sigma_coarse)
-    axs[0].plot(xs, y_coarse, c='tab:red', label='Normal (coarse fit)')
-    y_fine = norm.pdf(xs, loc=mu_detail1, scale=sigma_detail1)
-    axs[1].plot(xs, y_fine, c='tab:red', label='Normal (detail1 fit)')
+    # xs = np.linspace(-5, 5, 10000)
+    # y_coarse = norm.pdf(xs, loc=mu_coarse, scale=sigma_coarse)
+    # axs[0].plot(xs, y_coarse, c='tab:red', label='Normal (coarse fit)')
+    # y_fine = norm.pdf(xs, loc=mu_detail1, scale=sigma_detail1)
+    # axs[1].plot(xs, y_fine, c='tab:red', label='Normal (detail1 fit)')
 
     fig.legend()
     plt.show()
@@ -196,7 +200,7 @@ else:
         load_simulations_in_vram=False, 
         training_device=TRAINING_DEVICE,
         nan_handle_method='truncate',
-        z_score_x=None,
+        z_score_x='structured',
         flow_type='nsf'
     )
     transformed_inferer.posterior.to('cpu') # type: ignore
@@ -226,7 +230,7 @@ def transformed_lnlike(theta: Tensor, z: Tensor) -> Tensor:
         transformed_inferer.posterior.potential(theta, z)
       - prior.log_prob(theta)
       - logabsdet.detach()
-      - (torch.log(t_std) * torch.ones(z.shape[-1])).sum(dim=-1) # from normalisation
+      # - (torch.log(t_std) * torch.ones(z.shape[-1])).sum(dim=-1) # from normalisation
       # - 0.5 * torch.log(x_original + 0.375).sum(dim=-1) # from Anscombe
     )
 
