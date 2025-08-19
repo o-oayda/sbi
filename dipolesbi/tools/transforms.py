@@ -393,6 +393,17 @@ def skew_gaussian_nll(y, mu, log_sigma, alpha):
     nll = 0.5 * r ** 2 + log_sigma - torch.special.log_ndtr(alpha * r)
     return nll.sum(dim=-1)
 
+def discretised_nll(y, nb_logr, nb_logitp, log_b, eps=1e-12):
+    # y coefficients fine to coarse
+    a_final = y[-1][:, :, 0] # (batch, pix, coeffs)
+    
+    r = torch.exp(nb_logr)            # (1,12)
+    p = torch.sigmoid(nb_logitp)      # (1,12)
+    logp = log_negbin_pmf(a_final, r, p).sum(dim=1)  # (B,)
+
+
+
+
 def log_negbin_pmf(x, r, p, eps=1e-12):
     # x: (B, n), integers >= 0; r>0, 0<p<1 (can be broadcast)
     x = torch.clamp(x, min=0).to(torch.float32)
