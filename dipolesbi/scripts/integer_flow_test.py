@@ -1,5 +1,6 @@
 # %%
 import os
+from healpy import nside2npix
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
@@ -8,6 +9,12 @@ from sklearn import datasets
 from torch.utils.data import Dataset, DataLoader
 import torch.nn as nn
 import torch.nn.functional as F
+from torch import Tensor
+
+from dipolesbi.tools.maps import SimpleDipoleMap
+from dipolesbi.tools.priors import DipolePrior
+from dipolesbi.tools.simulator import Simulator
+from dipolesbi.tools.transforms import MapDataset
 
 class Digits(Dataset):
     """Scikit-Learn Digits dataset."""
@@ -49,7 +56,14 @@ def log_min_exp(a, b, epsilon=1e-8):
 
     return y
 
-def log_integer_probability(x, mean, logscale):
+def log_integer_probability(
+        x: Tensor, 
+        mean: nn.Parameter, 
+        logscale: nn.Parameter
+) -> Tensor:
+    '''
+    Eq. (8) in hoogeboom+19.
+    '''
     scale = torch.exp(logscale)
 
     logp = log_min_exp(
@@ -65,7 +79,7 @@ class RoundStraightThrough(torch.autograd.Function):
         super().__init__()
 
     @staticmethod
-    def forward(ctx, input):
+    def forward(ctx, input: Tensor) -> Tensor:
         rounded = torch.round(input, out=None)
         return rounded
 
@@ -226,15 +240,15 @@ def samples_generated(name, data_loader, extra_name=''):
     x = model_best.sample(num_x * num_y)
     x = x.detach().numpy()
 
-    fig, ax = plt.subplots(num_x, num_y)
-    for i, ax in enumerate(ax.flatten()):
-        plottable_image = np.reshape(x[i], (8, 8))
-        ax.imshow(plottable_image, cmap='gray')
-        ax.axis('off')
-
-    plt.savefig(name + '_generated_images' + extra_name + '.pdf', bbox_inches='tight')
-    plt.close()
-
+    # fig, ax = plt.subplots(num_x, num_y)
+    # for i, ax in enumerate(ax.flatten()):
+    #     plottable_image = np.reshape(x[i], (8, 8))
+    #     ax.imshow(plottable_image, cmap='gray')
+    #     ax.axis('off')
+    #
+    # plt.savefig(name + '_generated_images' + extra_name + '.pdf', bbox_inches='tight')
+    # plt.close()
+    #
 
 def plot_curve(name, nll_val):
     plt.plot(np.arange(len(nll_val)), nll_val, linewidth='3')
@@ -254,7 +268,8 @@ def training(name, max_patience, num_epochs, model, optimizer, training_loader, 
         # TRAINING
         model.train()
         for indx_batch, batch in enumerate(training_loader):
-            
+            # print(batch.shape)
+            # print(batch)
             loss = model.forward(batch)
 
             optimizer.zero_grad()
@@ -288,90 +303,110 @@ def training(name, max_patience, num_epochs, model, optimizer, training_loader, 
     return nll_val
 # %%
 
-train_data = Digits(mode='train')
-val_data = Digits(mode='val')
-test_data = Digits(mode='test')
+if __name__ == '__main__':
+    train_data = Digits(mode='train')
+    val_data = Digits(mode='val')
+    test_data = Digits(mode='test')
+    
+    training_loader = DataLoader(train_data, batch_size=64, shuffle=True)
+    val_loader = DataLoader(val_data, batch_size=64, shuffle=False)
+    test_loader = DataLoader(test_data, batch_size=64, shuffle=False)
 
-training_loader = DataLoader(train_data, batch_size=64, shuffle=True)
-val_loader = DataLoader(val_data, batch_size=64, shuffle=False)
-test_loader = DataLoader(test_data, batch_size=64, shuffle=False)
+    result_dir = 'results/'
+    if not(os.path.exists(result_dir)):
+        os.mkdir(result_dir)
+    name = 'idf'
 
-result_dir = 'results/'
-if not(os.path.exists(result_dir)):
-    os.mkdir(result_dir)
-name = 'idf'
+    MEAN_DENSITY = 20
+    NSIDE = 8
+    D = nside2npix(NSIDE)
+    # D = 64
+    M = 256  # the number of neurons in scale (s) and translation (t) nets
 
-D = 64   # input dimension
-M = 256  # the number of neurons in scale (s) and translation (t) nets
-
-lr = 1e-3 # learning rate
-num_epochs = 1000 # max. number of epochs
-max_patience = 20 # an early stopping is used, if training doesn't improve for longer than 20 epochs, it is stopped
+    lr = 1e-3 # learning rate
+    num_epochs = 1000 # max. number of epochs
+    max_patience = 20 # an early stopping is used, if training doesn't improve for longer than 20 epochs, it is stopped
 
 
 # The number of invertible transformations
-num_flows = 8
+    num_flows = 8
 
 # This variable defines whether we use: 
 #   1 - the classic coupling layer proposed in (Hogeboom et al., 2019)
 #   4 - the general invertible transformation in (Tomczak, 2020) with 4 partitions
-idf_git = 4
+    idf_git = 1
 
-if idf_git == 1:
-    nett = lambda: nn.Sequential(nn.Linear(D // 2, M), nn.LeakyReLU(),
-                                     nn.Linear(M, M), nn.LeakyReLU(),
-                                     nn.Linear(M, D // 2))
-    netts = [nett]
+    if idf_git == 1:
+        nett = lambda: nn.Sequential(nn.Linear(D // 2, M), nn.LeakyReLU(),
+                                         nn.Linear(M, M), nn.LeakyReLU(),
+                                         nn.Linear(M, D // 2))
+        netts = [nett]
 
-elif idf_git == 4:
-    nett_a = lambda: nn.Sequential(nn.Linear(3 * (D // 4), M), nn.LeakyReLU(),
-                                       nn.Linear(M, M), nn.LeakyReLU(),
-                                       nn.Linear(M, D // 4))
+    elif idf_git == 4:
+        nett_a = lambda: nn.Sequential(nn.Linear(3 * (D // 4), M), nn.LeakyReLU(),
+                                           nn.Linear(M, M), nn.LeakyReLU(),
+                                           nn.Linear(M, D // 4))
 
-    nett_b = lambda: nn.Sequential(nn.Linear(3 * (D // 4), M), nn.LeakyReLU(),
-                                       nn.Linear(M, M), nn.LeakyReLU(),
-                                       nn.Linear(M, D // 4))
+        nett_b = lambda: nn.Sequential(nn.Linear(3 * (D // 4), M), nn.LeakyReLU(),
+                                           nn.Linear(M, M), nn.LeakyReLU(),
+                                           nn.Linear(M, D // 4))
 
-    nett_c = lambda: nn.Sequential(nn.Linear(3 * (D // 4), M), nn.LeakyReLU(),
-                                       nn.Linear(M, M), nn.LeakyReLU(),
-                                       nn.Linear(M, D // 4))
+        nett_c = lambda: nn.Sequential(nn.Linear(3 * (D // 4), M), nn.LeakyReLU(),
+                                           nn.Linear(M, M), nn.LeakyReLU(),
+                                           nn.Linear(M, D // 4))
 
-    nett_d = lambda: nn.Sequential(nn.Linear(3 * (D // 4), M), nn.LeakyReLU(),
-                                       nn.Linear(M, M), nn.LeakyReLU(),
-                                       nn.Linear(M, D // 4))
-    
-    netts = [nett_a, nett_b, nett_c, nett_d]
+        nett_d = lambda: nn.Sequential(nn.Linear(3 * (D // 4), M), nn.LeakyReLU(),
+                                           nn.Linear(M, M), nn.LeakyReLU(),
+                                           nn.Linear(M, D // 4))
+        
+        netts = [nett_a, nett_b, nett_c, nett_d]
+
 
 # Init IDF
-model = IDF(netts, num_flows, D=D)
+    model = IDF(netts, num_flows, D=D)
 # Print the summary (like in Keras)
-print(model)
-
-# %%
+    print(model)
 
 # OPTIMIZER
-optimizer = torch.optim.Adamax(
-    [p for p in model.parameters() if p.requires_grad == True],
-    lr=lr
-)
+    optimizer = torch.optim.Adamax(
+        [p for p in model.parameters() if p.requires_grad == True],
+        lr=lr
+    )
+
+    mean_count_range = [0.95*MEAN_DENSITY, 1.05*MEAN_DENSITY]
+    prior = DipolePrior(mean_count_range=mean_count_range)
+    prior.change_kwarg('N', 'mean_density')
+
+    dipole = SimpleDipoleMap(nside=NSIDE)
+    simulator = Simulator(prior, dipole.generate_dipole)
+    theta, x = simulator.make_batch_simulations(
+        n_simulations=1000,
+        n_workers=32,
+        simulation_batch_size=100
+    )
+
+    x_data = MapDataset(x[:800])
+    x_validation = MapDataset(x[800:])
+    train_loader = DataLoader(x_data, batch_size=64, shuffle=True)
+    validation_loader = DataLoader(x_validation, batch_size=64, shuffle=False)
 
 # Training procedure
-nll_val = training(
-    name=result_dir + name,
-    max_patience=max_patience,
-    num_epochs=num_epochs,
-    model=model, 
-    optimizer=optimizer,
-    training_loader=training_loader, 
-    val_loader=val_loader
-)
+    nll_val = training(
+        name=result_dir + name,
+        max_patience=max_patience,
+        num_epochs=num_epochs,
+        model=model, 
+        optimizer=optimizer,
+        training_loader=train_loader, 
+        val_loader=validation_loader
+    )
 
-test_loss = evaluation(name=result_dir + name, test_loader=test_loader)
-f = open(result_dir + name + '_test_loss.txt', "w")
-f.write(str(test_loss))
-f.close()
+    # test_loss = evaluation(name=result_dir + name, test_loader=test_loader)
+    # f = open(result_dir + name + '_test_loss.txt', "w")
+    # f.write(str(test_loss))
+    # f.close()
 
-samples_real(result_dir + name, test_loader)
+    # samples_real(result_dir + name, test_loader)
 
-plot_curve(result_dir + name, nll_val)
+    plot_curve(result_dir + name, nll_val)
 

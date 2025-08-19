@@ -56,6 +56,62 @@ class LearnableSOn(torch.nn.Module):
         S = self.A - self.A.T # subtracting transpose gives skew-sym. (any nxn)
         return torch.matrix_exp(S) # Q ∈ SO(4)
 
+class Unimodular:
+    def __init__(self) -> None:
+        self.U = torch.tensor(
+            [[1,1,1,1],
+            [1,0,0,0],
+            [0,1,0,0],
+            [0,0,1,0]],
+            dtype=torch.float32
+        )
+
+        self.Uinv = torch.tensor(
+            [[ 0, 1, 0, 0],
+            [ 0, 0, 1, 0],
+            [ 0, 0, 0, 1],
+            [ 1,-1,-1,-1]], 
+            dtype=torch.float32
+        )
+        
+        assert (self.U @ self.Uinv == torch.eye(4)).all()
+
+class IntShear4(torch.nn.Module):
+    def __init__(self, pairs, k_max=3):
+        """
+        pairs: list of (i,j) with i != j, e.g. [(1,0),(2,1),(3,2),(2,0)]
+        k_max: cap on |k| to keep moves mild (and easy to learn)
+        """
+        super().__init__()
+        self.pairs = pairs
+        self.k_raw = torch.nn.Parameter(torch.zeros(len(pairs)))  # real params
+        self.k_max = float(k_max)
+
+    def _ints(self):
+        # tanh-cap + straight-through round to get small integers
+        k_real = self.k_max * torch.tanh(self.k_raw)
+        k_int  = (k_real - k_real.detach()) + torch.round(k_real.detach())
+        return k_int
+
+    def matrix(self, dtype=torch.float32, device=None):
+        k_int = self._ints()
+        M = torch.eye(4, dtype=dtype, device=device)
+        for (idx, (i,j)) in enumerate(self.pairs):
+            S = torch.eye(4, dtype=dtype, device=device)
+            S[i, j] = S[i, j] + k_int[idx]
+            M = S @ M   # left-multiply: apply in listed order
+        return M  # det = 1
+
+    def inv_matrix(self, dtype=torch.float32, device=None):
+        k_int = self._ints()
+        Minv = torch.eye(4, dtype=dtype, device=device)
+        # inverse: reverse order, negate k
+        for (idx, (i,j)) in reversed(list(enumerate(self.pairs))):
+            S = torch.eye(4, dtype=dtype, device=device)
+            S[i, j] = S[i, j] - k_int[idx]
+            Minv = S @ Minv
+        return Minv
+
 class LearnableNormaliser(torch.nn.Module):
     def __init__(self, init_eps: float = 0.001) -> None:
         super().__init__()
@@ -125,8 +181,15 @@ class HealpixSOPyramid(torch.nn.Module):
 
         # for each level, we choose a matrix in SO(n) such that n corresponds
         # to the downscale factor from coarse to fine
-        self.SO_matrices = torch.nn.ModuleList(
-            [LearnableSOn(n) for n in self.downscale_factors]
+        # self.SO_matrices = torch.nn.ModuleList(
+        #     [LearnableSOn(n) for n in self.downscale_factors]
+        # )
+        self.unimod = Unimodular()
+        self.shears = torch.nn.ModuleList(
+            [
+                IntShear4(pairs=[(1,0),(2,1),(3,2),(2,0)], k_max=3)
+                for _ in self.downscale_factors
+            ]
         )
 
         # # Gaussian stats for loss function, one (mu, sigma) per level
@@ -218,9 +281,12 @@ class HealpixSOPyramid(torch.nn.Module):
             P = cur_npix // factor
             child_pixels = downstream_coefficients.view(batches, P, factor)
 
-            Q = self.SO_matrices[level]()
+            Q = self.shears[level].matrix()
+            # Q = self.SO_matrices[level]()
+            # U = self.unimod.U
 
-            y = torch.matmul(child_pixels, Q.T)
+            y = torch.matmul(child_pixels, Q.t())
+            # y = torch.matmul(child_pixels, U.T)
             a = y[..., 0]
             a_for_cond = y[..., :1]
             d = y[..., 1:]
@@ -282,8 +348,11 @@ class HealpixSOPyramid(torch.nn.Module):
             y_pre = torch.cat([a_here, d_out], dim=-1)  # (B, P_l, n_coefficients)
 
             # undo the SO(n) matrix product
-            Q = self.SO_matrices[self.levels - 1 - lvl]() # inverse of (· @ Q.T) is (· @ Q)
-            coefficients = torch.matmul(y_pre, Q) # (B, npix_level, n_coefficients)
+            # Uinv = self.unimod.Uinv
+            Q = self.shears[self.levels - 1 - lvl].inv_matrix()
+            # Q = self.SO_matrices[self.levels - 1 - lvl]() # inverse of (· @ Q.T) is (· @ Q)
+            # coefficients = torch.matmul(y_pre, Q) # (B, npix_level, n_coefficients)
+            coefficients = torch.matmul(y_pre, Q.t())
 
             # upsample to next finer 'a'
             downstream_coefficients = coefficients.reshape(batches, -1)
@@ -323,6 +392,23 @@ def skew_gaussian_nll(y, mu, log_sigma, alpha):
     r = (y - mu) / sigma
     nll = 0.5 * r ** 2 + log_sigma - torch.special.log_ndtr(alpha * r)
     return nll.sum(dim=-1)
+
+def log_negbin_pmf(x, r, p, eps=1e-12):
+    # x: (B, n), integers >= 0; r>0, 0<p<1 (can be broadcast)
+    x = torch.clamp(x, min=0).to(torch.float32)
+    r = torch.clamp(r, min=eps)
+    p = torch.clamp(p, min=eps, max=1-eps)
+    return (
+        torch.lgamma(x + r) - torch.lgamma(r)
+      - torch.lgamma(x + 1) + r*torch.log(p)
+      + x*torch.log(1 - p)
+    )
+
+def log_discrete_laplace(x, log_b, eps=1e-12):
+    b = torch.exp(log_b).clamp_min(eps)
+    alpha = torch.exp(-1.0 / b).clamp(max=1-1e-6)   # 0<alpha<1
+    logZ = torch.log1p(-alpha) - torch.log1p(alpha) # log((1-alpha)/(1+alpha))
+    return -torch.abs(x).to(torch.float32) * (1.0/b) + logZ
 
 def compute_nll(
         per_level_quads: Tensor,
@@ -390,7 +476,8 @@ def learn_transformation(
     )
 
     opt = torch.optim.Adam(
-        list(model.SO_matrices.parameters())
+        # list(model.SO_matrices.parameters())
+        list(model.shears.parameters())
       + list(model.mu_list)
       + list(model.log_sigma_list),
         lr=lr

@@ -31,7 +31,7 @@ N_WORKERS: int = 12
 # nside 4 ok
 # nside 16 we start to see very significant discrepancy with log z
 # transforming the data seems to make no difference or is slightly worse
-NSIDE = 8
+NSIDE = 32
 NPIX = hp.nside2npix(NSIDE)
 TOTAL_SOURCES = 1_920_000
 MEAN_DENSITY = TOTAL_SOURCES / hp.nside2npix(NSIDE)
@@ -57,7 +57,7 @@ if EQUATOR_MASK != 0.:
     model.equatorial_plane_mask(EQUATOR_MASK)
 simulator = Simulator(prior, model.generate_dipole)
 theta, x = simulator.make_batch_simulations(
-    n_simulations=50_000, 
+    n_simulations=20_000,
     n_workers=N_WORKERS,
     simulation_batch_size=100
 )
@@ -85,8 +85,10 @@ t_std = torch.mean(sample_std)
 # transform = AnscombeTransform() # a bit shitter than LogAffineTransform
 # transform = HealpixHaarPyramid(nside_fine=NSIDE)
 transform = HealpixSOPyramid(NSIDE)
-normalise = lambda input: (input - mu) / t_std
-unnormalise = lambda input: t_std * input + mu
+# normalise = lambda input: (input - mu) / t_std
+# unnormalise = lambda input: t_std * input + mu
+normalise = lambda input: input
+unnormalise = lambda input: input
 # normalise = lambda input: (2 * torch.sqrt(input + 0.375) - mu_ansx) / t_std_ansx
 # unnormalise = lambda input: (
 #     0.125 * (
@@ -136,11 +138,11 @@ for i, (n_parents, coeffs) in enumerate(zip(transform.parents_at_levels, per_lev
     axs[1].hist(detail1_coeffs, bins=200, color='tab:orange', alpha=0.3, density=True)
     axs[1].hist(detail1_coeffs, bins=200, color='tab:orange', density=True, histtype='step', label='Detail 1')
 
-    x = np.linspace(-5, 5, 10000)
-    y_coarse = norm.pdf(x, loc=mu_coarse, scale=sigma_coarse)
-    axs[0].plot(x, y_coarse, c='tab:red', label='Normal (coarse fit)')
-    y_fine = norm.pdf(x, loc=mu_detail1, scale=sigma_detail1)
-    axs[1].plot(x, y_fine, c='tab:red', label='Normal (detail1 fit)')
+    xs = np.linspace(-5, 5, 10000)
+    y_coarse = norm.pdf(xs, loc=mu_coarse, scale=sigma_coarse)
+    axs[0].plot(xs, y_coarse, c='tab:red', label='Normal (coarse fit)')
+    y_fine = norm.pdf(xs, loc=mu_detail1, scale=sigma_detail1)
+    axs[1].plot(xs, y_fine, c='tab:red', label='Normal (detail1 fit)')
 
     fig.legend()
     plt.show()
