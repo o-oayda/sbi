@@ -1,3 +1,5 @@
+# from SSNLE paper: https://arxiv.org/abs/2308.01054
+
 import distrax
 import haiku as hk
 import jax

@@ -1,3 +1,5 @@
+# from surjectors package example
+
 import argparse
 
 import distrax
@@ -8,6 +10,8 @@ import optax
 from jax import numpy as jnp
 from jax import random
 from matplotlib import pyplot as plt
+from corner import corner
+import healpy as hp
 
 from surjectors import (
     Chain,
@@ -25,33 +29,37 @@ from surjectors.util import (
 )
 
 
-def make_model(dim, model="coupling"):
+def make_model(dim, n_layers: int = 3, model="coupling"):
     def _bijector_fn(params):
         means, log_scales = unstack(params, -1)
         return distrax.ScalarAffine(means, jnp.exp(log_scales))
 
     def _flow(method, **kwargs):
         layers = []
-        order = jnp.arange(2)
-        for i in range(2):
+        order = jnp.arange(dim)
+        for i in range(n_layers):
             if model == "coupling":
-                mask = make_alternating_binary_mask(2, i % 2 == 0)
+                print('Running masked coupling...')
+                mask = make_alternating_binary_mask(dim, i % 2 == 0)
                 layer = MaskedCoupling(
                     mask=mask,
                     bijector_fn=_bijector_fn,
                     conditioner=hk.Sequential(
                         [
                             make_mlp([8, 8, dim * 2]),
-                            hk.Reshape((dim, dim)),
+                            hk.Reshape((dim, 2)),
                         ]
                     ),
                 )
                 layers.append(layer)
             else:
+                print('Running MAF...')
                 layer = MaskedAutoregressive(
                     bijector_fn=_bijector_fn,
                     conditioner=MADE(
-                        2, [32, 32], 2,
+                        input_size=dim,
+                        hidden_layer_sizes=[32,32],
+                        n_params=2,
                         w_init=hk.initializers.TruncatedNormal(0.01),
                         b_init=jnp.zeros,
                     ),
@@ -105,32 +113,56 @@ def train(rng_seq, data, model, max_n_iter=1000):
 
 
 def run(n_iter, model):
-    n = 10000
-    thetas = distrax.Normal(jnp.zeros(2), jnp.full(2, 10)).sample(
-        seed=random.PRNGKey(0), sample_shape=(n,)
-    )
-    y = 2 * thetas + distrax.Normal(jnp.zeros_like(thetas), 0.1).sample(
-        seed=random.PRNGKey(1)
-    )
-    data = named_dataset(y, thetas)
+    n = 10_000
 
-    model = make_model(2, model)
+    # 2D model with 2D data -> d_1 = 2*theta_1 + noise; d_2 = 2*theta_2 + noise
+    # noise ~ N([0, 0], sigma=[10, 10]), diagonal cov.
+    # ndim=2
+    # thetas = distrax.Normal(jnp.zeros(2), jnp.full(2, 10)).sample(
+    #     seed=random.PRNGKey(0), sample_shape=(n,)
+    # )
+    # y = 2 * thetas + distrax.Normal(jnp.zeros_like(thetas), 0.1).sample(
+    #     seed=random.PRNGKey(1)
+    # )
+    # data = named_dataset(y, thetas)
+
+    # healpix Poisson data
+    npix=12
+    ndim=npix
+    nbar=10.
+
+    prior_samples = jnp.asarray(np.random.uniform(low=1, high=50, size=n))
+    y = jnp.asarray(
+        np.random.poisson(lam=prior_samples, size=(npix, n)),
+        dtype=jnp.float32
+    ).T
+    prior_samples = jnp.expand_dims(prior_samples, -1) # (n, 1)
+    data = named_dataset(y, prior_samples)
+
+    model = make_model(ndim, model=model)
     params, losses = train(hk.PRNGSequence(2), data, model, n_iter)
+
+    # theta1 = jnp.full(n, -2.)
+    # theta2 = jnp.full(n, -4.)
+    # theta = jnp.stack([theta1, theta2], axis=1)
+    theta = jnp.full(n, nbar)[:, None] # (n, 1)
     samples = model.apply(
         params,
         random.PRNGKey(2),
         method="sample",
-        x=jnp.full_like(thetas, -2.0),
+        x=theta
     )
 
     plt.plot(losses)
     plt.show()
 
-    plt.hist(samples[:, 0])
-    plt.hist(samples[:, 1])
+    corner(np.asarray(samples), truths=12*[nbar]) # labels=['$D_1$', '$D_2$'])
     plt.show()
+    # plt.hist(samples[:, 0])
+    # plt.hist(samples[:, 1])
+    # plt.show()
 
-    return thetas, y, model, samples
+    return theta, y, model, samples
 
 
 if __name__ == "__main__":
