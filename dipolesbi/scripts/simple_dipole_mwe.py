@@ -23,15 +23,15 @@ from dipolesbi.tools.transforms import AnscombeTransform
 
 LOAD_PATH_RAW: Optional[str] = None # 'raw_NLE_nside8.pkl'
 LOAD_PATH_TRANS: Optional[str] = None # 'trans_NLE_nside8.pkl'
-TRAINING_DEVICE: str = 'mps'
-N_WORKERS: int = 12
+TRAINING_DEVICE: str = 'cuda'
+N_WORKERS: int = 32
 
 ## ---------------------------------------------------
 ## MODEL PARAMETERS
 # nside 4 ok
 # nside 16 we start to see very significant discrepancy with log z
 # transforming the data seems to make no difference or is slightly worse
-NSIDE = 8
+NSIDE = 32
 NPIX = hp.nside2npix(NSIDE)
 TOTAL_SOURCES = 1_920_000
 MEAN_DENSITY = TOTAL_SOURCES / hp.nside2npix(NSIDE)
@@ -57,9 +57,9 @@ if EQUATOR_MASK != 0.:
     model.equatorial_plane_mask(EQUATOR_MASK)
 simulator = Simulator(prior, model.generate_dipole)
 theta, x = simulator.make_batch_simulations(
-    n_simulations=20_000,
+    n_simulations=50_000,
     n_workers=N_WORKERS,
-    simulation_batch_size=100
+    simulation_batch_size=200
 )
 
 ## AFFINE TRANSFORM
@@ -84,11 +84,17 @@ t_std = torch.mean(sample_std)
 # transform = LogAffineTransform(mu, t_std, learn_mu=False) 
 # transform = AnscombeTransform() # a bit shitter than LogAffineTransform
 # transform = HealpixHaarPyramid(nside_fine=NSIDE)
-transform = HealpixSOPyramid(NSIDE)
+transform = HealpixSOPyramid(NSIDE, method='SO')
+transform.to(TRAINING_DEVICE)
+
 # normalise = lambda input: (input - mu) / t_std
 # unnormalise = lambda input: t_std * input + mu
+# norm_logabsdet = lambda input: torch.log(t_std) * torch.ones(input.shape[-1])
+
 normalise = lambda input: input
 unnormalise = lambda input: input
+norm_logabsdet = lambda input: torch.zeros(input.shape[-1])
+
 # normalise = lambda input: (2 * torch.sqrt(input + 0.375) - mu_ansx) / t_std_ansx
 # unnormalise = lambda input: (
 #     0.125 * (
@@ -98,12 +104,16 @@ unnormalise = lambda input: input
 #       - 3
 #     )
 # )
+x = x + (torch.rand_like(x) - 0.5)
 x_normalised = normalise(x)
 transform, history, validation = learn_transformation(
     transform, 
     data=x_normalised, 
-    epochs=100
+    epochs=100,
+    device=TRAINING_DEVICE,
+    # patience=300
 )
+transform.to('cpu')
 # losses = pretrain(transform, data=(x - mu) / t_std, steps=500, batch_size=64, lr=1e-3)
 plt.plot(history['train'])
 plt.title('Training loss')
@@ -126,9 +136,9 @@ recon_err = (x_rec - x).abs().max().item()
 print(f"Max |reconstruction error|: {recon_err:.3e}")
 
 # INSPECT COEFFS
-for i, (n_parents, coeffs) in enumerate(zip(transform.parents_at_levels, per_level_coeffs)):
-    coarse_coeffs = coeffs[:, :, 0].detach().flatten()
-    detail1_coeffs = coeffs[:, :, 1].detach().flatten()
+for i, coeffs_sum in enumerate(per_level_coeffs):
+    coarse_coeffs = coeffs_sum[0][:, :, 0].detach().flatten()
+    detail1_coeffs = coeffs_sum[0][:, :, 1].detach().flatten()
     # mu_coarse = transform.mu_list[i][0].detach()
     # sigma_coarse = torch.exp(transform.log_sigma_list[i][0]).detach()
     # mu_detail1 = transform.mu_list[i][1].detach()
@@ -176,17 +186,17 @@ if LOAD_PATH_RAW is not None:
 else:
 # inferer.load_posterior('quicktest_NLE_posterior.pkl')
     # Cut some x
-    raw_inferer.simulator.x = raw_inferer.simulator.x[:3000] # type: ignore
-    raw_inferer.simulator.theta = raw_inferer.simulator.theta[:3000] # type: ignore
+    raw_inferer.simulator.x = raw_inferer.simulator.x# [:3000] # type: ignore
+    raw_inferer.simulator.theta = raw_inferer.simulator.theta# [:3000] # type: ignore
     raw_inferer.run_healpix_sbi(
         estimator_type='NLE', 
         load_simulations_in_vram=False, 
         training_device=TRAINING_DEVICE,
         nan_handle_method='truncate',
         z_score_x='structured',
-        n_rounds=3,
-        x0_multi=torch.as_tensor(x0_truncated),
-        multiround_workers=N_WORKERS
+        # n_rounds=3,
+        # x0_multi=torch.as_tensor(x0_truncated),
+        # multiround_workers=N_WORKERS
     )
     raw_inferer.posterior.to('cpu') # type: ignore
     raw_inferer.plot_loss_curve()
@@ -201,7 +211,7 @@ else:
         training_device=TRAINING_DEVICE,
         nan_handle_method='truncate',
         z_score_x='structured',
-        flow_type='nsf'
+        flow_type='maf'
     )
     transformed_inferer.posterior.to('cpu') # type: ignore
     transformed_inferer.plot_loss_curve()
@@ -230,7 +240,8 @@ def transformed_lnlike(theta: Tensor, z: Tensor) -> Tensor:
         transformed_inferer.posterior.potential(theta, z)
       - prior.log_prob(theta)
       - logabsdet.detach()
-      # - (torch.log(t_std) * torch.ones(z.shape[-1])).sum(dim=-1) # from normalisation
+      - norm_logabsdet(z).sum(dim=-1) # from normalisation
+      # - (torch.log(t_std) * torch.ones(z.shape[-1])).sum(dim=-1) # from norm
       # - 0.5 * torch.log(x_original + 0.375).sum(dim=-1) # from Anscombe
     )
 

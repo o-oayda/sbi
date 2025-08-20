@@ -904,6 +904,28 @@ setuptools = {version = "*", markers = "python_version >= \"3.12\""}
 tensorflow-probability = ">=0.15.0"
 
 [[package]]
+name = "dm-haiku"
+version = "0.0.14"
+description = "Haiku is a library for building neural networks in JAX."
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "dm_haiku-0.0.14-py3-none-any.whl", hash = "sha256:79f2fc2bf2985f99687209b72a193769ba2bcfde471ce7746cd36a64ea9ce74a"},
+    {file = "dm_haiku-0.0.14.tar.gz", hash = "sha256:0c1d56ef20e1e04d8551f788ff8964167092c5d8051b7c17ed3f9ce60c0b0a59"},
+]
+
+[package.dependencies]
+absl-py = ">=0.7.1"
+jmp = ">=0.0.2"
+numpy = ">=1.18.0"
+tabulate = ">=0.8.9"
+
+[package.extras]
+flax = ["flax (>=0.7.1)"]
+jax = ["jax (>=0.6.0)", "jaxlib (>=0.6.0)"]
+
+[[package]]
 name = "dm-tree"
 version = "0.1.8"
 description = "Tree is a library for working with nested data structures."
@@ -1907,6 +1929,24 @@ MarkupSafe = ">=2.0"
 
 [package.extras]
 i18n = ["Babel (>=2.7)"]
+
+[[package]]
+name = "jmp"
+version = "0.0.4"
+description = "JMP is a Mixed Precision library for JAX."
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "jmp-0.0.4-py3-none-any.whl", hash = "sha256:6aa7adbddf2bd574b28c7faf6e81a735eb11f53386447896909c6968dc36807d"},
+    {file = "jmp-0.0.4.tar.gz", hash = "sha256:5dfeb0fd7c7a9f72a70fff0aab9d0cbfae32a809c02f4037ff3485ceb33e1730"},
+]
+
+[package.dependencies]
+numpy = ">=1.19.5"
+
+[package.extras]
+jax = ["jax (>=0.2.20)", "jaxlib (>=0.1.71)"]
 
 [[package]]
 name = "joblib"
@@ -4680,6 +4720,25 @@ pure-eval = "*"
 tests = ["cython", "littleutils", "pygments", "pytest", "typeguard"]
 
 [[package]]
+name = "surjectors"
+version = "0.3.3"
+description = "Surjection layers for density estimation with normalizing flows"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "surjectors-0.3.3-py3-none-any.whl", hash = "sha256:844d60b46a82e23b410cd84c66928f0a59916ba9cd6f93e3effbd1d6444dfd52"},
+    {file = "surjectors-0.3.3.tar.gz", hash = "sha256:21e7251328baf5be5c1f7eb5c5aefb0aa965877235c6bc4a76570d77a9bf3f1f"},
+]
+
+[package.dependencies]
+distrax = ">=0.1.4"
+dm-haiku = ">=0.0.10"
+jax = ">=0.4.18"
+jaxlib = ">=0.4.18"
+optax = ">=0.1.7"
+
+[[package]]
 name = "sympy"
 version = "1.14.0"
 description = "Computer algebra system (CAS) in Python"
@@ -5488,4 +5547,4 @@ test = ["pytest (>=8.0.0)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.14"
-content-hash = "d1accf9770a56b743351f894591b4157d0679c62535e041f7c04e1b3d839843d"
+content-hash = "ce0457404b08b533e2b207d8ffd06ed42cf2978ac2d96896ceed6812c0c98d8d"
