@@ -2,6 +2,7 @@
 
 import argparse
 
+from dataclasses import dataclass, fields
 import distrax
 import haiku as hk
 import jax
@@ -29,6 +30,7 @@ from surjectors.util import (
     unstack,
 )
 
+from dipolesbi.tools.neural_flows import MAFNeuralLikelihood
 from dipolesbi.tools.priors import DipolePrior
 from dipolesbi.tools.simulator import Simulator
 
@@ -132,7 +134,7 @@ def run(n_iter, model):
     # data = named_dataset(y, thetas)
 
     # healpix Poisson data
-    NSIDE = 4
+    NSIDE = 2
     ndim=12 * NSIDE**2
     MEAN_DENSITY=120_000.
     OBSERVER_SPEED = 2.
@@ -153,7 +155,7 @@ def run(n_iter, model):
     simulator = Simulator(prior, dipole.generate_dipole)
     prior_samples, y = simulator.make_batch_simulations(
         n_simulations=n,
-        n_workers=32,
+        n_workers=12,
         simulation_batch_size=200
     )
     print(prior_samples)
@@ -244,7 +246,6 @@ if __name__ == "__main__":
         n_workers=32,
         simulation_batch_size=200
     )
-    print(prior_samples)
     # prior_samples = jnp.asarray(np.random.uniform(low=1, high=50, size=n))
     # y = jnp.asarray(
     #     np.random.poisson(lam=prior_samples, size=(npix, n)),
@@ -255,32 +256,90 @@ if __name__ == "__main__":
     y = jnp.asarray(y)
     y_mean = y.mean(axis=0); y_std = y.std(axis=0) + 1e-8
 
-    mean_nbar = prior_samples[:, 0].mean(); std_nbar = prior_samples[:, 0].std()
-    mean_v = prior_samples[:, 1].mean(); std_v = prior_samples[:, 1].std()
-    t_mean = jnp.asarray([mean_nbar, mean_v, 0, 0])
-    t_std = jnp.asarray([std_nbar, std_v, 1, 1])
     # t_mean = prior_samples.mean(axis=0); t_std = prior_samples.std(axis=0)
 
     normalise_y = lambda input: (input - y_mean) / y_std
     unnormalise_y = lambda input: y_std * input + y_mean
-    normalise_t = lambda input: (input - t_mean) / t_std
-    unnormalise_t = lambda input: t_std * input + t_mean
 
-    data = named_dataset(normalise_y(y), normalise_t(prior_samples))
+    @dataclass
+    class NormData:
+        theta_mean: jnp.ndarray
+        theta_std: jnp.ndarray
+        y_mean: jnp.ndarray
+        y_std: jnp.ndarray
+        data_ndim: int
+        theta_ndim: int
 
-    model = make_model(ndim, model=args.model, n_layers=5)
-    params, losses = train(hk.PRNGSequence(2), data, model, args.n_iter)
+        def __post_init__(self):
+            for f in fields(self):
+                if f.init:
+                    assert f.shape == self.ndim
+
+
+    mean_nbar = prior_samples[:, 0].mean()
+    std_nbar = prior_samples[:, 0].std()
+    mean_v = prior_samples[:, 1].mean()
+    std_v = prior_samples[:, 1].std()
+
+    t_mean = jnp.asarray([mean_nbar, mean_v, 0, 0])
+    t_std = jnp.asarray([std_nbar, std_v, 1, 1])
+
+    def transform_t(t):
+        lon = t[..., 2]
+        lat = t[..., 3]
+        xyz = hp.ang2vec(lon, lat, lonlat=True)
+        
+        t_norm = (t - t_mean) / t_std
+        t_transformed = jnp.stack(
+            [
+                t_norm[:, 0],
+                t_norm[:, 1],
+                xyz[:, 0],
+                xyz[:, 1],
+                xyz[:, 2]
+            ],
+            axis=1
+        )
+        return t_transformed
+
+    def untransform_t(t):
+        x, y, z = t[:, 2], t[:, 3], t[:, 4]
+        lon, lat = hp.vec2ang([x, y, z], lonlat=True)
+
+        t = t * t_std + t_mean
+        t_untransformed = jnp.stack(
+            [
+                t[:, 0],
+                t[:, 1],
+                lon,
+                lat
+            ],
+            axis=1
+        )
+        return t_untransformed
+
+
+    # normalise_t = lambda input: (input - t_mean) / t_std
+    # unnormalise_t = lambda input: t_std * input + t_mean
+
+    data = named_dataset(normalise_y(y), transform_t(prior_samples))
+
+    nle = MAFNeuralLikelihood(ndim)
+    losses = nle.train(hk.PRNGSequence(2), data)
+    # model = make_model(ndim, model=args.model, n_layers=5)
+    # params, losses = train(hk.PRNGSequence(2), data, model, args.n_iter)
 
     # theta1 = jnp.full(n, -2.)
     # theta2 = jnp.full(n, -4.)
     # theta = jnp.stack([theta1, theta2], axis=1)
     # theta = jnp.full(n, nbar)[:, None] # (n, 1)
-    samples = model.apply(
-        params,
-        random.PRNGKey(2),
-        method="sample",
-        x=normalise_t(theta0)
-    )
+    samples = nle.apply(random.PRNGKey(2), method="sample", x0=transform_t(theta0))
+    # samples = nle.model.apply(
+    #     params,
+    #     random.PRNGKey(2),
+    #     method="sample",
+    #     x=transform_t(theta0)
+    # )
 
     plt.plot(losses)
     plt.show()

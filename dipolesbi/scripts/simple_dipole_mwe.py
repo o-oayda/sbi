@@ -23,15 +23,15 @@ from dipolesbi.tools.transforms import AnscombeTransform
 
 LOAD_PATH_RAW: Optional[str] = None # 'raw_NLE_nside8.pkl'
 LOAD_PATH_TRANS: Optional[str] = None # 'trans_NLE_nside8.pkl'
-TRAINING_DEVICE: str = 'cuda'
-N_WORKERS: int = 32
+TRAINING_DEVICE: str = 'mps'
+N_WORKERS: int = 12
 
 ## ---------------------------------------------------
 ## MODEL PARAMETERS
 # nside 4 ok
 # nside 16 we start to see very significant discrepancy with log z
 # transforming the data seems to make no difference or is slightly worse
-NSIDE = 32
+NSIDE = 8
 NPIX = hp.nside2npix(NSIDE)
 TOTAL_SOURCES = 1_920_000
 MEAN_DENSITY = TOTAL_SOURCES / hp.nside2npix(NSIDE)
@@ -87,13 +87,13 @@ t_std = torch.mean(sample_std)
 transform = HealpixSOPyramid(NSIDE, method='SO')
 transform.to(TRAINING_DEVICE)
 
-# normalise = lambda input: (input - mu) / t_std
-# unnormalise = lambda input: t_std * input + mu
-# norm_logabsdet = lambda input: torch.log(t_std) * torch.ones(input.shape[-1])
+normalise = lambda input: (input - mu) / t_std
+unnormalise = lambda input: t_std * input + mu
+norm_logabsdet = lambda input: torch.log(t_std) * torch.ones(input.shape[-1])
 
-normalise = lambda input: input
-unnormalise = lambda input: input
-norm_logabsdet = lambda input: torch.zeros(input.shape[-1])
+# normalise = lambda input: input
+# unnormalise = lambda input: input
+# norm_logabsdet = lambda input: torch.zeros(input.shape[-1])
 
 # normalise = lambda input: (2 * torch.sqrt(input + 0.375) - mu_ansx) / t_std_ansx
 # unnormalise = lambda input: (
@@ -210,7 +210,7 @@ else:
         load_simulations_in_vram=False, 
         training_device=TRAINING_DEVICE,
         nan_handle_method='truncate',
-        z_score_x='structured',
+        z_score_x=None,
         flow_type='maf'
     )
     transformed_inferer.posterior.to('cpu') # type: ignore
@@ -344,5 +344,6 @@ g.triangle_plot(
     marker_args={'lw': 1}, # type: ignore
     legend_labels=['Raw SBI samples', 'Transformed SBI samples', 'Classic samples']
 )
+plt.savefig('epic_samples.png', bbox_inches='tight', dpi=300)
 plt.show()
 
