@@ -16,6 +16,7 @@ import optax
 import jax
 import numpy as np
 import sys
+import matplotlib.pyplot as plt
 
 
 class MAFNeuralLikelihood:
@@ -73,14 +74,22 @@ class MAFNeuralLikelihood:
     def train(
             self,
             rng_seq: hk.PRNGSequence, 
-            data: named_dataset, 
+            training_data: named_dataset, 
+            validation_data: named_dataset,
             max_n_iter: int = 1000,
             batch_size: int = 100,
-            learning_rate: float = 0.001
-    ) -> NDArray:
+            patience: int = 20,
+            learning_rate: float = 0.0005
+    ) -> tuple[NDArray, NDArray]:
         train_iter = as_batch_iterator(
             rng_key=next(rng_seq), 
-            data=data,
+            data=training_data,
+            batch_size=batch_size,
+            shuffle=True
+        )
+        val_iter = as_batch_iterator(
+            rng_key=next(rng_seq), 
+            data=validation_data,
             batch_size=batch_size,
             shuffle=True
         )
@@ -99,21 +108,77 @@ class MAFNeuralLikelihood:
             updates, new_state = optimiser.update(grads, state, params)
             new_params = optax.apply_updates(params, updates)
             return loss, new_params, new_state
+        
+        @jax.jit
+        def val_step(params, **batch):
+            return -jnp.mean(
+                self.model.apply(params, None, method='log_prob', **batch)
+            )
 
-        losses = np.zeros(max_n_iter)
+        losses = np.nan * np.zeros(max_n_iter)
+        val_losses = np.nan * np.zeros(max_n_iter)
+        best_params = params
+        best_val = np.inf
+        wait = 0
+
         for i in range(max_n_iter):
             train_loss = 0.0
             for j in range(train_iter.num_batches):
                 batch = train_iter(j)
                 batch_loss, params, state = step(params, state, **batch)
                 train_loss += batch_loss
-            sys.stdout.write(f"\rTraining loss (iteration {i}): {train_loss:.4f}")
-            sys.stdout.flush()
-            losses[i] = train_loss
+            
+            val_loss = 0.0
+            for j in range(val_iter.num_batches):
+                batch = val_iter(j)
+                val_loss += val_step(params, **batch)
+            val_loss /= max(1, val_iter.num_batches)
 
-        self.params = params
+            sys.stdout.write(
+                f"\rIteration: {i} | "
+                f"Training NLL: {train_loss:.4f} | "
+                f"Validation NLL: {val_loss:.4f} | "
+                f"Early stopping at {patience} ({wait})"
+            )
+            sys.stdout.flush()
+
+            losses[i] = train_loss
+            val_losses[i] = val_loss
+
+            if val_loss < best_val - 1e-6:
+                best_val = val_loss
+                best_params = params
+                wait = 0
+            else:
+                wait += 1
+                if wait >= patience:
+                    print(
+                        f"\nEarly stopping at iteration {i} "
+                        f"(best val NLL={best_val:.4f})"
+                    )
+                    break
+
+        self.params = best_params
         self.losses = losses
-        return losses
+        self.val_losses = val_losses
+
+        return losses, val_losses
+
+    def plot_loss_curve(self) -> None:
+        _, ax1 = plt.subplots()
+        color = 'tab:blue'
+        ax1.set_xlabel('Epoch')
+        ax1.set_ylabel('Loss', color=color)
+        ax1.plot(self.losses, color=color)
+        ax1.tick_params(axis='y', labelcolor=color)
+
+        ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
+        color = 'tab:orange'
+        ax2.set_ylabel('Val Loss', color=color)
+        ax2.plot(self.val_losses, color=color)
+        ax2.tick_params(axis='y', labelcolor=color)
+
+        plt.show()
 
     def apply(self, rng_key: PRNGKey, method: str, x0):
         samples = self.model.apply(
