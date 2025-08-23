@@ -11,6 +11,7 @@ from jax import random
 from matplotlib import pyplot as plt
 import healpy as hp
 from dipolesbi.tools.dataloader import split_train_val
+from dipolesbi.tools.inference import LikelihoodBasedInferer
 from dipolesbi.tools.maps import SimpleDipoleMap
 from surjectors import (
     Chain,
@@ -26,9 +27,11 @@ from surjectors.util import (
     named_dataset,
     unstack,
 )
-from dipolesbi.tools.neural_flows import MAFNeuralLikelihood
+from dipolesbi.tools.models import CustomModelJax, DipolePoisson
+from dipolesbi.tools.neural_flows import MAFNeuralLikelihood, MAFSurjectiveNeuralLikelihood
 from dipolesbi.tools.priors import DipolePrior
 from dipolesbi.tools.simulator import Simulator
+from dipolesbi.tools.utils import jax_cart2sph, jax_sph2cart
 
 
 def make_model(dim, n_layers: int = 3, model="coupling"):
@@ -119,7 +122,7 @@ if __name__ == "__main__":
     parser.add_argument("--n-iter", type=int, default=1_000)
     parser.add_argument("--model", type=str, default="coupling")
     args = parser.parse_args()
-    n = 20_000
+    n = 50_000
 
     # healpix Poisson data
     NSIDE = 8
@@ -128,6 +131,7 @@ if __name__ == "__main__":
     OBSERVER_SPEED = 2.
     DIPOLE_LONGITUDE = 215.
     DIPOLE_LATITUDE = 40.
+    mask_map = np.ones(ndim, dtype=np.bool_)
     theta0 = jnp.repeat(
         jnp.asarray(
             [[MEAN_DENSITY, OBSERVER_SPEED, DIPOLE_LONGITUDE, DIPOLE_LATITUDE]]
@@ -146,6 +150,11 @@ if __name__ == "__main__":
         n_workers=32,
         simulation_batch_size=200
     )
+    x0 = dipole.generate_dipole(
+        *np.asarray(
+            theta0[0, :]
+        ).reshape(4, 1)
+    )
     prior_samples = jnp.asarray(prior_samples)
     y = jnp.asarray(y)
     (y_tr, y_val), (t_tr, t_val) = split_train_val(y, prior_samples)
@@ -153,6 +162,7 @@ if __name__ == "__main__":
     y_mean = y_tr.mean(axis=0); y_std = y_tr.std(axis=0) + 1e-8
     normalise_y = lambda input: (input - y_mean) / y_std
     unnormalise_y = lambda input: y_std * input + y_mean
+    log_det_jac = lambda y: - jnp.log(y_std) * jnp.ones(y.shape[-1])
     
     mean_nbar = t_tr[:, 0].mean()
     std_nbar = t_tr[:, 0].std()
@@ -163,18 +173,18 @@ if __name__ == "__main__":
     t_std = jnp.asarray([std_nbar, std_v, 1, 1])
 
     def transform_t(t):
-        lon = t[..., 2]
-        lat = t[..., 3]
-        xyz = hp.ang2vec(lon, lat, lonlat=True)
+        lon = jnp.deg2rad(t[..., 2])
+        colat = jnp.pi / 2 - jnp.deg2rad(t[..., 3])
+        x, y, z = jax_sph2cart(lon, colat)
         
         t_norm = (t - t_mean) / t_std
         t_transformed = jnp.stack(
             [
                 t_norm[:, 0],
                 t_norm[:, 1],
-                xyz[:, 0],
-                xyz[:, 1],
-                xyz[:, 2]
+                x, 
+                y,
+                z
             ],
             axis=1
         )
@@ -182,7 +192,9 @@ if __name__ == "__main__":
 
     def untransform_t(t):
         x, y, z = t[:, 2], t[:, 3], t[:, 4]
-        lon, lat = hp.vec2ang([x, y, z], lonlat=True)
+        phi, theta = jax_cart2sph(x, y, z)
+        lon = jnp.rad2deg(phi)
+        lat = 90. - jnp.rad2deg(theta)
 
         t = t * t_std + t_mean
         t_untransformed = jnp.stack(
@@ -199,13 +211,35 @@ if __name__ == "__main__":
     train_data = named_dataset(normalise_y(y_tr), transform_t(t_tr))
     val_data = named_dataset(normalise_y(y_val), transform_t(t_val))
 
-    nle = MAFNeuralLikelihood(ndim)
+    # nle = MAFNeuralLikelihood(ndim, n_layers=5)
+    nle = MAFSurjectiveNeuralLikelihood(ndim, n_layers=5, data_reduction_factor=0.7)
     nle.train(hk.PRNGSequence(2), train_data, val_data)
     nle.plot_loss_curve()
 
-    samples = nle.apply(random.PRNGKey(2), method="sample", x0=transform_t(theta0))
+    samples = nle.sample_likelihood_func(random.PRNGKey(2), theta0=transform_t(theta0))
 
     mean_samples = unnormalise_y(samples).mean(axis=0)
     hp.projview(mean_samples, nest=True, graticule=True)
     plt.show()
 
+    @jax.jit
+    def lnlike(theta: jnp.ndarray, z: jnp.ndarray) -> jnp.ndarray:
+        n_batches = theta.shape[0]
+        ndim_data = z.shape[-1]
+        theta_transformed = transform_t(theta)
+
+        log_like = nle.evaluate_lnlike(
+            random.PRNGKey(2),
+            theta_transformed, 
+            jnp.broadcast_to(z, (n_batches, ndim_data))
+        )
+
+        return log_like + log_det_jac(z).sum(axis=-1)
+
+    custom_model = CustomModelJax(prior, lnlike)
+    sbased_inferer = LikelihoodBasedInferer(normalise_y(x0), custom_model)
+    sbased_inferer.run_ultranest()
+
+    classic_model = DipolePoisson(prior, nside=NSIDE, mask_map=mask_map)
+    classic_inferer = LikelihoodBasedInferer(x0.squeeze(), classic_model)
+    classic_inferer.run_ultranest()

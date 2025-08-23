@@ -1,5 +1,6 @@
 import distrax
 import haiku as hk
+from haiku._src.transform import Transformed
 from haiku._src.typing import PRNGKey
 from jax import numpy as jnp
 from numpy.typing import NDArray
@@ -9,67 +10,47 @@ from surjectors import (
     Permutation,
     TransformedDistribution,
 )
-from surjectors.nn import MADE
+from surjectors.nn import MADE, make_mlp, make_transformer
 from surjectors.util import as_batch_iterator, unstack, named_dataset
-from optax._src.base import Params
+from surjectors import AffineMaskedAutoregressiveInferenceFunnel
 import optax
 import jax
 import numpy as np
 import sys
 import matplotlib.pyplot as plt
+import logging
+from abc import ABC, abstractmethod
 
 
-class MAFNeuralLikelihood:
-    def __init__(
-            self, 
-            data_ndim: int, 
-            n_layers: int = 3,
-            conditioner_neurons_per_layer: int = 64,
-            conditioner_n_hidden_layers: int = 2
-    ) -> None:
-        self.n_layers = n_layers
-        self.data_ndim = data_ndim
-        self.conditioner_neurons_per_layer = conditioner_neurons_per_layer
-        self.conditioner_n_hidden_layers = conditioner_n_hidden_layers
+class NeuralLikelihood(ABC):
+    def __init__(self) -> None:
+        super().__init__()
+        self.losses = []
+        self.val_losses = []
         self.model = self.get_flow()
 
-    def get_flow(self):
+    @abstractmethod
+    def _flow(self, method: str, **kwargs) -> Transformed:
+        pass
+
+    def get_flow(self) -> Transformed:
         return hk.transform(self._flow)
 
-    def _bijector_fn(self, params):
-        means, log_scales = unstack(params, -1)
-        return distrax.ScalarAffine(means, jnp.exp(log_scales))
+    def plot_loss_curve(self) -> None:
+        _, ax1 = plt.subplots()
+        color = 'tab:blue'
+        ax1.set_xlabel('Epoch')
+        ax1.set_ylabel('Loss', color=color)
+        ax1.plot(self.losses, color=color)
+        ax1.tick_params(axis='y', labelcolor=color)
 
-    def _flow(self, method: str, **kwargs):
-        layers = []
-        order = jnp.arange(self.data_ndim)
-        n_neurons = self.conditioner_neurons_per_layer
-        n_layers = self.conditioner_n_hidden_layers
+        ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
+        color = 'tab:orange'
+        ax2.set_ylabel('Val Loss', color=color)
+        ax2.plot(self.val_losses, color=color)
+        ax2.tick_params(axis='y', labelcolor=color)
 
-        for _ in range(self.n_layers):
-            layer = MaskedAutoregressive(
-                bijector_fn=self._bijector_fn,
-                conditioner=MADE(
-                    input_size=self.data_ndim,
-                    hidden_layer_sizes=n_layers * [n_neurons],
-                    n_params=2, # mean and scale
-                    w_init=hk.initializers.TruncatedNormal(0.01),
-                    b_init=jnp.zeros,
-                )
-            )
-            order = order[::-1]
-            layers.append(layer)
-            layers.append(Permutation(order, 1))
-
-        layers = layers[:-1]
-        chain = Chain(layers)
-
-        base_distribution = distrax.Independent(
-            distrax.Normal(jnp.zeros(self.data_ndim), jnp.ones(self.data_ndim)),
-            reinterpreted_batch_ndims=1
-        )
-        td = TransformedDistribution(base_distribution, chain)
-        return td(method, **kwargs)
+        plt.show()
 
     def train(
             self,
@@ -81,6 +62,8 @@ class MAFNeuralLikelihood:
             patience: int = 20,
             learning_rate: float = 0.0005
     ) -> tuple[NDArray, NDArray]:
+        assert self.model is not None
+
         train_iter = as_batch_iterator(
             rng_key=next(rng_seq), 
             data=training_data,
@@ -164,27 +147,176 @@ class MAFNeuralLikelihood:
 
         return losses, val_losses
 
-    def plot_loss_curve(self) -> None:
-        _, ax1 = plt.subplots()
-        color = 'tab:blue'
-        ax1.set_xlabel('Epoch')
-        ax1.set_ylabel('Loss', color=color)
-        ax1.plot(self.losses, color=color)
-        ax1.tick_params(axis='y', labelcolor=color)
-
-        ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
-        color = 'tab:orange'
-        ax2.set_ylabel('Val Loss', color=color)
-        ax2.plot(self.val_losses, color=color)
-        ax2.tick_params(axis='y', labelcolor=color)
-
-        plt.show()
-
-    def apply(self, rng_key: PRNGKey, method: str, x0):
+    def sample_likelihood_func(
+            self, 
+            rng_key: PRNGKey, 
+            theta0: jnp.ndarray
+    ) -> jnp.ndarray:
         samples = self.model.apply(
             self.params,
             rng_key,
-            method=method,
-            x=x0
+            method='sample',
+            x=theta0
         )
         return samples
+
+    def evaluate_lnlike(
+        self,
+        rng_key: PRNGKey,
+        theta0: jnp.ndarray,
+        x0: jnp.ndarray
+    ) -> jnp.ndarray:
+        logprob = self.model.apply(
+            self.params,
+            rng_key,
+            method='log_prob',
+            x=theta0,
+            y=x0
+        )
+        return logprob
+
+class MAFNeuralLikelihood(NeuralLikelihood):
+    def __init__(
+            self, 
+            data_ndim: int, 
+            n_layers: int = 3,
+            conditioner_neurons_per_layer: int = 64,
+            conditioner_n_hidden_layers: int = 2
+    ) -> None:
+        self.n_layers = n_layers
+        self.data_ndim = data_ndim
+        self.conditioner_neurons_per_layer = conditioner_neurons_per_layer
+        self.conditioner_n_hidden_layers = conditioner_n_hidden_layers
+        self.model = self.get_flow()
+
+    def _bijector_fn(self, params):
+        means, log_scales = unstack(params, -1)
+        return distrax.ScalarAffine(means, jnp.exp(log_scales))
+
+    def _flow(self, method: str, **kwargs):
+        layers = []
+        order = jnp.arange(self.data_ndim)
+        n_neurons = self.conditioner_neurons_per_layer
+        n_layers = self.conditioner_n_hidden_layers
+
+        for _ in range(self.n_layers):
+            layer = MaskedAutoregressive(
+                bijector_fn=self._bijector_fn,
+                conditioner=MADE(
+                    input_size=self.data_ndim,
+                    hidden_layer_sizes=n_layers * [n_neurons],
+                    n_params=2, # mean and scale
+                    w_init=hk.initializers.TruncatedNormal(0.01),
+                    b_init=jnp.zeros,
+                )
+            )
+            order = order[::-1]
+            layers.append(layer)
+            layers.append(Permutation(order, 1))
+
+        layers = layers[:-1]
+        chain = Chain(layers)
+
+        base_distribution = distrax.Independent(
+            distrax.Normal(jnp.zeros(self.data_ndim), jnp.ones(self.data_ndim)),
+            reinterpreted_batch_ndims=1
+        )
+        td = TransformedDistribution(base_distribution, chain)
+        return td(method, **kwargs)
+
+
+class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
+    def __init__(
+            self,
+            data_ndim: int, 
+            n_layers: int = 3,
+            decoder_n_neurons: int = 50, # mlp
+            decoder_n_layers: int = 2, # mlp
+            conditioner_n_neurons: int = 50,
+            conditioner_n_layers: int = 2,
+            data_reduction_factor: float = 0.5
+    ) -> None:
+        self.data_ndim = data_ndim
+        self.n_layers = n_layers
+        self.data_reduction_factor = data_reduction_factor
+        self.decoder_n_neurons = decoder_n_neurons
+        self.decoder_n_layers = decoder_n_layers
+        self.conditioner_n_neurons = conditioner_n_neurons
+        self.conditioner_n_layers = conditioner_n_layers
+        self.reduction_factor = data_reduction_factor
+        self.model = self.get_flow()
+
+    def _bijector_fn(self, params):
+        means, log_scales = unstack(params, -1)
+        return distrax.ScalarAffine(means, jnp.exp(log_scales))
+
+    def _base_distribution_fn(self, n_dim):
+        base_distribution = distrax.Independent(
+            distrax.Normal(jnp.zeros(n_dim), jnp.ones(n_dim)),
+            reinterpreted_batch_ndims=1,
+        )
+        return base_distribution
+
+    def _conditioner_fn(self, conditioner, output_dim):
+        if conditioner.type == "mlp":
+            return make_mlp(
+                [conditioner.ndim_hidden_layers] * conditioner.n_hidden_layers + [output_dim],
+            )
+        elif conditioner.type == "transformer":
+            return make_transformer(
+                output_dim,
+                conditioner.num_heads,
+                conditioner.num_layers,
+                conditioner.key_size,
+                conditioner.dropout_rate,
+                conditioner.widening_factor,
+            )
+        logging.fatal("didnt find correct conditioner type")
+        raise ValueError("didnt find correct conditioner type")
+
+    def _decoder_fn(self, n_dimension):
+        decoder_net = make_mlp(
+            [self.decoder_n_neurons] * self.decoder_n_layers + [n_dimension * 2],
+            activation=jax.nn.tanh,
+        )
+
+        def _fn(z):
+            params = decoder_net(z)
+            mu, log_scale = jnp.split(params, 2, -1)
+            return distrax.Independent(distrax.Normal(mu, jnp.exp(log_scale)), 1)
+
+        return _fn
+
+    def _flow(self, method: str, **kwargs):
+        dim = self.data_ndim
+        layers = []
+        order = jnp.arange(dim)
+
+        for _ in range(self.n_layers):
+            reduc = self.reduction_factor
+            latent_dim = int(reduc * dim)
+            layer = AffineMaskedAutoregressiveInferenceFunnel(
+                n_keep=latent_dim,
+                decoder=self._decoder_fn(dim - latent_dim),
+                conditioner=MADE(
+                    input_size=latent_dim,
+                    hidden_layer_sizes=[self.conditioner_n_neurons]
+                    * self.conditioner_n_layers,
+                    n_params=2,
+                    w_init=hk.initializers.TruncatedNormal(stddev=0.01),
+                    b_init=jnp.zeros,
+                    activation=jax.nn.tanh,
+                ),
+            )
+            layers.append(layer)
+            dim = latent_dim
+            order = order[::-1]
+            order = order[:dim]
+            order = order - jnp.min(order)
+            layers.append(Permutation(order, 1))
+
+        layers = layers[:-1]
+        chain = Chain(layers)
+
+        td = TransformedDistribution(self._base_distribution_fn(dim), chain)
+        return td(method, **kwargs)

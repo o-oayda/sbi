@@ -13,6 +13,7 @@ import dill as pickle
 from numpy.typing import NDArray
 from collections import defaultdict
 import torch.nn.functional as F
+from jax import numpy as jnp
 
 
 def spherical_to_cartesian(theta_phi: tuple[NDArray, NDArray]) -> NDArray:
@@ -27,6 +28,30 @@ def spherical_to_cartesian(theta_phi: tuple[NDArray, NDArray]) -> NDArray:
     z = np.cos(theta_phi[0])
     xyz = np.stack([x, y, z])
     return xyz
+
+def jax_sph2cart(
+        phi: jnp.ndarray, 
+        theta: jnp.ndarray
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    '''
+    Transform spherical coordinates longitude and colatitude in radians to
+    Cartesian.
+    '''
+    x = jnp.sin(theta) * jnp.cos(phi)
+    y = jnp.sin(theta) * jnp.sin(phi)
+    z = jnp.cos(theta)
+    return x, y, z
+
+def jax_cart2sph(
+        x: jnp.ndarray, 
+        y: jnp.ndarray, 
+        z: jnp.ndarray
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    norm = jnp.sqrt(jnp.square(x) + jnp.square(y) + jnp.square(z))
+    theta = jnp.arccos(z / norm)
+    phi = jnp.arctan2(y, x)
+    phi[phi < 0] += 2 * jnp.pi
+    return phi, theta
 
 def sample_unif(unif: Tensor, low_high: tuple[Tensor, Tensor]) -> Tensor:
     '''
