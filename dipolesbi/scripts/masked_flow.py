@@ -11,7 +11,7 @@ from jax import random
 from matplotlib import pyplot as plt
 import healpy as hp
 from dipolesbi.tools.dataloader import split_train_val
-from dipolesbi.tools.inference import LikelihoodBasedInferer
+from dipolesbi.tools.inference import JaxNestedSampler, LikelihoodBasedInferer
 from dipolesbi.tools.maps import SimpleDipoleMap
 from surjectors import (
     Chain,
@@ -30,6 +30,7 @@ from surjectors.util import (
 from dipolesbi.tools.models import CustomModelJax, DipolePoisson
 from dipolesbi.tools.neural_flows import MAFNeuralLikelihood, MAFSurjectiveNeuralLikelihood
 from dipolesbi.tools.priors import DipolePrior
+from dipolesbi.tools.priors_jax import DipolePriorJax
 from dipolesbi.tools.simulator import Simulator
 from dipolesbi.tools.utils import jax_cart2sph, jax_sph2cart
 
@@ -122,6 +123,7 @@ if __name__ == "__main__":
     parser.add_argument("--n-iter", type=int, default=1_000)
     parser.add_argument("--model", type=str, default="coupling")
     args = parser.parse_args()
+    rng_key = jax.random.PRNGKey(42)
     n = 50_000
 
     # healpix Poisson data
@@ -143,6 +145,7 @@ if __name__ == "__main__":
     dipole = SimpleDipoleMap(NSIDE)    
     mean_count_range = [0.95*MEAN_DENSITY, 1.05*MEAN_DENSITY]
     prior = DipolePrior(mean_count_range=mean_count_range)
+    jax_prior = DipolePriorJax(mean_count_range=mean_count_range)
     prior.change_kwarg('N', 'mean_density')
     simulator = Simulator(prior, dipole.generate_dipole)
     prior_samples, y = simulator.make_batch_simulations(
@@ -182,11 +185,28 @@ if __name__ == "__main__":
             [
                 t_norm[:, 0],
                 t_norm[:, 1],
-                x, 
-                y,
-                z
+                x, y, z
             ],
             axis=1
+        )
+        return t_transformed
+
+    def transform_theta_jax(
+            params: dict[str, jnp.ndarray]
+    ) -> jnp.ndarray:
+        lon = jnp.deg2rad(params['phi'])
+        colat = jnp.pi / 2 - jnp.deg2rad(params['theta'])
+        x, y, z = jax_sph2cart(lon, colat)
+
+        N_norm = (params['N'] - t_mean[0]) / t_std[0]
+        D_norm = (params['D'] - t_mean[1]) / t_std[1]
+
+        t_transformed = jnp.stack(
+            [
+                N_norm,
+                D_norm,
+                x, y, z
+            ],
         )
         return t_transformed
 
@@ -222,6 +242,17 @@ if __name__ == "__main__":
     hp.projview(mean_samples, nest=True, graticule=True)
     plt.show()
 
+    data = normalise_y(x0)
+    def lnlike_jax(params: dict[str, jnp.ndarray]) -> jnp.ndarray:
+        theta: jnp.ndarray = transform_theta_jax(params)
+
+        log_like = nle.evaluate_lnlike(theta[None, :], data)
+        total_log_like = (log_like + log_det_jac(data).sum(axis=-1)).squeeze()
+        # print(total_log_like)
+        # jax.debug.print("loglike: {l}", l=total_log_like)
+
+        return total_log_like
+
     @jax.jit
     def lnlike(theta: jnp.ndarray, z: jnp.ndarray) -> jnp.ndarray:
         n_batches = theta.shape[0]
@@ -229,16 +260,19 @@ if __name__ == "__main__":
         theta_transformed = transform_t(theta)
 
         log_like = nle.evaluate_lnlike(
-            random.PRNGKey(2),
             theta_transformed, 
             jnp.broadcast_to(z, (n_batches, ndim_data))
         )
 
         return log_like + log_det_jac(z).sum(axis=-1)
 
-    custom_model = CustomModelJax(prior, lnlike)
-    sbased_inferer = LikelihoodBasedInferer(normalise_y(x0), custom_model)
-    sbased_inferer.run_ultranest()
+    jax_ns = JaxNestedSampler(lnlike_jax, jax_prior)
+    jax_ns.setup(rng_key, n_live=500, n_delete=50)
+    nested_samples = jax_ns.run()
+
+    # custom_model = CustomModelJax(prior, lnlike)
+    # sbased_inferer = LikelihoodBasedInferer(normalise_y(x0), custom_model)
+    # sbased_inferer.run_ultranest()
 
     classic_model = DipolePoisson(prior, nside=NSIDE, mask_map=mask_map)
     classic_inferer = LikelihoodBasedInferer(x0.squeeze(), classic_model)

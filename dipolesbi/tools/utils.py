@@ -14,6 +14,7 @@ from numpy.typing import NDArray
 from collections import defaultdict
 import torch.nn.functional as F
 from jax import numpy as jnp
+import jax
 
 
 def spherical_to_cartesian(theta_phi: tuple[NDArray, NDArray]) -> NDArray:
@@ -74,9 +75,46 @@ def sample_polar(unif: Tensor, low_high: tuple[Tensor, Tensor]) -> Tensor:
     unif_theta = torch.arccos(torch.cos(low) + unif * (torch.cos(high) - torch.cos(low)))
     return unif_theta
 
+def sample_polar_jax(
+        rng_key, 
+        minval: float = -90.,
+        maxval: float = 90.
+) -> jnp.ndarray:
+    '''
+    :param minval: Degrees latitude.
+    :param maxval: Degrees latitude.
+    :return: Samples in degrees latitude (-90, 90).
+    '''
+    unif = jax.random.uniform(rng_key, shape=())
+    minval_rad = jnp.pi / 2 - jnp.deg2rad(minval)
+    maxval_rad = jnp.pi / 2 - jnp.deg2rad(maxval)
+    unif_theta = jnp.arccos(
+        jnp.cos(minval_rad) + unif * (jnp.cos(maxval_rad) - jnp.cos(minval_rad))
+    )
+    return 90. - jnp.rad2deg(unif_theta)
+
 def polar_pdf(theta: float, low_high: list[float]):
     low = low_high[0]; high = low_high[1]
     return - np.sin(theta) / (np.cos(high) - np.cos(low))
+
+def polar_logpdf_jax(
+        latitude: jnp.ndarray, 
+        minval: float = -90.,
+        maxval: float = 90.
+) -> jnp.ndarray:
+    '''
+    :param latitude: Latitude in degrees (-90, 90).
+    '''
+    theta = jnp.pi / 2 - jnp.deg2rad(latitude)
+
+    # maxval and minval flip remapping from (-90, 90) to (0, pi) polar
+    maxval_rad = jnp.pi / 2 - jnp.deg2rad(minval)
+    minval_rad = jnp.pi / 2 - jnp.deg2rad(maxval)
+
+    return (
+        jnp.log(-jnp.sin(theta) / (jnp.cos(maxval_rad) - jnp.cos(minval_rad)))
+      + jnp.log(jnp.pi / 180) # p(theta_rad) -> p(theta_deg) Jacobian
+    )
 
 def softplus_pos(x):  # avoids zero scales
     return F.softplus(x) + 1e-8

@@ -162,13 +162,12 @@ class NeuralLikelihood(ABC):
 
     def evaluate_lnlike(
         self,
-        rng_key: PRNGKey,
         theta0: jnp.ndarray,
         x0: jnp.ndarray
     ) -> jnp.ndarray:
         logprob = self.model.apply(
-            self.params,
-            rng_key,
+            params=self.params,
+            rng=None, # don't pass key
             method='log_prob',
             x=theta0,
             y=x0
