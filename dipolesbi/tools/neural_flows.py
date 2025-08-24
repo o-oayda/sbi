@@ -1,7 +1,9 @@
+from typing import Literal
 import distrax
 import haiku as hk
 from haiku._src.transform import Transformed
 from haiku._src.typing import PRNGKey
+from healpy import npix2nside
 from jax import numpy as jnp
 from numpy.typing import NDArray
 from surjectors import (
@@ -20,6 +22,8 @@ import sys
 import matplotlib.pyplot as plt
 import logging
 from abc import ABC, abstractmethod
+from dipolesbi.tools.distributions import IndependentWrapper, NegBinomDist, PoissonDist, StudentT
+from dipolesbi.tools.healpix_helpers import build_layer_perms, first_layer_stratifying_perm, get_healpix_superpixels, make_latent_dims
 
 
 class NeuralLikelihood(ABC):
@@ -229,6 +233,7 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
             self,
             data_ndim: int, 
             n_layers: int = 3,
+            decoder_distribution: Literal['gaussian', 'poisson', 'nb', 'students_t'] = 'gaussian',
             decoder_n_neurons: int = 50, # mlp
             decoder_n_layers: int = 2, # mlp
             conditioner_n_neurons: int = 50,
@@ -238,6 +243,7 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         self.data_ndim = data_ndim
         self.n_layers = n_layers
         self.data_reduction_factor = data_reduction_factor
+        self.decoder_distribution = decoder_distribution
         self.decoder_n_neurons = decoder_n_neurons
         self.decoder_n_layers = decoder_n_layers
         self.conditioner_n_neurons = conditioner_n_neurons
@@ -273,30 +279,78 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         logging.fatal("didnt find correct conditioner type")
         raise ValueError("didnt find correct conditioner type")
 
-    def _decoder_fn(self, n_dimension):
+    def _decoder_fn(
+            self, 
+            n_dimension: int, 
+            decoder_distribution: str,
+            eps: float = 1e-8
+    ):
+        decoder_params_lookup = {
+            'gaussian': 2,
+            'nb': 2,
+            'poisson': 1,
+            'students_t': 3
+        }
+        n_decoder_params = decoder_params_lookup[decoder_distribution]
         decoder_net = make_mlp(
-            [self.decoder_n_neurons] * self.decoder_n_layers + [n_dimension * 2],
+            [self.decoder_n_neurons] * self.decoder_n_layers
+          + [n_dimension * n_decoder_params],
             activation=jax.nn.tanh,
         )
 
         def _fn(z):
             params = decoder_net(z)
-            mu, log_scale = jnp.split(params, 2, -1)
-            return distrax.Independent(distrax.Normal(mu, jnp.exp(log_scale)), 1)
+            if decoder_distribution == 'gaussian':
+                mu, log_scale = jnp.split(params, 2, -1)
+                return distrax.Independent(distrax.Normal(mu, jnp.exp(log_scale)), 1)
+
+            elif decoder_distribution == 'nb':
+                mu_raw, r_raw = jnp.split(params, 2, axis=-1)
+                mu = jax.nn.softplus(mu_raw) + eps
+                r  = jax.nn.softplus(r_raw) + eps
+                dist = NegBinomDist(mu, r)
+                return IndependentWrapper(dist, reinterpreted_batch_ndims=1)
+
+            elif decoder_distribution == 'poisson':
+                lambda_raw = params
+                lam = jax.nn.softplus(lambda_raw) + eps
+                dist = PoissonDist(lam)
+                return IndependentWrapper(dist, reinterpreted_batch_ndims=1)
+
+            elif decoder_distribution == 'students_t':
+                mu, log_scale, log_df = jnp.split(params, 3, -1)
+                scale = jnp.exp(log_scale)
+                df = jnp.exp(log_df) + 2.0     # keep df > 2 for finite variance
+                dist = StudentT(df=df, loc=mu, scale=scale)
+                return IndependentWrapper(dist, reinterpreted_batch_ndims=1)
+
+            else:
+                raise Exception('Unrecognised decoder distribution.')
 
         return _fn
 
     def _flow(self, method: str, **kwargs):
-        dim = self.data_ndim
-        layers = []
-        order = jnp.arange(dim)
+        dim = self.data_ndim # npix
+        nside = npix2nside(dim)
+        super_pixel_blocks = get_healpix_superpixels(nside)
+        latentdim = int(self.reduction_factor * dim)
 
-        for _ in range(self.n_layers):
+        perm0 = first_layer_stratifying_perm(latentdim, super_pixel_blocks)
+        layers = []
+        layers.append(Permutation(perm0, 1))
+
+        latent_dims = make_latent_dims(dim, self.n_layers, self.reduction_factor)
+        layer_perms = build_layer_perms(latent_dims)
+
+        for i in range(self.n_layers):
             reduc = self.reduction_factor
             latent_dim = int(reduc * dim)
             layer = AffineMaskedAutoregressiveInferenceFunnel(
                 n_keep=latent_dim,
-                decoder=self._decoder_fn(dim - latent_dim),
+                decoder=self._decoder_fn(
+                    dim - latent_dim,
+                    decoder_distribution=self.decoder_distribution
+                ),
                 conditioner=MADE(
                     input_size=latent_dim,
                     hidden_layer_sizes=[self.conditioner_n_neurons]
@@ -309,10 +363,7 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
             )
             layers.append(layer)
             dim = latent_dim
-            order = order[::-1]
-            order = order[:dim]
-            order = order - jnp.min(order)
-            layers.append(Permutation(order, 1))
+            layers.append(Permutation(layer_perms[i], 1))
 
         layers = layers[:-1]
         chain = Chain(layers)

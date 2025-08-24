@@ -159,7 +159,12 @@ if __name__ == "__main__":
         ).reshape(4, 1)
     )
     prior_samples = jnp.asarray(prior_samples)
-    y = jnp.asarray(y)
+    y = jnp.asarray(y) # + jax.random.uniform(
+    #     rng_key, 
+    #     shape=y.shape, 
+    #     minval=-0.5, 
+    #     maxval=0.5
+    # ) # dequantise
     (y_tr, y_val), (t_tr, t_val) = split_train_val(y, prior_samples)
     
     y_mean = y_tr.mean(axis=0); y_std = y_tr.std(axis=0) + 1e-8
@@ -232,7 +237,12 @@ if __name__ == "__main__":
     val_data = named_dataset(normalise_y(y_val), transform_t(t_val))
 
     # nle = MAFNeuralLikelihood(ndim, n_layers=5)
-    nle = MAFSurjectiveNeuralLikelihood(ndim, n_layers=5, data_reduction_factor=0.7)
+    nle = MAFSurjectiveNeuralLikelihood(
+        ndim, 
+        n_layers=5, 
+        data_reduction_factor=0.5, # lower implies larger reduction
+        decoder_distribution='gaussian'
+    )
     nle.train(hk.PRNGSequence(2), train_data, val_data)
     nle.plot_loss_curve()
 
@@ -248,32 +258,26 @@ if __name__ == "__main__":
 
         log_like = nle.evaluate_lnlike(theta[None, :], data)
         total_log_like = (log_like + log_det_jac(data).sum(axis=-1)).squeeze()
-        # print(total_log_like)
-        # jax.debug.print("loglike: {l}", l=total_log_like)
 
         return total_log_like
-
-    @jax.jit
-    def lnlike(theta: jnp.ndarray, z: jnp.ndarray) -> jnp.ndarray:
-        n_batches = theta.shape[0]
-        ndim_data = z.shape[-1]
-        theta_transformed = transform_t(theta)
-
-        log_like = nle.evaluate_lnlike(
-            theta_transformed, 
-            jnp.broadcast_to(z, (n_batches, ndim_data))
-        )
-
-        return log_like + log_det_jac(z).sum(axis=-1)
 
     jax_ns = JaxNestedSampler(lnlike_jax, jax_prior)
     jax_ns.setup(rng_key, n_live=500, n_delete=50)
     nested_samples = jax_ns.run()
 
-    # custom_model = CustomModelJax(prior, lnlike)
-    # sbased_inferer = LikelihoodBasedInferer(normalise_y(x0), custom_model)
-    # sbased_inferer.run_ultranest()
-
     classic_model = DipolePoisson(prior, nside=NSIDE, mask_map=mask_map)
     classic_inferer = LikelihoodBasedInferer(x0.squeeze(), classic_model)
     classic_inferer.run_ultranest()
+
+    print(
+        f"NLE Log Evidence: {nested_samples.logZ():.2f} "
+        f"± {nested_samples.logZ(100).std():.2f}" # type: ignore
+    )
+    print(
+        f"Classic Log Evidence: {classic_inferer.log_bayesian_evidence:.2f} "
+        f"± {classic_inferer.log_bayesian_evidence_err:.2f}" # type: ignore
+    )
+    sigma = (
+        np.abs(nested_samples.logZ() - classic_inferer.log_bayesian_evidence) # type: ignore
+      / np.sqrt(nested_samples.logZ(1000).std()**2 + classic_inferer.log_bayesian_evidence_err**2)) # type: ignore
+    print(f'Tension: {sigma}')

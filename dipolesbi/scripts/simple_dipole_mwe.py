@@ -23,7 +23,7 @@ from dipolesbi.tools.transforms import AnscombeTransform
 
 LOAD_PATH_RAW: Optional[str] = None # 'raw_NLE_nside8.pkl'
 LOAD_PATH_TRANS: Optional[str] = None # 'trans_NLE_nside8.pkl'
-TRAINING_DEVICE: str = 'mps'
+TRAINING_DEVICE: str = 'cuda'
 N_WORKERS: int = 12
 
 ## ---------------------------------------------------
@@ -84,7 +84,7 @@ t_std = torch.mean(sample_std)
 # transform = LogAffineTransform(mu, t_std, learn_mu=False) 
 # transform = AnscombeTransform() # a bit shitter than LogAffineTransform
 # transform = HealpixHaarPyramid(nside_fine=NSIDE)
-transform = HealpixSOPyramid(NSIDE, method='SO')
+transform = HealpixSOPyramid(NSIDE, method='SO', nside_at_levels=[8, 4, 2])
 transform.to(TRAINING_DEVICE)
 
 normalise = lambda input: (input - mu) / t_std
