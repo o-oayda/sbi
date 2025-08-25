@@ -1,5 +1,6 @@
+from os import wait
 from typing import Optional, Tuple, cast, Literal
-from healpy import isnsideok, nside2npix
+from healpy import isnsideok, npix2nside, nside2npix
 from numpy.typing import NDArray
 import torch
 from torch import Tensor, device
@@ -9,6 +10,7 @@ import math
 import numpy as np
 from dipolesbi.tools.utils import softplus_pos
 import torch.nn.functional as F
+from jax import numpy as jnp
 
 
 class LogAffineTransform(Transform):
@@ -162,33 +164,138 @@ class LearnableNormaliser(torch.nn.Module):
 
         return a_norm, d_norm, logdet
 
-def int_haar4_forward(x):  # x: (..., 4) integer tensor
-    x0, x1, x2, x3 = x[...,0], x[...,1], x[...,2], x[...,3]
+class HaarWaveletTransform:
+    def __init__(self) -> None:
+        self.M = jnp.asarray(
+            [[0.25, 0.25, 0.25, 0.25],
+             [-1. , 1.  , 0.  , 0.  ],
+             [0.  , 0.  , -1. , 1.  ],
+             [-0.5, -0.5, 0.5 , 0.5 ]]
+        )
+        self.M_inv = jnp.asarray(
+            [[1, -0.5,  0. , -0.5],
+             [1,  0.5,  0. , -0.5],
+             [1,  0. , -0.5,  0.5],
+             [1,  0. ,  0.5,  0.5]]
+        )
+        self.R = jnp.asarray(
+            [[2.,  0.,   0.,  0.],
+             [0.,  0.,   0., -1.],
+             [0., -0.5, -0.5, 0.],
+             [0., -0.5,  0.5, 0.]]
+        )
+        self.R_inv = jnp.linalg.inv(self.R)
 
-    d1 = x1 - x0
-    s1 = x0 + (d1 // 2)            # floor division
+        self.mu_at_level: list[list[jnp.ndarray]] = []
+        self.std_at_level: list[list[jnp.ndarray]] = []
+        self.empty_norm_stats_flag: bool = True
 
-    d2 = x3 - x2
-    s2 = x2 + (d2 // 2)
+    def cycle_healpix_tree(
+            self, 
+            y: jnp.ndarray,
+            last_nside: int = 1
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+        batches, npix_fine = y.shape
+        cur_npix = npix_fine
+        nside_fine = npix2nside(npix_fine)
+        n_levels = int(np.log2(nside_fine) - np.log2(last_nside))
+        downscale_factors = n_levels * [4]
 
-    D  = s2 - s1
-    A  = s1 + (D // 2)
+        coefficients_fine2coarse: list[jnp.ndarray] = [] 
+        a_list: list[jnp.ndarray] = []
+        logdets_at_each_level: list[jnp.ndarray] = []
+        
+        logdet = jnp.zeros(batches)
+        downstream_coefficients = y
 
-    # output order: [coarse≈average, three details]
-    return torch.stack([A, d1, d2, D], dim=-1)
+        for lvl, factor in enumerate(downscale_factors):
+            per_level_logdet = jnp.zeros(())
 
-def int_haar4_inverse(y):  # y: (..., 4) with [A, d1, d2, D]
-    A, d1, d2, D = y[...,0], y[...,1], y[...,2], y[...,3]
+            P = cur_npix // factor
+            child_pixels = downstream_coefficients.reshape(batches, P, factor)
 
-    s1 = A - (D // 2)
-    s2 = D + s1
+            z = self.forward(child_pixels) # (n_batches, n_pix // 4, 4)
 
-    x0 = s1 - (d1 // 2)
-    x1 = d1 + x0
-    x2 = s2 - (d2 // 2)
-    x3 = d2 + x2
+            coarse_coeffs = z[..., 0]
+            d1 = z[..., 1]
+            d2 = z[..., 2]
+            d3 = z[..., 3]
 
-    return torch.stack([x0, x1, x2, x3], dim=-1)
+            cur_mus = []
+            cur_stds = []
+            for i, coef in enumerate([coarse_coeffs, d1, d2, d3]):
+                if self.empty_norm_stats_flag:
+                    mu = coef.mean()
+                    sigma = coef.std()
+                    cur_mus.append(mu)
+                    cur_stds.append(sigma)
+                else:
+                    mu = self.mu_at_level[lvl][i]
+                    sigma = self.std_at_level[lvl][i]
+
+                z = z.at[..., i].set((z[..., i] - mu) / sigma)
+                per_level_logdet += - P * jnp.log(sigma)
+
+            if self.empty_norm_stats_flag:
+                self.mu_at_level.append(cur_mus)
+                self.std_at_level.append(cur_stds)
+
+            logdets_at_each_level.append(per_level_logdet)
+            logdet += per_level_logdet
+
+            coefficients_fine2coarse.append(z)
+            a_list.append(coarse_coeffs)
+            downstream_coefficients = z[..., 0]
+            cur_npix = P
+
+        a_coarse = downstream_coefficients # (batches, out_npix)
+        self.empty_norm_stats_flag = False
+
+        # Build z: keep a_coarse, then details from coarse->fine
+        # (drop the a's there)
+        z_parts = [a_coarse.reshape(batches, -1)]  # list[ (B, out_npix) ]
+        for y in reversed(coefficients_fine2coarse): # now coarse->fine
+            z_parts.append(y[..., 1:].reshape(batches, -1))
+        z = jnp.concatenate(z_parts, axis=1)
+
+        return z, logdet
+
+    def forward(self, v: jnp.ndarray) -> jnp.ndarray:
+        y = v @ self.M.T
+        return y @ self.R.T
+
+    def inverse(self, z: jnp.ndarray) -> jnp.ndarray:
+        y = z @ self.R_inv.T
+        return y @ self.M_inv.T
+
+
+    def int_haar4_forward(self, x):  # x: (..., 4) integer tensor
+        x0, x1, x2, x3 = x[...,0], x[...,1], x[...,2], x[...,3]
+
+        d1 = x1 - x0
+        s1 = x0 + (d1 // 2)            # floor division
+
+        d2 = x3 - x2
+        s2 = x2 + (d2 // 2)
+
+        D  = s2 - s1
+        A  = s1 + (D // 2)
+
+        # output order: [coarse≈average, three details]
+        return torch.stack([A, d1, d2, D], dim=-1)
+
+    def int_haar4_inverse(self, y):  # y: (..., 4) with [A, d1, d2, D]
+        A, d1, d2, D = y[...,0], y[...,1], y[...,2], y[...,3]
+
+        s1 = A - (D // 2)
+        s2 = D + s1
+
+        x0 = s1 - (d1 // 2)
+        x1 = d1 + x0
+        x2 = s2 - (d2 // 2)
+        x3 = d2 + x2
+
+        return torch.stack([x0, x1, x2, x3], dim=-1)
 
 class HealpixSOPyramid(torch.nn.Module):
     def __init__(

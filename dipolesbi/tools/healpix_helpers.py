@@ -1,6 +1,37 @@
 import jax
 import jax.numpy as jnp
+import numpy as np
 
+def build_funnel_steps(n_coarse: int, detail_lengths: list[int]):
+    """Return a list of (perm, n_keep, n_drop) for a state initially
+       [coarse | d1 | d2 | ...], dropping d1 then d2 ..."""
+    remaining = [n_coarse] + list(detail_lengths)
+    steps = []
+    while len(remaining) > 1:
+        starts = np.cumsum([0] + remaining[:-1])
+        blocks = [np.arange(starts[i], starts[i] + remaining[i]) for i in range(len(remaining))]
+        keep_blocks = [blocks[0]] + blocks[2:]   # coarse + d2..end
+        drop_block  = blocks[1]                  # current d1
+        keep_idx = np.concatenate(keep_blocks, 0)
+        drop_idx = drop_block
+        # sanity: permutation must be 0..(dim-1)
+        dim_before = sum(remaining)
+        perm = np.concatenate([keep_idx, drop_idx], 0)
+        assert perm.shape[0] == dim_before
+        assert np.array_equal(np.sort(perm), np.arange(dim_before))
+        steps.append((jnp.asarray(perm), int(keep_idx.size), int(drop_idx.size)))
+        # after dropping d1, the state is [coarse | d2 | ...]
+        remaining = [remaining[0]] + remaining[2:]
+    return steps
+
+def permute_within_types(cur_dim: int, n_coarse: int, seed: int):
+    c = min(n_coarse, cur_dim)
+    d = cur_dim - c
+    key = jax.random.PRNGKey(seed)
+    k1, k2 = jax.random.split(key, 2)
+    p1 = jax.random.permutation(k1, c)
+    p2 = jnp.array([], dtype=jnp.int32) if d == 0 else (jax.random.permutation(k2, d) + c)
+    return jnp.concatenate([p1, p2], axis=0)
 
 def make_latent_dims(dim0: int, n_layers: int, reduction_factor: float):
     dims = []
