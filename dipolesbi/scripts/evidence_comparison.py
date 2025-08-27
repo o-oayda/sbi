@@ -1,4 +1,5 @@
 from typing import Any, Callable, Optional
+from anesthetic import NestedSamples
 from blackjax.types import PRNGKey
 import haiku as hk
 import jax
@@ -29,6 +30,7 @@ class MultiRoundInferer:
             rng_key: PRNGKey,
             initial_proposal: DipolePriorJax,
             simulator_function: Callable[[PRNGKey, dict[str, jnp.ndarray]], jnp.ndarray],
+            reference_observation: jnp.ndarray,
             simulation_budget: int = 50_000, 
             n_rounds: int = 10,
             nle_config: dict[str, Any] = {},
@@ -43,6 +45,7 @@ class MultiRoundInferer:
         self.initial_proposal = initial_proposal
         self.initial_proposal.change_kwarg('N', 'mean_density')
         self.simulator_function = simulator_function
+        self.reference_observation = reference_observation[None, :]
 
         self.data_mean = None
         self.data_std = None
@@ -51,24 +54,48 @@ class MultiRoundInferer:
 
     def run(self):
         # TODO: how do I properly handle keys?
+        print('Sampling from proposal...')
         theta = self._sample_proposal(n_samples=self.simulations_per_round)
-        data = self._generate_simulations(theta)
-        trn_set, val_set = self._make_train_val_set(data, theta)
 
+        print('Generating simulations...')
+        data = self._generate_simulations(theta)
+        self.trn_set, self.val_set = self._make_train_val_set(data, theta)
 
         data_ndim = data.shape[-1]
         self.nle = self._instantiate_nle(data_ndim)
 
+        print('Starting training...')
         self.nle.train(
             hk.PRNGSequence(2),
-            trn_set, 
-            val_set,
+            self.trn_set, 
+            self.val_set,
             **{
                 'learning_rate': 1e-5,
                 **self.train_config
             }
         )
-        nle.plot_loss_curve()
+        self.nle.plot_loss_curve()
+
+        posterior_samples = self._sample_posterior()
+
+    def _sample_posterior(self) -> NestedSamples:
+        x0, log_det_jac = self._normalise_data(self.reference_observation)
+
+        def lnlike_jax(params: dict[str, jnp.ndarray]) -> jnp.ndarray:
+            theta = self._normalise_theta(params, in_ns=True)
+            log_like = self.nle.evaluate_lnlike(theta[None, :], x0)
+            log_like += log_det_jac
+            return log_like.squeeze()
+
+        self.jax_ns = JaxNestedSampler(lnlike_jax, self.initial_proposal)
+        self.jax_ns.setup(self.rng_key, n_live=1000, n_delete=50)
+        self.nested_samples = self.jax_ns.run()
+
+        # TODO: should be equal-weighted but need to double check
+        print('Sampling from learned posterior...')
+        posterior_samples = self.nested_samples.sample(n=self.simulations_per_round)
+
+        return posterior_samples
 
     def _make_train_val_set(
             self, 
@@ -78,13 +105,13 @@ class MultiRoundInferer:
         (trn_data, val_data), (trn_theta, val_theta) = self._split_train_val(data, theta)
         self._compute_norm_stats(trn_data, trn_theta)
 
-        trn_data = self._normalise_data(trn_data)
-        val_data = self._normalise_data(val_data)
+        trn_data, _ = self._normalise_data(trn_data)
+        val_data, _ = self._normalise_data(val_data)
         trn_theta = self._normalise_theta(trn_theta)
         val_theta = self._normalise_theta(val_theta)
 
-        trn_set = named_dataset(y_tr, t_tr)
-        val_set = named_dataset(y_val,t_val)
+        trn_set = named_dataset(trn_data, trn_theta)
+        val_set = named_dataset(val_data, val_theta)
 
         return trn_set, val_set
 
@@ -106,6 +133,7 @@ class MultiRoundInferer:
         assert self.data_mean is None
         assert self.theta_mean is None
 
+        # per pixel mean and std across all batches
         self.data_mean = train_data.mean(axis=0)
         self.data_std = train_data.std(axis=0) + 1e-8
 
@@ -119,7 +147,8 @@ class MultiRoundInferer:
     def _normalise_theta(
         self,
         theta: dict[str, jnp.ndarray],
-    ) -> dict[str, jnp.ndarray]:
+        in_ns: bool = False
+    ) -> jnp.ndarray:
         lon = jnp.deg2rad(theta['dipole_longitude'])
         colat = jnp.pi / 2 - jnp.deg2rad(theta['dipole_latitude'])
         x, y, z = jax_sph2cart(lon, colat)
@@ -127,22 +156,27 @@ class MultiRoundInferer:
         assert self.theta_mean is not None
         assert self.theta_std is not None
 
-        t_transformed = {
-            'N': (theta['mean_density'] - self.theta_mean[0]) / self.theta_std[0],
-            'D': (theta['observer_speed'] - self.theta_mean[1]) / self.theta_std[1],
-            'x': x,
-            'y': y,
-            'z': z
-        }
-
+        t_transformed = jnp.stack(
+            [
+                (theta['mean_density'] - self.theta_mean[0]) / self.theta_std[0],
+                (theta['observer_speed'] - self.theta_mean[1]) / self.theta_std[1],
+                x, y, z
+            ],
+            axis=1 if not in_ns else 0
+        )
         return t_transformed
 
-    def _normalise_data(self, data: jnp.ndarray) -> jnp.ndarray:
+    def _normalise_data(self, data: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         '''
         Normalise only using stats computed from the training data.
         '''
+        assert self.data_mean is not None
+        assert self.data_std is not None
+
         data_norm = (data - self.data_mean) / self.data_std
-        return data_norm
+        log_det_jac = - jnp.log(self.data_std).sum()
+
+        return data_norm, log_det_jac
 
     def _sample_proposal(self, n_samples: int) -> dict[str, jnp.ndarray]:
         init_keys = jax.random.split(self.rng_key, n_samples)
@@ -163,6 +197,8 @@ class MultiRoundInferer:
                 'maf_stack_size': 15,
                 'conditioner_n_neurons': 128,
                 'decoder_n_layers': 3,
+                'n_coarse': 0,
+                'n_layers': 5,
                 **self.nle_config
             }
         )

@@ -456,7 +456,7 @@ class JaxNestedSampler:
                 pbar.update(self.n_delete)
 
         dead = blackjax.ns.utils.finalise(live, dead)
-        columns = self.prior.prior_names
+        columns = self.prior.simulator_kwargs
         data = jnp.vstack([dead.particles[key] for key in columns]).T # type: ignore
 
         self.nested_samples = NestedSamples(
