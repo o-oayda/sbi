@@ -450,21 +450,11 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         self.keep_idxs = []
         dropped_total = 0       
 
-        for i, (per, nk, nd) in enumerate(self.blocks):
+        for _, (per, nk, nd) in enumerate(self.blocks):
             n_drop = nd
             n_keep = nk
             perm = per
-            # start = n_coarse + dropped_total
-            # stop  = start + n_drop
-            #
-            # drop_idx = jnp.arange(start, stop)     # indices to drop *in the current state*
-            # keep_idx = jnp.concatenate(
-            #     [jnp.arange(0, n_coarse), jnp.arange(stop, dim)],
-            #     axis=0
-            # )
-            # self.keep_idxs.append(keep_idx)
-            #
-            # perm = jnp.concatenate([keep_idx, drop_idx], axis=0)
+
             self.layers.append(Permutation(perm, 1))
 
             self.layers.append(

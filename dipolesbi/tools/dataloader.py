@@ -36,3 +36,31 @@ def split_train_val(
 
     val_idx, train_idx = perm[:n_validation], perm[n_validation:]
     return (y[train_idx], y[val_idx]), (x[train_idx], x[val_idx])
+
+def split_train_val_dict(
+        y: jnp.ndarray, 
+        x: dict[str, jnp.ndarray], 
+        validation_fraction: float = 0.1, 
+        key=PRNGKey(0)
+) -> tuple[
+        tuple[jnp.ndarray, jnp.ndarray],
+        tuple[dict[str, jnp.ndarray], dict[str, jnp.ndarray]]
+    ]:
+    '''
+    :return: Tuple[ tuple[y_train, x_train], tuple[y_val, x_val] ].
+    '''
+    n_batches = y.shape[0]
+
+    indexes = jnp.arange(n_batches)
+    perm = permutation(key, indexes)
+    n_validation = int(n_batches * validation_fraction)
+
+    val_idx, train_idx = perm[:n_validation], perm[n_validation:]
+
+    y_tuple = (y[train_idx], y[val_idx])
+
+    x_tr = {key: val[train_idx] for key, val in x.items()}
+    x_val = {key: val[val_idx] for key, val in x.items()}
+    x_tuple = (x_tr, x_val)
+
+    return y_tuple, x_tuple

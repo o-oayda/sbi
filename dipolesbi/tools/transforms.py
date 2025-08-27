@@ -11,6 +11,8 @@ import numpy as np
 from dipolesbi.tools.utils import softplus_pos
 import torch.nn.functional as F
 from jax import numpy as jnp
+import jax
+from functools import partial
 
 
 class LogAffineTransform(Transform):
@@ -215,6 +217,11 @@ class HaarWaveletTransform:
             child_pixels = downstream_coefficients.reshape(batches, P, factor)
 
             z = self.forward(child_pixels) # (n_batches, n_pix // 4, 4)
+            # outs = []
+            # batchsize = 128
+            # for i in range(0, batches, batchsize):
+            #     outs.append(self.forward_in_batch(child_pixels[i:i+batchsize]))
+            # z = jnp.concatenate(outs, axis=0)
 
             coarse_coeffs = z[..., 0]
             d1 = z[..., 1]
@@ -264,10 +271,20 @@ class HaarWaveletTransform:
         y = v @ self.M.T
         return y @ self.R.T
 
+    @partial(jax.jit, static_argnums=(0, 2,))
+    def forward_in_batch(self, v_batch, use_bf16: bool = True):
+        # v_batch: (B, G, 4),  M: (4,4)
+        if use_bf16:
+            v_batch = v_batch.astype(jnp.bfloat16)
+            M = self.M.astype(jnp.bfloat16)
+        else:
+            M = self.M
+        y = jnp.einsum('bgc,cd->bgd', v_batch, M)   # (B, G, 4)
+        return y.astype(jnp.float32) if use_bf16 else y
+
     def inverse(self, z: jnp.ndarray) -> jnp.ndarray:
         y = z @ self.R_inv.T
         return y @ self.M_inv.T
-
 
     def int_haar4_forward(self, x):  # x: (..., 4) integer tensor
         x0, x1, x2, x3 = x[...,0], x[...,1], x[...,2], x[...,3]

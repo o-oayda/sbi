@@ -1,3 +1,5 @@
+from blackjax.types import PRNGKey
+import jax
 import numpy as np
 from numpy.typing import NDArray
 from dipolesbi.tools.points import (
@@ -9,7 +11,7 @@ import torch
 from numpy.random import poisson
 from torch.types import Tensor
 from dipolesbi.tools.utils import (
-    enforce_batchwise_input, spherical_to_cartesian, omega_to_theta,
+    enforce_batchwise_input, jax_sph2cart, spherical_to_cartesian, omega_to_theta,
     equatorial_to_ecliptic
 )
 from dipolesbi.tools.physics import ellis_baldwin_amplitude
@@ -23,6 +25,8 @@ from dipolesbi.tools.noise_models import parse_noise_model
 from dipolesbi.tools.noise_models import ecliptic_noise
 from astropy.coordinates import SkyCoord
 import astropy.units as u
+from jax import numpy as jnp
+
 
 class Mask:
     def __init__(self, nside: int = 32):
@@ -77,6 +81,40 @@ class Mask:
             nest=True
         )
         return list(north_pole_disc_pixels)
+
+class SimpleDipoleMapJax:
+    def __init__(self, nside: int = 64):
+        self.nside = nside
+        self.fiducial_amplitude = 0.005
+        self.nest = True
+        self.n_pix: int = hp.nside2npix(self.nside)
+        self.pixel_indices = jnp.arange(self.n_pix)
+        self.pixel_vectors = np.stack(
+            hp.pix2vec(self.nside, self.pixel_indices, nest=True)
+        )
+
+    def generate_dipole(self, rng_key: PRNGKey, theta: dict[str, jnp.ndarray]) -> jnp.ndarray:
+        poisson_mean = self.dipole_signal(**theta)
+        return jax.random.poisson(rng_key, poisson_mean)
+
+    def dipole_signal(
+            self, 
+            mean_density: jnp.ndarray, 
+            observer_speed: jnp.ndarray, 
+            dipole_longitude: jnp.ndarray,
+            dipole_latitude: jnp.ndarray
+    ) -> jnp.ndarray:
+        dipole_longitude_rad = jnp.deg2rad(dipole_longitude)
+        dipole_colatitude_rad = jnp.pi / 2 - jnp.deg2rad(dipole_latitude)
+
+        D_x, D_y, D_z = jax_sph2cart(dipole_longitude_rad, dipole_colatitude_rad)
+        dipole_unit_vector = jnp.stack([D_x, D_y, D_z])
+        dipole_amplitude = observer_speed * self.fiducial_amplitude
+        dipole_vector = dipole_amplitude * dipole_unit_vector
+        poisson_mean = mean_density * (
+            1 + jnp.einsum('i,ij', dipole_vector, self.pixel_vectors)
+        )
+        return poisson_mean
 
 class SimpleDipoleMap:
     def __init__(self, nside: int = 64, device: str = 'cpu'):

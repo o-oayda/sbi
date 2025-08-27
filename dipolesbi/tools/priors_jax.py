@@ -88,7 +88,8 @@ class JaxPrior(ABC):
         for rng_key, name in zip(init_keys, self.prior_names):
             a = self.prior_dict[name]['low_range']
             b = self.prior_dict[name]['high_range']
-            params[name] = self.prior_dict[name]['sample_func'](rng_key, a, b)
+            long_name = self.prior_dict[name]['simulator_kwarg']
+            params[long_name] = self.prior_dict[name]['sample_func'](rng_key, a, b)
         return params
 
     def get_initial_live_samples(
@@ -103,7 +104,8 @@ class JaxPrior(ABC):
     def log_prob(self, params: dict[str, jnp.ndarray]) -> jnp.ndarray:
         log_prior = jnp.zeros(())
         for _, name in enumerate(self.prior_names): 
-            x = params[name]
+            long_name = self.prior_dict[name]['simulator_kwarg']
+            x = params[long_name]
             a = self.prior_dict[name]['low_range']
             b = self.prior_dict[name]['high_range']
             log_prior += self.prior_dict[name]['logpdf_func'](x, a, b)
