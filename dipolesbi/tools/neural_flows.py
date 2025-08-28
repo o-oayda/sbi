@@ -1,4 +1,3 @@
-from typing import Literal
 import distrax
 import haiku as hk
 from haiku._src.transform import Transformed
@@ -22,6 +21,7 @@ import sys
 import matplotlib.pyplot as plt
 import logging
 from abc import ABC, abstractmethod
+from dipolesbi.tools.configs import SurjectiveNLEConfig, TrainingConfig
 from dipolesbi.tools.distributions import IndependentWrapper, NegBinomDist, PoissonDist, StudentT
 from dipolesbi.tools.healpix_helpers import build_layer_perms, first_layer_stratifying_perm, get_healpix_superpixels, make_latent_dims, permute_within_types
 
@@ -70,28 +70,26 @@ class NeuralLikelihood(ABC):
             rng_seq: hk.PRNGSequence, 
             training_data: named_dataset, 
             validation_data: named_dataset,
-            max_n_iter: int = 1000,
-            batch_size: int = 100,
-            patience: int = 20,
-            learning_rate: float = 0.0001
+            config: TrainingConfig = TrainingConfig()
     ) -> tuple[NDArray, NDArray]:
         assert self.model is not None
+        self.trn_config = config
 
         train_iter = as_batch_iterator(
             rng_key=next(rng_seq), 
             data=training_data,
-            batch_size=batch_size,
+            batch_size=self.trn_config.batch_size,
             shuffle=True
         )
         val_iter = as_batch_iterator(
             rng_key=next(rng_seq), 
             data=validation_data,
-            batch_size=batch_size,
+            batch_size=self.trn_config.batch_size,
             shuffle=True
         )
         params = self.model.init(next(rng_seq), method='log_prob', **train_iter(0))
 
-        optimiser = optax.adam(learning_rate, b2=0.999)
+        optimiser = optax.adam(self.trn_config.learning_rate, b2=self.trn_config.adam_b2)
         state = optimiser.init(params)
         
         @jax.jit
@@ -111,13 +109,13 @@ class NeuralLikelihood(ABC):
                 self.model.apply(params, None, method='log_prob', **batch)
             )
 
-        losses = np.nan * np.zeros(max_n_iter)
-        val_losses = np.nan * np.zeros(max_n_iter)
+        losses = np.nan * np.zeros(self.trn_config.max_n_iter)
+        val_losses = np.nan * np.zeros(self.trn_config.max_n_iter)
         best_params = params
         best_val = np.inf
         wait = 0
 
-        for i in range(max_n_iter):
+        for i in range(self.trn_config.max_n_iter):
             train_loss = 0.0
             for j in range(train_iter.num_batches):
                 batch = train_iter(j)
@@ -134,7 +132,7 @@ class NeuralLikelihood(ABC):
                 f"\rIteration: {i} | "
                 f"Training NLL: {train_loss:.4f} | "
                 f"Validation NLL: {val_loss:.4f} | "
-                f"Early stopping at {patience} ({wait})"
+                f"Early stopping at {self.trn_config.patience} ({wait})"
             )
             sys.stdout.flush()
 
@@ -147,7 +145,7 @@ class NeuralLikelihood(ABC):
                 wait = 0
             else:
                 wait += 1
-                if wait >= patience:
+                if wait >= self.trn_config.patience:
                     print(
                         f"\nEarly stopping at iteration {i} "
                         f"(best val NLL={best_val:.4f})"
@@ -241,35 +239,10 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
     def __init__(
             self,
             data_ndim: int, 
-            n_layers: int = 3,
-            permute_data: bool = True,
-            n_coarse: int = 0,
-            blocks: list[tuple[jnp.ndarray, int, int]] = [],
-            maf_stack_size : int = 1,
-            decoder_distribution: Literal['gaussian', 'poisson', 'nb', 'students_t'] = 'gaussian',
-            decoder_n_neurons: int = 50, # mlp
-            decoder_n_layers: int = 2, # mlp
-            conditioner: Literal['made', 'mlp', 'transformer'] = 'made',
-            conditioner_n_neurons: int = 50,
-            conditioner_n_layers: int = 2,
-            conditioner_kwargs: dict = {},
-            data_reduction_factor: float = 0.5
+            config: SurjectiveNLEConfig = SurjectiveNLEConfig()
     ) -> None:
         self.data_ndim = data_ndim
-        self.n_layers = n_layers
-        self.permute_data = permute_data
-        self.n_coarse = n_coarse
-        self.blocks = blocks
-        self.maf_stack_size = maf_stack_size
-        self.data_reduction_factor = data_reduction_factor
-        self.decoder_distribution = decoder_distribution
-        self.decoder_n_neurons = decoder_n_neurons
-        self.decoder_n_layers = decoder_n_layers
-        self.conditioner = conditioner
-        self.conditioner_kwargs = conditioner_kwargs
-        self.conditioner_n_neurons = conditioner_n_neurons
-        self.conditioner_n_layers = conditioner_n_layers
-        self.reduction_factor = data_reduction_factor
+        self.nle_config = config
         self.model = self.get_flow()
 
     def __repr__(self):
@@ -300,11 +273,13 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         return base_distribution
 
     def _conditioner_fn(self, input_dim, output_dim, **kwargs):
-        if self.conditioner == "mlp":
+        if self.nle_config.conditioner == "mlp":
             return make_mlp(
-                [self.conditioner_n_neurons] * self.conditioner_n_layers + [output_dim],
+                [self.nle_config.conditioner_n_neurons]
+              * self.nle_config.conditioner_n_layers
+              + [output_dim],
             )
-        elif self.conditioner == "transformer":
+        elif self.nle_config.conditioner == "transformer":
             return make_transformer(
                 {
                     'output_dim': output_dim,
@@ -316,11 +291,11 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
                     **kwargs
                 }
             )
-        elif self.conditioner == 'made':
+        elif self.nle_config.conditioner == 'made':
             return MADE(
                 input_size=input_dim,
-                hidden_layer_sizes=[self.conditioner_n_neurons]
-                    * self.conditioner_n_layers,
+                hidden_layer_sizes=[self.nle_config.conditioner_n_neurons]
+                    * self.nle_config.conditioner_n_layers,
                 n_params=2,
                 w_init=hk.initializers.TruncatedNormal(stddev=0.01),
                 b_init=jnp.zeros,
@@ -349,7 +324,7 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         #     dropout_rate=0.1
         # )
         decoder_net = make_mlp(
-            [self.decoder_n_neurons] * self.decoder_n_layers
+            [self.nle_config.decoder_n_neurons] * self.nle_config.decoder_n_layers
           + [n_dimension * self.n_decoder_params],
             activation=jax.nn.tanh,
         )
@@ -386,42 +361,54 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         return _fn
 
     def _flow(self, method: str, **kwargs):
-        if len(self.blocks) != 0:
+        if self.nle_config.flow_type == 'heirarchical':
             # print('Using heirarchical flow...')
             return self._heirarchical_flow(method, **kwargs)
-        elif self.n_coarse == 0:
+        elif self.nle_config.flow_type == 'standard':
             # print('Using standard flow...')
             return self._standard_flow(method, **kwargs)
-        else:
+        elif self.nle_config.flow_type == 'coarse':
             # print('Using coarse flow...')
             return self._coarse_flow(method, **kwargs)
+        else:
+            raise Exception(
+                f'Flow type {self.nle_config.flow_type} in config not recognised.'
+            )
 
+    
     def _standard_flow(self, method: str, **kwargs):
+        assert self.nle_config.data_reduction_factor is not None
+        assert self.nle_config.n_layers is not None
+
         dim = self.data_ndim
         nside = npix2nside(dim)
         super_pixel_blocks = get_healpix_superpixels(nside)
-        latentdim = int(self.reduction_factor * dim)
+        latentdim = int(self.nle_config.data_reduction_factor * dim)
 
         perm0 = first_layer_stratifying_perm(latentdim, super_pixel_blocks)
         self.layers = []
         self.layers.append(Permutation(perm0, 1))
 
-        latent_dims = make_latent_dims(dim, self.n_layers, self.reduction_factor)
+        latent_dims = make_latent_dims(
+            dim,
+            self.nle_config.n_layers, 
+            self.nle_config.data_reduction_factor
+        )
         layer_perms = build_layer_perms(latent_dims)
 
-        for i in range(self.n_layers):
-            reduc = self.reduction_factor
+        for i in range(self.nle_config.n_layers):
+            reduc = self.nle_config.data_reduction_factor
             latent_dim = int(reduc * dim)
             layer = AffineMaskedAutoregressiveInferenceFunnel(
                 n_keep=latent_dim,
                 decoder=self._decoder_fn(
                     dim - latent_dim,
-                    decoder_distribution=self.decoder_distribution
+                    decoder_distribution=self.nle_config.decoder_distribution
                 ),
                 conditioner=MADE(
                     input_size=latent_dim,
-                    hidden_layer_sizes=[self.conditioner_n_neurons]
-                    * self.conditioner_n_layers,
+                    hidden_layer_sizes=[self.nle_config.conditioner_n_neurons]
+                    * self.nle_config.conditioner_n_layers,
                     n_params=2,
                     w_init=hk.initializers.TruncatedNormal(stddev=0.01),
                     b_init=jnp.zeros,
@@ -441,6 +428,8 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
     def _heirarchical_flow(self, method: str, **kwargs):
         # coarse_block = self.blocks[0]
         # detail_blocks = self.blocks[1:]
+        assert len(self.nle_config.blocks) > 0
+        assert self.nle_config.maf_stack_size is not None
 
         self.layers = []
         dim0 = self.data_ndim
@@ -450,7 +439,7 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         self.keep_idxs = []
         dropped_total = 0       
 
-        for _, (per, nk, nd) in enumerate(self.blocks):
+        for _, (per, nk, nd) in enumerate(self.nle_config.blocks):
             n_drop = nd
             n_keep = nk
             perm = per
@@ -462,7 +451,7 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
                     n_keep=n_keep,
                     decoder=self._decoder_fn(
                         n_dimension=n_drop,
-                        decoder_distribution=self.decoder_distribution
+                        decoder_distribution=self.nle_config.decoder_distribution
                     ),
                     conditioner=self._conditioner_fn(
                         input_dim=n_keep,
@@ -475,7 +464,7 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
             dropped_total += n_drop
 
         # add a MAF bijective stack at the end
-        for _ in range(self.maf_stack_size):
+        for _ in range(self.nle_config.maf_stack_size):
             self.layers.append(
                 MaskedAutoregressive(
                     bijector_fn=self._bijector_fn,
@@ -489,7 +478,7 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
             order = order[::-1]
             self.layers.append(Permutation(order, 1))
 
-        if self.maf_stack_size > 0:
+        if self.nle_config.maf_stack_size > 0:
             self.layers = self.layers[:-1]
 
         chain = Chain(self.layers)
@@ -497,16 +486,20 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         return td(method, **kwargs)
 
     def _coarse_flow(self, method: str, **kwargs):
+        assert self.nle_config.data_reduction_factor is not None
+        assert self.nle_config.n_coarse is not None
+        assert self.nle_config.n_layers is not None
+
         dim0 = self.data_ndim
-        reduc = self.reduction_factor
+        reduc = self.nle_config.data_reduction_factor
 
         cur_dim = dim0
         through_dims = []
         self.layers = []
 
-        for i in range(self.n_layers):
-            if cur_dim > self.n_coarse:
-                keep = max(self.n_coarse, int(reduc * cur_dim))
+        for i in range(self.nle_config.n_layers):
+            if cur_dim > self.nle_config.n_coarse:
+                keep = max(self.nle_config.n_coarse, int(reduc * cur_dim))
                 through_dims.append(keep)
                 drop = cur_dim - keep
 
@@ -518,13 +511,13 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
                     n_keep=keep,
                     decoder=self._decoder_fn(
                         drop,
-                        decoder_distribution=self.decoder_distribution
+                        decoder_distribution=self.nle_config.decoder_distribution
                     ),
                     conditioner=conditioner
                 )
                 self.layers.append(layer)
                 cur_dim = keep
-                perm = permute_within_types(cur_dim, self.n_coarse, seed=141+i)
+                perm = permute_within_types(cur_dim, self.nle_config.n_coarse, seed=141+i)
                 self.layers.append(Permutation(perm, 1))
             else:
                 order = jnp.arange(cur_dim)
@@ -547,7 +540,7 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
 
         print(f'Bijective data dimensions: {through_dims}')
 
-        if self.permute_data:
+        if self.nle_config.permute_data:
             self.layers = self.layers[:-1]
         chain = Chain(self.layers)
 

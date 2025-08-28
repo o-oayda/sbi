@@ -2,7 +2,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-def build_funnel_steps(n_coarse: int, detail_lengths: list[int]):
+def build_funnel_steps(
+        n_coarse: int, 
+        detail_lengths: list[int]
+) -> list[tuple[jnp.ndarray, int, int]]:
     """Return a list of (perm, n_keep, n_drop) for a state initially
        [coarse | d1 | d2 | ...], dropping d1 then d2 ..."""
     remaining = [n_coarse] + list(detail_lengths)

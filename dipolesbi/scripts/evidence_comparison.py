@@ -11,7 +11,7 @@ from jax import random
 from matplotlib import pyplot as plt
 import healpy as hp
 from scipy.stats import norm
-from dipolesbi.tools.configs import NLEConfig, TrainingConfig
+from dipolesbi.tools.configs import SurjectiveNLEConfig, TrainingConfig
 from dipolesbi.tools.dataloader import split_train_val, split_train_val_dict
 from dipolesbi.tools.healpix_helpers import build_funnel_steps
 from dipolesbi.tools.inference import JaxNestedSampler, LikelihoodBasedInferer
@@ -22,7 +22,7 @@ from dipolesbi.tools.neural_flows import MAFNeuralLikelihood, MAFSurjectiveNeura
 from dipolesbi.tools.priors import DipolePrior
 from dipolesbi.tools.priors_jax import DipolePriorJax
 from dipolesbi.tools.simulator import Simulator
-from dipolesbi.tools.transforms import HaarWaveletTransform, HealpixSOPyramid, learn_transformation
+from dipolesbi.tools.transforms import HaarWaveletTransform, HealpixSOPyramid, InvertibleDataTransform, ZScore, learn_transformation
 from dipolesbi.tools.utils import jax_cart2sph, jax_sph2cart
 import torch
 from jax import lax
@@ -38,14 +38,13 @@ class MultiRoundInferer:
             reference_theta: Optional[dict[str, jnp.ndarray]] = None,
             simulation_budget: int = 50_000, 
             n_rounds: int = 10,
-            nle_config: NLEConfig = NLEConfig.standard(),
+            custom_data_transform: InvertibleDataTransform = ZScore(),
+            nle_config: SurjectiveNLEConfig = SurjectiveNLEConfig.standard(),
             train_config: TrainingConfig = TrainingConfig()
     ) -> None:
         self.rng_key = rng_key
         self.simulation_budget = simulation_budget
         self.n_rounds = n_rounds
-        self.nle_config = nle_config
-        self.train_config = train_config
         self.simulations_per_round = self.simulation_budget // self.n_rounds
         self.initial_proposal = initial_proposal
         self.initial_proposal.change_kwarg('N', 'mean_density')
@@ -54,6 +53,7 @@ class MultiRoundInferer:
         self.nside = hp.npix2nside(self.data_ndim)
         self.reference_observation = reference_observation[None, :]
         self.reference_theta = reference_theta
+        self.custom_data_transform = custom_data_transform
         self.sample_posterior_seed = 0
         np.random.seed(42) # hopefully to keep ultranest results deterministic
         
@@ -96,18 +96,19 @@ class MultiRoundInferer:
 
             self.nle = self._instantiate_nle()
 
-
             print('Starting training...')
             self.nle.train(
                 hk.PRNGSequence(train_key),
                 self.trn_set, 
                 self.val_set,
-                **asdict(self.train_config)
+                config=self.train_config
             )
             self.nle.plot_loss_curve()
             self._inspect_learned_likelihood(train_key)
 
             self._compute_posterior()
+
+            self._clear_data_summary_stats()
 
         self._benchmark_classic()
 
@@ -119,7 +120,7 @@ class MultiRoundInferer:
         samples = self.nle.sample_likelihood_func(
             sample_key,
             theta0=jnp.repeat(
-                self._normalise_theta(self.reference_theta, in_ns=True)[None, :],
+                self._transform_theta(self.reference_theta, in_ns=True)[None, :],
                 repeats=n_repeats,
                 axis=0
             )
@@ -129,7 +130,7 @@ class MultiRoundInferer:
             self.reference_theta,
             False
         )
-        self.mean_samples = self._unnormalise_data(samples).mean(axis=0)
+        self.mean_samples = self._untransform_data(samples).mean(axis=0)
 
         hp.projview(
             self.mean_samples, nest=True, graticule=True, sub=211,
@@ -201,10 +202,10 @@ class MultiRoundInferer:
     def _compute_posterior(self) -> None:
         self.rng_key, ns_key = jax.random.split(self.rng_key)
 
-        x0, log_det_jac = self._normalise_data(self.reference_observation)
+        x0, log_det_jac = self._transform_data(self.reference_observation)
 
         def lnlike_jax(params: dict[str, jnp.ndarray]) -> jnp.ndarray:
-            theta = self._normalise_theta(params, in_ns=True)
+            theta = self._transform_theta(params, in_ns=True)
             log_like = self.nle.evaluate_lnlike(theta[None, :], x0)
             log_like += log_det_jac
             return log_like.squeeze()
@@ -225,12 +226,12 @@ class MultiRoundInferer:
             self.all_data, self.all_theta
         )
 
-        self._compute_norm_stats(trn_data, trn_theta)
+        self._compute_theta_norm(trn_theta)
 
-        norm_train_data, _ = self._normalise_data(trn_data)
-        norm_val_data, _ = self._normalise_data(val_data)
-        norm_train_theta = self._normalise_theta(trn_theta)
-        norm_val_theta = self._normalise_theta(val_theta)
+        norm_train_data, _ = self._transform_data(trn_data)
+        norm_val_data, _ = self._transform_data(val_data)
+        norm_train_theta = self._transform_theta(trn_theta)
+        norm_val_theta = self._transform_theta(val_theta)
 
         assert not jnp.any(jnp.isnan(norm_train_data))
         assert not jnp.any(jnp.isnan(norm_train_theta))
@@ -255,14 +256,13 @@ class MultiRoundInferer:
         cur_theta = jax.tree_map(lambda x: x[:cur_max_idx], theta)
         return split_train_val_dict(cur_data, cur_theta)
 
-    def _compute_norm_stats(
+    def _compute_theta_norm(
             self,
-            train_data: jnp.ndarray, 
             train_theta: dict[str, jnp.ndarray]
     ) -> None:
         # per pixel mean and std across all batches
-        self.data_mean = jnp.nanmean(train_data, axis=0)
-        self.data_std = jnp.nanstd(train_data, axis=0) + 1e-8
+        # self.data_mean = jnp.nanmean(train_data, axis=0)
+        # self.data_std = jnp.nanstd(train_data, axis=0) + 1e-8
 
         mean_nbar = jnp.nanmean(train_theta['mean_density'])
         std_nbar = jnp.nanstd(train_theta['mean_density'])
@@ -271,7 +271,7 @@ class MultiRoundInferer:
         self.theta_mean = jnp.asarray([mean_nbar, mean_v, 0, 0])
         self.theta_std = jnp.asarray([std_nbar, std_v, 1, 1])
 
-    def _normalise_theta(
+    def _transform_theta(
         self,
         theta: dict[str, jnp.ndarray],
         in_ns: bool = False
@@ -293,21 +293,26 @@ class MultiRoundInferer:
         )
         return t_transformed
 
-    def _normalise_data(self, data: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+    def _transform_data(self, data: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         '''
         Normalise only using stats computed from the training data.
         '''
-        assert self.data_mean is not None
-        assert self.data_std is not None
+        return self.custom_data_transform(data)
+        # assert self.data_mean is not None
+        # assert self.data_std is not None
+        #
+        # data_norm = (data - self.data_mean) / self.data_std
+        # log_det_jac = - jnp.log(self.data_std).sum()
+        #
+        # return data_norm, log_det_jac
 
-        data_norm = (data - self.data_mean) / self.data_std
-        log_det_jac = - jnp.log(self.data_std).sum()
+    def _untransform_data(self, z: jnp.ndarray) -> jnp.ndarray:
+        return self.custom_data_transform.inverse(z)
+        # data = z * self.data_std + self.data_mean
+        # return data
 
-        return data_norm, log_det_jac
-
-    def _unnormalise_data(self, z: jnp.ndarray) -> jnp.ndarray:
-        data = z * self.data_std + self.data_mean
-        return data
+    def _clear_data_summary_stats(self) -> None:
+        self.custom_data_transform.clear()
 
     def _sample_proposal(
             self,
@@ -368,12 +373,9 @@ class MultiRoundInferer:
         return simulations
 
     def _instantiate_nle(self) -> MAFSurjectiveNeuralLikelihood:
-        config_dict = asdict(self.nle_config)
-        config_dict.pop('flow_type', None)
-
         nle = MAFSurjectiveNeuralLikelihood(
             self.data_ndim,
-            **config_dict
+            config=self.nle_config
         )
         return nle
 
@@ -425,7 +427,7 @@ if __name__ == '__main__':
     last_npix = 12 * last_nside**2
     tform = HaarWaveletTransform()
     def normalise_y(y):
-        z, logdet = tform.cycle_healpix_tree(y, last_nside=last_nside)
+        z, logdet = tform._cycle_healpix_tree(y, last_nside=last_nside)
         return z
     unnormalise_y = lambda input: input
 
@@ -593,7 +595,7 @@ if __name__ == '__main__':
             ).reshape(4, 1)
         )
         data = normalise_y(x0)
-        _, logdetjac = tform.cycle_healpix_tree(jnp.asarray(x0), last_nside=last_nside)
+        _, logdetjac = tform._cycle_healpix_tree(jnp.asarray(x0), last_nside=last_nside)
         def lnlike_jax(params: dict[str, jnp.ndarray]) -> jnp.ndarray:
             theta: jnp.ndarray = transform_theta_jax(params)
 

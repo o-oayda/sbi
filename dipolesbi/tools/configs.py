@@ -12,9 +12,10 @@ class TrainingConfig:
     max_n_iter: int = 1000
     batch_size: int = 100
     patience: int = 20
+    adam_b2: float = 0.999
 
 @dataclass
-class NLEConfig:
+class SurjectiveNLEConfig:
     '''
     Configuration for the NLE.
     '''
@@ -25,10 +26,10 @@ class NLEConfig:
     conditioner_n_neurons: int = 128
     conditioner_n_layers: int = 3
 
-    n_layers: Optional[int] = 3 # won't apply to heirarchical
+    n_layers: Optional[int] = None # won't apply to heirarchical
     permute_data: bool = False # only for coarse
     maf_stack_size: Optional[int] = None # only for heirarchical
-    n_coarse: int = 0 # only for coarse
+    n_coarse: Optional[int] = 0 # only for coarse
     blocks: list[tuple[jnp.ndarray, int, int]] = [] # only for heirarchical
     data_reduction_factor: Optional[float] = None # only for standard/coarse
 
@@ -39,10 +40,12 @@ class NLEConfig:
     @classmethod
     def heirarchical(
         cls,
+        blocks: list[tuple[jnp.ndarray, int, int]],
         maf_stack_size: int = 8,
-    ) -> 'NLEConfig':
+    ) -> 'SurjectiveNLEConfig':
         """Coarse-grained flow configuration for faster training."""
         config = cls(
+            blocks=blocks,
             maf_stack_size=maf_stack_size,
         )
         config.flow_type = 'heirarchical'
@@ -53,7 +56,7 @@ class NLEConfig:
         cls,
         n_layers: int = 3,
         data_reduction_factor = 0.5
-    ) -> 'NLEConfig':
+    ) -> 'SurjectiveNLEConfig':
         """Coarse-grained flow configuration for faster training."""
         config = cls(
             n_layers=n_layers,
@@ -65,7 +68,7 @@ class NLEConfig:
     @classmethod
     def coarse(
         cls
-    ) -> 'NLEConfig':
+    ) -> 'SurjectiveNLEConfig':
         """Coarse-grained flow configuration for faster training."""
         raise NotImplementedError
 
