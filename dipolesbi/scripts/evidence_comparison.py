@@ -1,3 +1,4 @@
+from operator import pos
 from typing import Any, Callable, Optional
 from anesthetic import NestedSamples
 from blackjax.types import PRNGKey
@@ -22,6 +23,7 @@ from dipolesbi.tools.simulator import Simulator
 from dipolesbi.tools.transforms import HaarWaveletTransform, HealpixSOPyramid, learn_transformation
 from dipolesbi.tools.utils import jax_cart2sph, jax_sph2cart
 import torch
+from jax import lax
 
 
 class MultiRoundInferer:
@@ -29,8 +31,9 @@ class MultiRoundInferer:
             self, 
             rng_key: PRNGKey,
             initial_proposal: DipolePriorJax,
-            simulator_function: Callable[[PRNGKey, dict[str, jnp.ndarray]], jnp.ndarray],
+            simulator_function: Callable[[PRNGKey, dict[str, jnp.ndarray], bool], jnp.ndarray],
             reference_observation: jnp.ndarray,
+            reference_theta: Optional[dict[str, jnp.ndarray]] = None,
             simulation_budget: int = 50_000, 
             n_rounds: int = 10,
             nle_config: dict[str, Any] = {},
@@ -45,40 +48,157 @@ class MultiRoundInferer:
         self.initial_proposal = initial_proposal
         self.initial_proposal.change_kwarg('N', 'mean_density')
         self.simulator_function = simulator_function
+        self.data_ndim = reference_observation.shape[-1]
+        self.nside = hp.npix2nside(self.data_ndim)
         self.reference_observation = reference_observation[None, :]
+        self.reference_theta = reference_theta
+        self.sample_posterior_seed = 0
+        np.random.seed(42) # hopefully to keep ultranest results deterministic
 
         self.data_mean = None
         self.data_std = None
         self.theta_mean = None
         self.theta_std = None
 
+        self.all_data = jnp.full((self.simulation_budget, self.data_ndim), jnp.nan)
+        self.all_theta = {
+            'mean_density': jnp.full((self.simulation_budget,), jnp.nan),
+            'observer_speed': jnp.full((self.simulation_budget,), jnp.nan),
+            'dipole_longitude': jnp.full((self.simulation_budget,), jnp.nan),
+            'dipole_latitude': jnp.full((self.simulation_budget), jnp.nan)
+        }
+
     def run(self):
-        # TODO: how do I properly handle keys?
-        print('Sampling from proposal...')
-        theta = self._sample_proposal(n_samples=self.simulations_per_round)
+        current_key = self.rng_key
 
-        print('Generating simulations...')
-        data = self._generate_simulations(theta)
-        self.trn_set, self.val_set = self._make_train_val_set(data, theta)
+        for round_idx in range(self.n_rounds):
+            self.current_round = round_idx
 
-        data_ndim = data.shape[-1]
-        self.nle = self._instantiate_nle(data_ndim)
+            current_key, proposal_key, sim_key, train_key = jax.random.split(
+                current_key, 4
+            )
+            theta = self._sample_proposal(
+                key=proposal_key,
+                n_samples=self.simulations_per_round,
+                use_initial=True if round_idx == 0 else False
+            )
 
-        print('Starting training...')
-        self.nle.train(
-            hk.PRNGSequence(2),
-            self.trn_set, 
-            self.val_set,
-            **{
-                'learning_rate': 1e-5,
-                **self.train_config
-            }
+            print('Generating simulations...')
+            data = self._generate_simulations(sim_key, theta)
+            self._add_to_simulation_pool(data, theta)
+            self.trn_set, self.val_set = self._make_train_val_set()
+            del data; del theta
+
+            self.nle = self._instantiate_nle()
+
+
+            print('Starting training...')
+            self.nle.train(
+                hk.PRNGSequence(train_key),
+                self.trn_set, 
+                self.val_set,
+                **{
+                    'learning_rate': 1e-5,
+                    **self.train_config
+                }
+            )
+            self.nle.plot_loss_curve()
+            self._inspect_learned_likelihood(train_key)
+
+            self._compute_posterior()
+
+        self._benchmark_classic()
+
+    def _inspect_learned_likelihood(self, rng_key: PRNGKey, n_repeats: int = 50_000) -> None:
+        sample_key, simulate_key = jax.random.split(rng_key)
+
+        assert self.reference_theta is not None
+
+        samples = self.nle.sample_likelihood_func(
+            sample_key,
+            theta0=jnp.repeat(
+                self._normalise_theta(self.reference_theta, in_ns=True)[None, :],
+                repeats=n_repeats,
+                axis=0
+            )
         )
-        self.nle.plot_loss_curve()
+        true_mean_likelihood = self.simulator_function(
+            simulate_key,
+            self.reference_theta,
+            False
+        )
+        self.mean_samples = self._unnormalise_data(samples).mean(axis=0)
 
-        posterior_samples = self._sample_posterior()
+        hp.projview(
+            self.mean_samples, nest=True, graticule=True, sub=211,
+            title='NLE mean P(D | theta)'
+        )
+        hp.projview(
+            true_mean_likelihood, nest=True, graticule=True, sub=212, 
+            title='True mean P(D | theta)'
+        )
+        plt.show()
 
-    def _sample_posterior(self) -> NestedSamples:
+    def _benchmark_classic(self) -> None:
+        self.classic_prior = DipolePrior(
+            mean_count_range=[
+                float(self.initial_proposal.prior_dict['N']['low_range']),
+                float(self.initial_proposal.prior_dict['N']['high_range']),
+            ]
+        )
+        self.classic_prior.change_kwarg('N', 'mean_density')
+        mask_map = np.ones(self.data_ndim, dtype=np.bool_)
+        classic_model = DipolePoisson(
+            self.classic_prior,
+            nside=self.nside,
+            mask_map=mask_map
+        )
+        self.classic_inferer = LikelihoodBasedInferer(
+            np.asarray(self.reference_observation.squeeze()),
+            classic_model
+        )
+        self.classic_inferer.run_ultranest()
+
+        print(
+            f"NLE Log Evidence: {self.nested_samples.logZ():.2f} "
+            f"± {self.nested_samples.logZ(100).std():.2f}" # type: ignore
+        )
+        print(
+            f"Classic Log Evidence: {self.classic_inferer.log_bayesian_evidence:.2f} "
+            f"± {self.classic_inferer.log_bayesian_evidence_err:.2f}" # type: ignore
+        )
+        diff = self.nested_samples.logZ() - self.classic_inferer.log_bayesian_evidence # type: ignore
+        sigma = (
+            np.abs(diff) # type: ignore
+          / np.sqrt(
+                self.nested_samples.logZ(100).std()**2  # type: ignore
+              + self.classic_inferer.log_bayesian_evidence_err**2 # type: ignore
+            ) 
+        )
+        print(f'Tension: {sigma}')
+
+    def _add_to_simulation_pool(
+            self,
+            data: jnp.ndarray,
+            theta: dict[str, jnp.ndarray]
+    ) -> None:
+        start = self.current_round * self.simulations_per_round
+        end = (self.current_round + 1) * self.simulations_per_round
+
+        print(f'Adding data from {start} to {end}...')
+        self.all_data = self.all_data.at[start:end, :].set(data)
+        self.all_theta = self._write_contiguous(self.all_theta, theta, start)
+
+    def _write_contiguous(self, storage, batch, start: int):
+        def put(dst, src):
+            # write src into dst at [start:start+src.shape[0]] along axis 0
+            idx = (start,) + (0,) * (dst.ndim - 1)
+            return lax.dynamic_update_slice(dst, src, idx)
+        return jax.tree.map(put, storage, batch)
+
+    def _compute_posterior(self) -> None:
+        self.rng_key, ns_key = jax.random.split(self.rng_key)
+
         x0, log_det_jac = self._normalise_data(self.reference_observation)
 
         def lnlike_jax(params: dict[str, jnp.ndarray]) -> jnp.ndarray:
@@ -88,30 +208,35 @@ class MultiRoundInferer:
             return log_like.squeeze()
 
         self.jax_ns = JaxNestedSampler(lnlike_jax, self.initial_proposal)
-        self.jax_ns.setup(self.rng_key, n_live=1000, n_delete=50)
+        self.jax_ns.setup(ns_key, n_live=1000, n_delete=50)
         self.nested_samples = self.jax_ns.run()
 
-        # TODO: should be equal-weighted but need to double check
-        print('Sampling from learned posterior...')
-        posterior_samples = self.nested_samples.sample(n=self.simulations_per_round)
+        kinds = {'lower': 'kde_2d', 'diagonal': 'hist_1d', 'upper': 'scatter_2d'}
+        self.nested_samples.plot_2d(
+            self.initial_proposal.simulator_kwargs,
+            kinds=kinds
+        )
+        plt.show()
 
-        return posterior_samples
+    def _make_train_val_set(self) -> tuple[named_dataset, named_dataset]:
+        (trn_data, val_data), (trn_theta, val_theta) = self._split_train_val(
+            self.all_data, self.all_theta
+        )
 
-    def _make_train_val_set(
-            self, 
-            data: jnp.ndarray, 
-            theta: dict[str, jnp.ndarray]
-    ) -> tuple[named_dataset, named_dataset]:
-        (trn_data, val_data), (trn_theta, val_theta) = self._split_train_val(data, theta)
         self._compute_norm_stats(trn_data, trn_theta)
 
-        trn_data, _ = self._normalise_data(trn_data)
-        val_data, _ = self._normalise_data(val_data)
-        trn_theta = self._normalise_theta(trn_theta)
-        val_theta = self._normalise_theta(val_theta)
+        norm_train_data, _ = self._normalise_data(trn_data)
+        norm_val_data, _ = self._normalise_data(val_data)
+        norm_train_theta = self._normalise_theta(trn_theta)
+        norm_val_theta = self._normalise_theta(val_theta)
 
-        trn_set = named_dataset(trn_data, trn_theta)
-        val_set = named_dataset(val_data, val_theta)
+        assert not jnp.any(jnp.isnan(norm_train_data))
+        assert not jnp.any(jnp.isnan(norm_train_theta))
+        assert not jnp.any(jnp.isnan(norm_val_data))
+        assert not jnp.any(jnp.isnan(norm_train_data))
+
+        trn_set = named_dataset(norm_train_data, norm_train_theta)
+        val_set = named_dataset(norm_val_data, norm_val_theta)
 
         return trn_set, val_set
 
@@ -123,24 +248,24 @@ class MultiRoundInferer:
         tuple[jnp.ndarray, jnp.ndarray], 
         tuple[dict[str, jnp.ndarray], dict[str, jnp.ndarray]]
     ]:
-        return split_train_val_dict(data, theta)
+        cur_max_idx = (self.current_round+1) * self.simulations_per_round
+        cur_data = data[:cur_max_idx, :]
+        cur_theta = jax.tree_map(lambda x: x[:cur_max_idx], theta)
+        return split_train_val_dict(cur_data, cur_theta)
 
     def _compute_norm_stats(
             self,
             train_data: jnp.ndarray, 
             train_theta: dict[str, jnp.ndarray]
     ) -> None:
-        assert self.data_mean is None
-        assert self.theta_mean is None
-
         # per pixel mean and std across all batches
-        self.data_mean = train_data.mean(axis=0)
-        self.data_std = train_data.std(axis=0) + 1e-8
+        self.data_mean = jnp.nanmean(train_data, axis=0)
+        self.data_std = jnp.nanstd(train_data, axis=0) + 1e-8
 
-        mean_nbar = train_theta['mean_density'].mean()
-        std_nbar = train_theta['mean_density'].std()
-        mean_v = train_theta['observer_speed'].mean()
-        std_v = train_theta['observer_speed'].std()
+        mean_nbar = jnp.nanmean(train_theta['mean_density'])
+        std_nbar = jnp.nanstd(train_theta['mean_density'])
+        mean_v = jnp.nanmean(train_theta['observer_speed'])
+        std_v = jnp.nanstd(train_theta['observer_speed'])
         self.theta_mean = jnp.asarray([mean_nbar, mean_v, 0, 0])
         self.theta_std = jnp.asarray([std_nbar, std_v, 1, 1])
 
@@ -178,19 +303,71 @@ class MultiRoundInferer:
 
         return data_norm, log_det_jac
 
-    def _sample_proposal(self, n_samples: int) -> dict[str, jnp.ndarray]:
-        init_keys = jax.random.split(self.rng_key, n_samples)
-        prior_samples = jax.vmap(self.initial_proposal.sample)(init_keys)
+    def _unnormalise_data(self, z: jnp.ndarray) -> jnp.ndarray:
+        data = z * self.data_std + self.data_mean
+        return data
+
+    def _sample_proposal(
+            self,
+            key: PRNGKey,
+            n_samples: int, 
+            use_initial: bool = True,
+            learned_fraction: float = 0.7,
+            initial_fraction: float = 0.3
+    ) -> dict[str, jnp.ndarray]:
+        if use_initial:
+            init_keys = jax.random.split(key, n_samples)
+            print('Sampling from initial proposal...')
+            prior_samples = jax.vmap(self.initial_proposal.sample)(init_keys)
+        else:
+            n_prior = int(0.3 * n_samples)
+            n_posterior = self.simulations_per_round - n_prior
+            print(
+                f'Sampling from learned posterior {learned_fraction} '
+                f'and initial proposal {initial_fraction}...'
+            )
+            posterior_samples = self.nested_samples.sample(
+                n=n_posterior,
+                random_state=self.sample_posterior_seed
+            )
+            self.sample_posterior_seed += 1
+            posterior_samples = self._reformat_samples(posterior_samples)
+
+            init_keys = jax.random.split(key, n_prior)
+            initial_samples = jax.vmap(self.initial_proposal.sample)(init_keys)
+
+            prior_samples = jax.tree_map(
+                lambda a, b: jnp.concatenate([a, b], axis=0),
+                posterior_samples,
+                initial_samples
+            )
+            
         return prior_samples
 
-    def _generate_simulations(self, theta: dict[str, jnp.ndarray]) -> jnp.ndarray:
-        sample_keys = jax.random.split(self.rng_key, self.simulations_per_round)
+    def _reformat_samples(
+        self,
+        samples: NestedSamples
+    ) -> dict[str, jnp.ndarray]:
+        samples_dict = samples.to_dict(orient='list')
+
+        del samples_dict['logL']
+        del samples_dict['logL_birth']
+        del samples_dict['nlive']
+
+        return {key: jnp.asarray(val) for key, val in samples_dict.items()}
+
+    def _generate_simulations(
+            self, 
+            key: PRNGKey,
+            theta: dict[str, jnp.ndarray]
+    ) -> jnp.ndarray:
+        sample_keys = jax.random.split(key, self.simulations_per_round)
         simulations = jax.vmap(self.simulator_function)(sample_keys, theta)
         return simulations
 
-    def _instantiate_nle(self, data_ndim: int) -> MAFSurjectiveNeuralLikelihood:
+    def _instantiate_nle(self) -> MAFSurjectiveNeuralLikelihood:
         nle = MAFSurjectiveNeuralLikelihood(
-            data_ndim,
+            self.data_ndim,
             **{
                 'decoder_distribution': 'gaussian',
                 'conditioner': 'made',

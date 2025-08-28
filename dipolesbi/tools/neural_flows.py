@@ -91,7 +91,7 @@ class NeuralLikelihood(ABC):
         )
         params = self.model.init(next(rng_seq), method='log_prob', **train_iter(0))
 
-        optimiser = optax.adam(learning_rate, b2=0.995)
+        optimiser = optax.adam(learning_rate, b2=0.999)
         state = optimiser.init(params)
         
         @jax.jit

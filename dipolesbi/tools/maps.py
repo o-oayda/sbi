@@ -93,9 +93,17 @@ class SimpleDipoleMapJax:
             hp.pix2vec(self.nside, self.pixel_indices, nest=True)
         )
 
-    def generate_dipole(self, rng_key: PRNGKey, theta: dict[str, jnp.ndarray]) -> jnp.ndarray:
+    def generate_dipole(
+            self,
+            rng_key: PRNGKey, 
+            theta: dict[str, jnp.ndarray],
+            make_poisson_draws: bool = True
+    ) -> jnp.ndarray:
         poisson_mean = self.dipole_signal(**theta)
-        return jax.random.poisson(rng_key, poisson_mean)
+        if make_poisson_draws:
+            return jax.random.poisson(rng_key, poisson_mean)
+        else:
+            return poisson_mean
 
     def dipole_signal(
             self, 

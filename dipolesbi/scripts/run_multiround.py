@@ -28,6 +28,9 @@ if __name__ == '__main__':
     )
     inferer = MultiRoundInferer(
         rng_key, prior, model.generate_dipole, x0,
-        train_config={'learning_rate': 1e-4}
+        reference_theta=theta0,
+        simulation_budget=20_000,
+        n_rounds=4,
+        train_config={'learning_rate': 5e-4, 'patience': 30}
     )
     inferer.run()
