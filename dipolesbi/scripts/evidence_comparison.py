@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from operator import pos
 from typing import Any, Callable, Optional
 from anesthetic import NestedSamples
@@ -10,6 +11,7 @@ from jax import random
 from matplotlib import pyplot as plt
 import healpy as hp
 from scipy.stats import norm
+from dipolesbi.tools.configs import NLEConfig, TrainingConfig
 from dipolesbi.tools.dataloader import split_train_val, split_train_val_dict
 from dipolesbi.tools.healpix_helpers import build_funnel_steps
 from dipolesbi.tools.inference import JaxNestedSampler, LikelihoodBasedInferer
@@ -36,8 +38,8 @@ class MultiRoundInferer:
             reference_theta: Optional[dict[str, jnp.ndarray]] = None,
             simulation_budget: int = 50_000, 
             n_rounds: int = 10,
-            nle_config: dict[str, Any] = {},
-            train_config: dict[str, Any] = {}
+            nle_config: NLEConfig = NLEConfig.standard(),
+            train_config: TrainingConfig = TrainingConfig()
     ) -> None:
         self.rng_key = rng_key
         self.simulation_budget = simulation_budget
@@ -54,6 +56,9 @@ class MultiRoundInferer:
         self.reference_theta = reference_theta
         self.sample_posterior_seed = 0
         np.random.seed(42) # hopefully to keep ultranest results deterministic
+        
+        self.nle_config = nle_config
+        self.train_config = train_config
 
         self.data_mean = None
         self.data_std = None
@@ -97,10 +102,7 @@ class MultiRoundInferer:
                 hk.PRNGSequence(train_key),
                 self.trn_set, 
                 self.val_set,
-                **{
-                    'learning_rate': 1e-5,
-                    **self.train_config
-                }
+                **asdict(self.train_config)
             )
             self.nle.plot_loss_curve()
             self._inspect_learned_likelihood(train_key)
@@ -366,18 +368,12 @@ class MultiRoundInferer:
         return simulations
 
     def _instantiate_nle(self) -> MAFSurjectiveNeuralLikelihood:
+        config_dict = asdict(self.nle_config)
+        config_dict.pop('flow_type', None)
+
         nle = MAFSurjectiveNeuralLikelihood(
             self.data_ndim,
-            **{
-                'decoder_distribution': 'gaussian',
-                'conditioner': 'made',
-                'maf_stack_size': 15,
-                'conditioner_n_neurons': 128,
-                'decoder_n_layers': 3,
-                'n_coarse': 0,
-                'n_layers': 5,
-                **self.nle_config
-            }
+            **config_dict
         )
         return nle
 
