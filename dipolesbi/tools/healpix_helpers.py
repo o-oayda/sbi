@@ -2,30 +2,84 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+
+def _split_len(L: int, n: int) -> list[int]:
+    """Split length L into n near-equal positive chunks that sum to L."""
+    q, r = divmod(L, n)
+    return [q + (1 if i < r else 0) for i in range(n)]
+
 def build_funnel_steps(
-        n_coarse: int, 
-        detail_lengths: list[int]
+    n_coarse: int,
+    detail_lengths: list[int],
+    n_chunks: int | list[int] = 1,   # e.g. 2 => halves; can pass per-level list
 ) -> list[tuple[jnp.ndarray, int, int]]:
-    """Return a list of (perm, n_keep, n_drop) for a state initially
-       [coarse | d1 | d2 | ...], dropping d1 then d2 ..."""
-    remaining = [n_coarse] + list(detail_lengths)
-    steps = []
+    """
+    State starts as [coarse | d1 | d2 | ...].
+    If n_chunks > 1, each detail dℓ is split into n_chunks pieces and we peel them
+    in order: d1[0], d1[1], ..., then d2[0], d2[1], ... (i.e., fully peel d1 in pieces,
+    then d2 in pieces, etc.).
+    Returns list of (perm, n_keep, n_drop) per funnel step.
+    """
+    if isinstance(n_chunks, int):
+        n_chunks = [n_chunks] * len(detail_lengths)
+    assert len(n_chunks) == len(detail_lengths)
+
+    # Build initial remaining lengths in *current* order:
+    # [coarse, d1_0, d1_1, ..., d2_0, d2_1, ..., ...]
+    remaining = [n_coarse]
+    for L, k in zip(detail_lengths, n_chunks):
+        chunks = _split_len(L, k) if k > 1 else [L]
+        remaining.extend(chunks)
+
+    steps: list[tuple[jnp.ndarray, int, int]] = []
     while len(remaining) > 1:
         starts = np.cumsum([0] + remaining[:-1])
         blocks = [np.arange(starts[i], starts[i] + remaining[i]) for i in range(len(remaining))]
-        keep_blocks = [blocks[0]] + blocks[2:]   # coarse + d2..end
-        drop_block  = blocks[1]                  # current d1
+
+        # Drop the first detail *chunk* (immediately after coarse).
+        drop_block = blocks[1]
+        keep_blocks = [blocks[0]] + blocks[2:]   # coarse + all remaining detail chunks
+
         keep_idx = np.concatenate(keep_blocks, 0)
         drop_idx = drop_block
-        # sanity: permutation must be 0..(dim-1)
         dim_before = sum(remaining)
+
+        # Build permutation [keep | drop] and sanity-check it.
         perm = np.concatenate([keep_idx, drop_idx], 0)
         assert perm.shape[0] == dim_before
         assert np.array_equal(np.sort(perm), np.arange(dim_before))
+
         steps.append((jnp.asarray(perm), int(keep_idx.size), int(drop_idx.size)))
-        # after dropping d1, the state is [coarse | d2 | ...]
+
+        # After dropping this chunk, the new state is [coarse | (rest of chunks)]
         remaining = [remaining[0]] + remaining[2:]
+
     return steps
+
+# def build_funnel_steps(
+#         n_coarse: int, 
+#         detail_lengths: list[int]
+# ) -> list[tuple[jnp.ndarray, int, int]]:
+#     """Return a list of (perm, n_keep, n_drop) for a state initially
+#        [coarse | d1 | d2 | ...], dropping d1 then d2 ..."""
+#     remaining = [n_coarse] + list(detail_lengths)
+#     steps = []
+#     while len(remaining) > 1:
+#         starts = np.cumsum([0] + remaining[:-1])
+#         blocks = [np.arange(starts[i], starts[i] + remaining[i]) for i in range(len(remaining))]
+#         keep_blocks = [blocks[0]] + blocks[2:]   # coarse + d2..end
+#         drop_block  = blocks[1]                  # current d1
+#         keep_idx = np.concatenate(keep_blocks, 0)
+#         drop_idx = drop_block
+#         # sanity: permutation must be 0..(dim-1)
+#         dim_before = sum(remaining)
+#         perm = np.concatenate([keep_idx, drop_idx], 0)
+#         assert perm.shape[0] == dim_before
+#         assert np.array_equal(np.sort(perm), np.arange(dim_before))
+#         steps.append((jnp.asarray(perm), int(keep_idx.size), int(drop_idx.size)))
+#         # after dropping d1, the state is [coarse | d2 | ...]
+#         remaining = [remaining[0]] + remaining[2:]
+#     return steps
 
 def permute_within_types(cur_dim: int, n_coarse: int, seed: int):
     c = min(n_coarse, cur_dim)

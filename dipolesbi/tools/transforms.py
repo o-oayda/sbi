@@ -26,6 +26,10 @@ class InvertibleDataTransform(ABC):
         return self.forward(data)
 
     @abstractmethod
+    def __repr__(self) -> str:
+        pass
+
+    @abstractmethod
     def forward(self, data: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         pass
 
@@ -37,20 +41,46 @@ class InvertibleDataTransform(ABC):
     def clear(self) -> None:
         pass
 
+class BlankTransform(InvertibleDataTransform):
+    def __init__(self) -> None:
+        pass
+
+    def __repr__(self) -> str:
+        return 'BlankTransform(No transform to the data.)'
+
+    def forward(self, data: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+        n_batches = data.shape[0]
+        return data, jnp.zeros_like(n_batches)
+
+    def inverse(self, transformed_data: jnp.ndarray) -> jnp.ndarray:
+        return transformed_data
+
+    def clear(self) -> None:
+        pass
+
 class ZScore(InvertibleDataTransform):
     def __init__(self) -> None:
         self.mu = None
         self.sigma = None
 
+    def __repr__(self) -> str:
+        return (
+            f"Zscore("
+            f"mu={self.mu}, "
+            f"sigma={self.sigma}"
+            f")"
+        )
+
     def forward(self, data: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         '''
         Do a batchwise mean per data dimension.
         '''
+        n_batches = data.shape[0]
         if (self.mu is None) or (self.sigma is None):
             self.mu = jnp.nanmean(data, axis=0)
             self.sigma = jnp.nanstd(data, axis=0)
 
-        log_det_jac = - jnp.log(self.sigma).sum()
+        log_det_jac = - jnp.log(self.sigma).sum() * jnp.ones(n_batches)
         z = (data - self.mu) / self.sigma
         return z, log_det_jac
 
@@ -247,6 +277,20 @@ class HaarWaveletTransform(InvertibleDataTransform):
         self.n_levels = int(np.log2(first_nside) - np.log2(last_nside))
         self.downscale_factors = self.n_levels * [4]
 
+    def __repr__(self) -> str:
+        return (
+            f"HaarWaveletTransform("
+            f"first_nside={self.first_nside}, "
+            f"last_nside={self.last_nside}, "
+            f"first_npix={self.first_npix}, "
+            f"last_npix={self.last_npix}, "
+            f"n_levels={self.n_levels}, "
+            f"downscale_factors={self.downscale_factors}, "
+            f"mu_at_level={self.mu_at_level}, "
+            f"std_at_level={self.std_at_level}"
+            f")"
+        )
+
     @property
     def parents_at_levels(self):
         P_levels = []
@@ -267,7 +311,7 @@ class HaarWaveletTransform(InvertibleDataTransform):
     def inverse(self, transformed_data: jnp.ndarray) -> jnp.ndarray:
         return self._reverse_cycle_healpix_tree(transformed_data)
 
-    def _build_surjective_blocks(self) -> list[tuple[jnp.ndarray, int, int]]:
+    def _build_surjective_blocks(self, n_chunks: int = 1) -> list[tuple[jnp.ndarray, int, int]]:
         detail_sizes = []
         ns = self.first_nside
         while ns > self.last_nside:
@@ -277,7 +321,11 @@ class HaarWaveletTransform(InvertibleDataTransform):
         block_lengths = [self.last_npix] + detail_sizes # a coeffs + 3 details per level
         assert 12 * self.first_nside**2 == sum(block_lengths)
 
-        steps = build_funnel_steps(n_coarse=self.last_npix, detail_lengths=block_lengths[1:])
+        steps = build_funnel_steps(
+            n_coarse=self.last_npix, 
+            detail_lengths=block_lengths[1:],
+            n_chunks=n_chunks
+        )
         return steps
 
     def _cycle_healpix_tree(

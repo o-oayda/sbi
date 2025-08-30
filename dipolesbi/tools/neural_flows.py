@@ -1,3 +1,4 @@
+from typing import Optional
 import distrax
 import haiku as hk
 from haiku._src.transform import Transformed
@@ -49,7 +50,7 @@ class NeuralLikelihood(ABC):
     def get_flow(self) -> Transformed:
         return hk.transform(self._flow)
 
-    def plot_loss_curve(self) -> None:
+    def plot_loss_curve(self, show: bool = True, save_path: Optional[str] = None) -> None:
         _, ax1 = plt.subplots()
         color = 'tab:blue'
         ax1.set_xlabel('Epoch')
@@ -63,7 +64,11 @@ class NeuralLikelihood(ABC):
         ax2.plot(self.val_losses, color=color)
         ax2.tick_params(axis='y', labelcolor=color)
 
-        plt.show()
+        if save_path is not None:
+            plt.savefig(save_path, bbox_inches='tight')
+
+        if show:
+            plt.show()
 
     def train(
             self,
@@ -250,19 +255,17 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         for i, layer in enumerate(getattr(self, "layers", [])):
             # Name of the layer
             name = layer.__class__.__name__
-            # Try to pull out a useful dimension or config
+            spec = ""
             if hasattr(layer, "n_keep"):
-                spec = f"n_keep={layer.n_keep}"
-            elif hasattr(layer, "perm"):
-                spec = f"perm shape={layer.perm.shape}"
-            else:
-                spec = ""
+                spec += f"n_keep={layer.n_keep} "
+            if hasattr(layer, "n_drop"):
+                spec += f"n_drop: {layer.n_drop}"
             lines.append(f"  [{i:02d}] {name} {spec}")
         lines.append(")")
         return "\n".join(lines)
 
     def _bijector_fn(self, params):
-        means, log_scales = unstack(params, -1)
+        means, log_scales = unstack(params, -1) # happens on non-surjective layer in heirarchical
         return distrax.ScalarAffine(means, jnp.exp(log_scales))
 
     def _base_distribution_fn(self, n_dim):
@@ -330,6 +333,7 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         )
 
         def _fn(z):
+            # we get a distribution per pixel, e.g. 500 latent pixels => 500 mus for Gaussian
             params = decoder_net(z)
             if decoder_distribution == 'gaussian':
                 mu, log_scale = jnp.split(params, 2, -1)
@@ -446,19 +450,19 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
 
             self.layers.append(Permutation(perm, 1))
 
-            self.layers.append(
-                AffineMaskedAutoregressiveInferenceFunnel(
-                    n_keep=n_keep,
-                    decoder=self._decoder_fn(
-                        n_dimension=n_drop,
-                        decoder_distribution=self.nle_config.decoder_distribution
-                    ),
-                    conditioner=self._conditioner_fn(
-                        input_dim=n_keep,
-                        output_dim=2 * n_keep
-                    )
+            surjective_layer = AffineMaskedAutoregressiveInferenceFunnel(
+                n_keep=n_keep,
+                decoder=self._decoder_fn(
+                    n_dimension=n_drop,
+                    decoder_distribution=self.nle_config.decoder_distribution
+                ),
+                conditioner=self._conditioner_fn(
+                    input_dim=n_keep,
+                    output_dim=2 * n_keep
                 )
             )
+            setattr(surjective_layer, 'n_drop', n_drop) # for __repr__
+            self.layers.append(surjective_layer)
 
             dim = n_keep
             dropped_total += n_drop

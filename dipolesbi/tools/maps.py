@@ -15,7 +15,7 @@ from dipolesbi.tools.utils import (
     equatorial_to_ecliptic
 )
 from dipolesbi.tools.physics import ellis_baldwin_amplitude
-from typing import Literal, Callable
+from typing import Literal, Callable, Optional
 from sbi.inference import simulate_for_sbi
 from sbi.utils.user_input_checks import (
     check_sbi_inputs,
@@ -83,7 +83,11 @@ class Mask:
         return list(north_pole_disc_pixels)
 
 class SimpleDipoleMapJax:
-    def __init__(self, nside: int = 64):
+    def __init__(
+            self, 
+            nside: int = 64, 
+            reference_data: Optional[jnp.ndarray] = None
+    ) -> None:
         self.nside = nside
         self.fiducial_amplitude = 0.005
         self.nest = True
@@ -92,6 +96,7 @@ class SimpleDipoleMapJax:
         self.pixel_vectors = np.stack(
             hp.pix2vec(self.nside, self.pixel_indices, nest=True)
         )
+        self.reference_data = reference_data
 
     def generate_dipole(
             self,
@@ -123,6 +128,15 @@ class SimpleDipoleMapJax:
             1 + jnp.einsum('i,ij', dipole_vector, self.pixel_vectors)
         )
         return poisson_mean
+
+    def log_likelihood(self, theta: dict[str, jnp.ndarray]) -> jnp.ndarray:
+        dipole_signal = self.dipole_signal(**theta)
+        return jnp.sum(
+            jax.scipy.stats.poisson.logpmf(
+                k=self.reference_data, # type: ignore
+                mu=dipole_signal
+            )
+        )
 
 class SimpleDipoleMap:
     def __init__(self, nside: int = 64, device: str = 'cpu'):

@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Literal
 from jax import numpy as jnp
 
+from dipolesbi.tools.transforms import InvertibleDataTransform, ZScore
+
 
 @dataclass
 class TrainingConfig:
@@ -42,11 +44,13 @@ class SurjectiveNLEConfig:
         cls,
         blocks: list[tuple[jnp.ndarray, int, int]],
         maf_stack_size: int = 8,
+        **overrides
     ) -> 'SurjectiveNLEConfig':
         """Coarse-grained flow configuration for faster training."""
         config = cls(
             blocks=blocks,
             maf_stack_size=maf_stack_size,
+            **overrides
         )
         config.flow_type = 'heirarchical'
         return config
@@ -55,12 +59,14 @@ class SurjectiveNLEConfig:
     def standard(
         cls,
         n_layers: int = 3,
-        data_reduction_factor = 0.5
+        data_reduction_factor = 0.5,
+        **overrides
     ) -> 'SurjectiveNLEConfig':
         """Coarse-grained flow configuration for faster training."""
         config = cls(
             n_layers=n_layers,
-            data_reduction_factor=data_reduction_factor
+            data_reduction_factor=data_reduction_factor,
+            **overrides
         )
         config.flow_type = 'standard'
         return config
@@ -72,3 +78,31 @@ class SurjectiveNLEConfig:
         """Coarse-grained flow configuration for faster training."""
         raise NotImplementedError
 
+@dataclass
+class MultiRoundInfererConfig:
+    '''
+    Configuration for the multi-round inferer.
+    '''
+    simulation_budget: int
+    n_rounds: int
+    load_simulations: Optional[str] = None
+    reference_theta: Optional[dict[str, jnp.ndarray]] = None
+    plot_save_dir: str = 'nle_out'
+    custom_data_transform: Optional[InvertibleDataTransform] = ZScore()
+    simulations_per_round: int = field(init=False)
+    simulation_path: Optional[str] = field(init=False)
+    dequantise_data: bool = False
+    n_requantisations: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        self.simulations_per_round = self.simulation_budget // self.n_rounds
+        
+        if self.load_simulations is not None:
+            self.simulation_path = f'{self.plot_save_dir}/{self.load_simulations}/data'
+        else:
+            self.simulation_path = None
+
+        if self.dequantise_data:
+            assert self.n_requantisations is not None, (
+                'Supply number of requantisations when setting dequantise_data=True.'
+            )

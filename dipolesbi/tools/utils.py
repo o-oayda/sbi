@@ -16,6 +16,13 @@ import torch.nn.functional as F
 from jax import numpy as jnp
 import jax
 
+def save_dict_npz(path, x: dict):
+    jax.block_until_ready(jax.tree_util.tree_leaves(x))  # ensure computed
+    np.savez_compressed(path, **{k: jax.device_get(v) for k, v in x.items()})
+
+def load_dict_npz(path) -> dict:
+    d = np.load(path, allow_pickle=True)
+    return {k: jnp.array(d[k]) for k in d.files}
 
 def spherical_to_cartesian(theta_phi: tuple[NDArray, NDArray]) -> NDArray:
     '''
