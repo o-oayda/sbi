@@ -42,6 +42,7 @@ class NeuralLikelihood(ABC):
         self.losses = []
         self.val_losses = []
         self.model = self.get_flow()
+        self.best_params = None
 
     @abstractmethod
     def _flow(self, method: str, **kwargs) -> Transformed:
@@ -92,7 +93,13 @@ class NeuralLikelihood(ABC):
             batch_size=self.trn_config.batch_size,
             shuffle=True
         )
-        params = self.model.init(next(rng_seq), method='log_prob', **train_iter(0))
+
+        if (self.trn_config.restore_from_previous) and (self.best_params is not None):
+            print('Initialising using previously-inferred params...')
+            params = self.best_params
+        else:
+            print('No previous state to initialise from. Starting fresh...')
+            params = self.model.init(next(rng_seq), method='log_prob', **train_iter(0))
 
         optimiser = optax.adam(self.trn_config.learning_rate, b2=self.trn_config.adam_b2)
         state = optimiser.init(params)
@@ -157,7 +164,7 @@ class NeuralLikelihood(ABC):
                     )
                     break
 
-        self.params = best_params
+        self.best_params = best_params
         self.losses = losses
         self.val_losses = val_losses
 
@@ -169,7 +176,7 @@ class NeuralLikelihood(ABC):
             theta0: jnp.ndarray
     ) -> jnp.ndarray:
         samples = self.model.apply(
-            self.params,
+            self.best_params,
             rng_key,
             method='sample',
             x=theta0
@@ -182,7 +189,7 @@ class NeuralLikelihood(ABC):
         x0: jnp.ndarray
     ) -> jnp.ndarray:
         logprob = self.model.apply(
-            params=self.params,
+            params=self.best_params,
             rng=None, # don't pass key
             method='log_prob',
             x=theta0,
@@ -246,6 +253,7 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
             data_ndim: int, 
             config: SurjectiveNLEConfig = SurjectiveNLEConfig()
     ) -> None:
+        super().__init__()
         self.data_ndim = data_ndim
         self.nle_config = config
         self.model = self.get_flow()

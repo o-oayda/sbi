@@ -74,30 +74,34 @@ if __name__ == '__main__':
 
     # possibly widening and deepening the decoder network improves
     # convergence to true lnZ -> e.g. 3000 pixels dropped w low n_neurons not great
-    nle_config = SurjectiveNLEConfig.standard(
-        n_layers=10,
-        data_reduction_factor=0.75,
-        conditioner_n_layers=4,
-        conditioner_n_neurons=256,
-        decoder_n_layers=4,
-        decoder_n_neurons=512,
-    )
-    # nle_config = SurjectiveNLEConfig.heirarchical(
-    #     blocks=haar_transform._build_surjective_blocks(n_chunks=1),
-    #     maf_stack_size=15,
+    # nle_config = SurjectiveNLEConfig.standard(
+    #     n_layers=10,
+    #     data_reduction_factor=0.75,
     #     conditioner_n_layers=4,
     #     conditioner_n_neurons=256,
     #     decoder_n_layers=4,
     #     decoder_n_neurons=512,
-    #     decoder_distribution='gaussian'
     # )
+    nle_config = SurjectiveNLEConfig.heirarchical(
+        blocks=haar_transform._build_surjective_blocks(n_chunks=1),
+        maf_stack_size=15,
+        conditioner_n_layers=4,
+        conditioner_n_neurons=256,
+        decoder_n_layers=4,
+        decoder_n_neurons=512,
+        decoder_distribution='gaussian'
+    )
     # low learning rate high nside?
-    train_config = TrainingConfig(patience=20, learning_rate=1e-5)
+    train_config = TrainingConfig(
+        patience=20, 
+        learning_rate=1e-5, 
+        restore_from_previous=True
+    )
     mr_config = MultiRoundInfererConfig(
         simulation_budget=50_000,
         n_rounds=15,
-        # custom_data_transform=haar_transform,
-        custom_data_transform=ZScore(),
+        custom_data_transform=haar_transform,
+        # custom_data_transform=ZScore(),
         reference_theta=theta0,
         dequantise_data=True,
         n_requantisations=32

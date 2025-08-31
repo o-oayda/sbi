@@ -15,6 +15,7 @@ class TrainingConfig:
     batch_size: int = 100
     patience: int = 20
     adam_b2: float = 0.999
+    restore_from_previous: bool = False
 
 @dataclass
 class SurjectiveNLEConfig:

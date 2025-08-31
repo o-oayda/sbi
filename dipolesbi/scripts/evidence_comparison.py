@@ -64,6 +64,7 @@ class MultiRoundInferer:
         
         self.nle_config = nle_config
         self.train_config = train_config
+        self.nle = None
 
         self.theta_mean = None
         self.theta_std = None
@@ -530,10 +531,13 @@ class MultiRoundInferer:
         return simulations
 
     def _instantiate_nle(self) -> MAFSurjectiveNeuralLikelihood:
-        nle = MAFSurjectiveNeuralLikelihood(
-            self.data_ndim,
-            config=self.nle_config
-        )
+        if (not self.train_config.restore_from_previous) or (self.nle is None):
+            nle = MAFSurjectiveNeuralLikelihood(
+                self.data_ndim,
+                config=self.nle_config
+            )
+        else:
+            nle = self.nle
         return nle
 
 

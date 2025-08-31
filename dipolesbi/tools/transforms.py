@@ -245,25 +245,13 @@ class LearnableNormaliser(torch.nn.Module):
 
 class HaarWaveletTransform(InvertibleDataTransform):
     def __init__(self, first_nside: int, last_nside: int = 1) -> None:
-        self.M = jnp.asarray(
-            [[0.25, 0.25, 0.25, 0.25],
-             [-1. , 1.  , 0.  , 0.  ],
-             [0.  , 0.  , -1. , 1.  ],
-             [-0.5, -0.5, 0.5 , 0.5 ]]
+        self.Q = 0.5 * jnp.asarray(
+            [[1., 1. , 1. ,  1.],
+             [1., 1. , -1., -1.],
+             [1., -1., 1. , -1.],
+             [1., -1., -1.,  1.]]
         )
-        self.M_inv = jnp.asarray(
-            [[1, -0.5,  0. , -0.5],
-             [1,  0.5,  0. , -0.5],
-             [1,  0. , -0.5,  0.5],
-             [1,  0. ,  0.5,  0.5]]
-        )
-        self.R = jnp.asarray(
-            [[2.,  0.,   0.,  0.],
-             [0.,  0.,   0., -1.],
-             [0., -0.5, -0.5, 0.],
-             [0., -0.5,  0.5, 0.]]
-        )
-        self.R_inv = jnp.linalg.inv(self.R)
+        self.Q_inv = jnp.linalg.inv(self.Q)
 
         self.mu_at_level: list[list[jnp.ndarray]] = []
         self.std_at_level: list[list[jnp.ndarray]] = []
@@ -442,23 +430,10 @@ class HaarWaveletTransform(InvertibleDataTransform):
         return x_rec
 
     def _forward_matrix_product(self, v: jnp.ndarray) -> jnp.ndarray:
-        y = v @ self.M.T
-        return y @ self.R.T
-
-    @partial(jax.jit, static_argnums=(0, 2,))
-    def forward_in_batch(self, v_batch, use_bf16: bool = True):
-        # v_batch: (B, G, 4),  M: (4,4)
-        if use_bf16:
-            v_batch = v_batch.astype(jnp.bfloat16)
-            M = self.M.astype(jnp.bfloat16)
-        else:
-            M = self.M
-        y = jnp.einsum('bgc,cd->bgd', v_batch, M)   # (B, G, 4)
-        return y.astype(jnp.float32) if use_bf16 else y
+        return v @ self.Q
 
     def _inverse_matrix_product(self, z: jnp.ndarray) -> jnp.ndarray:
-        y = z @ self.R_inv.T
-        return y @ self.M_inv.T
+        return z @ self.Q_inv
 
     def int_haar4_forward(self, x):  # x: (..., 4) integer tensor
         x0, x1, x2, x3 = x[...,0], x[...,1], x[...,2], x[...,3]
