@@ -12,6 +12,7 @@ class TrainingConfig:
     '''
     learning_rate: float = 5e-4
     max_n_iter: int = 1000
+    min_n_iter: int = 2
     batch_size: int = 100
     patience: int = 20
     # adam_b2: float = 0.999
@@ -20,6 +21,8 @@ class TrainingConfig:
     min_lr_ratio: float = 0.1
     clip_norm: float = 1.
     weight_decay: float = 1e-5
+    shuffle_train: bool = True
+    shuffle_val: bool = False
 
 @dataclass
 class SurjectiveNLEConfig:

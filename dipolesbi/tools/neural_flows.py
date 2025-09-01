@@ -109,9 +109,9 @@ class NeuralLikelihood(ABC):
             if round_weights is not None:
                 w = round_weights[batch['round_id']]
                 w = w * (w.size / (jnp.sum(w) + 1e-12))
-                return -jnp.sum(w * nlp)
+                return jnp.mean(w * nlp)
             else:
-                return -jnp.sum(nlp)
+                return jnp.mean(nlp)
         return _loss_fn
 
     def _nll_apply(self, params, **batch):
@@ -133,13 +133,13 @@ class NeuralLikelihood(ABC):
             rng_key=next(rng_seq), 
             data=training_data,
             batch_size=self.trn_config.batch_size,
-            shuffle=True
+            shuffle=self.trn_config.shuffle_train
         )
         val_iter = as_batch_iterator(
             rng_key=next(rng_seq), 
             data=validation_data,
             batch_size=self.trn_config.batch_size,
-            shuffle=True
+            shuffle=self.trn_config.shuffle_val
         )
         n_batches = train_iter.num_batches
         assert n_batches == val_iter.num_batches
@@ -195,12 +195,13 @@ class NeuralLikelihood(ABC):
             for j in range(train_iter.num_batches):
                 batch = train_iter(j)
                 batch_loss, params, state = step(params, state, **batch)
-                train_loss += batch_loss
+                train_loss += float(batch_loss)
+            train_loss /= max(1, train_iter.num_batches)
             
             val_loss = 0.0
             for j in range(val_iter.num_batches):
                 batch = val_iter(j)
-                val_loss += val_step(params, **batch)
+                val_loss += float(val_step(params, **batch))
             val_loss /= max(1, val_iter.num_batches)
 
             sys.stdout.write(
@@ -220,7 +221,7 @@ class NeuralLikelihood(ABC):
                 wait = 0
             else:
                 wait += 1
-                if wait >= self.trn_config.patience:
+                if i >= self.trn_config.min_n_iter and wait >= self.trn_config.patience:
                     print(
                         f"\nEarly stopping at iteration {i} "
                         f"(best val NLL={best_val:.4f})"
