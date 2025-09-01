@@ -14,8 +14,12 @@ class TrainingConfig:
     max_n_iter: int = 1000
     batch_size: int = 100
     patience: int = 20
-    adam_b2: float = 0.999
+    # adam_b2: float = 0.999
     restore_from_previous: bool = False
+    warmup_epochs: int = 300
+    min_lr_ratio: float = 0.1
+    clip_norm: float = 1.
+    weight_decay: float = 1e-5
 
 @dataclass
 class SurjectiveNLEConfig:

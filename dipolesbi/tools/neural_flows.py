@@ -51,6 +51,38 @@ class NeuralLikelihood(ABC):
     def get_flow(self) -> Transformed:
         return hk.transform(self._flow)
 
+    def _make_lr_schedule(
+            self,
+            warmup_steps: int,
+            total_steps: int,
+            base_lr: float,
+            min_lr_ratio: float = 0.1
+    ):
+        assert warmup_steps < total_steps
+        warmup = optax.linear_schedule(
+            init_value=0., 
+            end_value=base_lr,
+            transition_steps=warmup_steps
+        )
+        cosine = optax.cosine_decay_schedule(
+            init_value=base_lr,
+            decay_steps=total_steps - warmup_steps,
+            alpha=min_lr_ratio  # final LR = alpha * base_lr
+        )
+        return optax.join_schedules([warmup, cosine], [warmup_steps])
+
+    def _make_optimiser(
+            self,
+            lr_schedule,
+            clip_norm: float = 1.,
+            weight_decay: float = 0.
+    ):
+        return optax.chain(
+            optax.clip_by_global_norm(clip_norm),
+            optax.adamw(learning_rate=lr_schedule, weight_decay=weight_decay)
+        )
+
+
     def plot_loss_curve(self, show: bool = True, save_path: Optional[str] = None) -> None:
         _, ax1 = plt.subplots()
         color = 'tab:blue'
@@ -71,12 +103,28 @@ class NeuralLikelihood(ABC):
         if show:
             plt.show()
 
+    def _make_loss_fn(self, round_weights: Optional[jnp.ndarray] = None):
+        def _loss_fn(params, **batch):
+            nlp = self._nll_apply(params, **batch)
+            if round_weights is not None:
+                w = round_weights[batch['round_id']]
+                w = w * (w.size / (jnp.sum(w) + 1e-12))
+                return -jnp.sum(w * nlp)
+            else:
+                return -jnp.sum(nlp)
+        return _loss_fn
+
+    def _nll_apply(self, params, **batch):
+        lp = self.model.apply(params, None, method='log_prob', **batch)
+        return -lp
+
     def train(
             self,
             rng_seq: hk.PRNGSequence, 
             training_data: named_dataset, 
             validation_data: named_dataset,
-            config: TrainingConfig = TrainingConfig()
+            config: TrainingConfig = TrainingConfig(),
+            round_weights: Optional[jnp.ndarray] = None
     ) -> tuple[NDArray, NDArray]:
         assert self.model is not None
         self.trn_config = config
@@ -93,6 +141,12 @@ class NeuralLikelihood(ABC):
             batch_size=self.trn_config.batch_size,
             shuffle=True
         )
+        n_batches = train_iter.num_batches
+        assert n_batches == val_iter.num_batches
+        steps_per_epoch = n_batches
+
+        warmup_steps = max(10, int(self.trn_config.warmup_epochs * steps_per_epoch))
+        total_steps = max(steps_per_epoch * self.trn_config.max_n_iter, warmup_steps + 1)
 
         if (self.trn_config.restore_from_previous) and (self.best_params is not None):
             print('Initialising using previously-inferred params...')
@@ -101,25 +155,34 @@ class NeuralLikelihood(ABC):
             print('No previous state to initialise from. Starting fresh...')
             params = self.model.init(next(rng_seq), method='log_prob', **train_iter(0))
 
-        optimiser = optax.adam(self.trn_config.learning_rate, b2=self.trn_config.adam_b2)
+        lr_schedule = self._make_lr_schedule(
+            warmup_steps=warmup_steps,
+            total_steps=total_steps,
+            base_lr=self.trn_config.learning_rate,
+            min_lr_ratio=self.trn_config.min_lr_ratio
+        )
+        optimiser = self._make_optimiser(
+            lr_schedule,
+            clip_norm=self.trn_config.clip_norm,
+            weight_decay=self.trn_config.weight_decay
+        )
+        # optimiser = optax.adam(self.trn_config.learning_rate, b2=self.trn_config.adam_b2)
         state = optimiser.init(params)
+        loss_fn = self._make_loss_fn(round_weights)
         
         @jax.jit
         def step(params, state, **batch):
-            def loss_fn(params):
-                lp = self.model.apply(params, None, method="log_prob", **batch)
-                return -jnp.sum(lp)
-
-            loss, grads = jax.value_and_grad(loss_fn)(params)
+            # def loss_fn(params):
+            #     lp = self.model.apply(params, None, method="log_prob", **batch)
+            #     return -jnp.sum(lp)
+            loss, grads = jax.value_and_grad(loss_fn)(params, **batch)
             updates, new_state = optimiser.update(grads, state, params)
             new_params = optax.apply_updates(params, updates)
             return loss, new_params, new_state
         
         @jax.jit
         def val_step(params, **batch):
-            return -jnp.mean(
-                self.model.apply(params, None, method='log_prob', **batch)
-            )
+            return jnp.mean(self._nll_apply(params, **batch))
 
         losses = np.nan * np.zeros(self.trn_config.max_n_iter)
         val_losses = np.nan * np.zeros(self.trn_config.max_n_iter)
