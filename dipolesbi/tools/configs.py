@@ -17,12 +17,15 @@ class TrainingConfig:
     patience: int = 20
     # adam_b2: float = 0.999
     restore_from_previous: bool = False
-    warmup_epochs: int = 300
+    warmup_epochs: float = 0.3
     min_lr_ratio: float = 0.1
     clip_norm: float = 1.
     weight_decay: float = 1e-5
     shuffle_train: bool = True
     shuffle_val: bool = False
+    validation_fraction: float = 0.1
+    weight_by_round: bool = False
+    alpha_weight: float = 1.
 
 @dataclass
 class SurjectiveNLEConfig:
@@ -101,6 +104,8 @@ class MultiRoundInfererConfig:
     simulation_path: Optional[str] = field(init=False)
     dequantise_data: bool = False
     n_requantisations: Optional[int] = None
+    initial_fraction: float = 0.3
+    learned_fraction: float = 0.7
 
     def __post_init__(self) -> None:
         self.simulations_per_round = self.simulation_budget // self.n_rounds

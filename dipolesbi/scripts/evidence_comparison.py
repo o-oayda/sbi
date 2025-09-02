@@ -1,3 +1,4 @@
+from collections import namedtuple
 import os
 from typing import Callable, Optional
 from anesthetic import NestedSamples
@@ -5,6 +6,7 @@ from blackjax.types import PRNGKey
 from getdist import MCSamples, plots
 import haiku as hk
 import jax
+from jax._src.dtypes import dtype
 import numpy as np
 from jax import numpy as jnp
 from jax import random
@@ -17,6 +19,7 @@ from dipolesbi.tools.healpix_helpers import build_funnel_steps
 from dipolesbi.tools.inference import JaxNestedSampler, LikelihoodBasedInferer
 from dipolesbi.tools.maps import SimpleDipoleMap, SimpleDipoleMapJax
 from surjectors.util import named_dataset
+from dipolesbi.tools.dataloader import named_dataset_idx
 from dipolesbi.tools.models import DipolePoisson
 from dipolesbi.tools.neural_flows import MAFSurjectiveNeuralLikelihood
 from dipolesbi.tools.priors import DipolePrior
@@ -57,8 +60,6 @@ class MultiRoundInferer:
         os.makedirs(new_plot_dir, exist_ok=True)
         self.mr_config.plot_save_dir = new_plot_dir
 
-        np.random.seed(42) # hopefully to keep ultranest results deterministic
-
         if self.mr_config.dequantise_data:
             self.ns_dequantise_key = jax.random.PRNGKey(0)
         
@@ -72,62 +73,71 @@ class MultiRoundInferer:
         if self.mr_config.custom_data_transform is None:
             self.mr_config.custom_data_transform = BlankTransform()
 
-        self.all_data = jnp.full((self.mr_config.simulation_budget, self.data_ndim), jnp.nan)
+        self.all_data = jnp.full(
+            (self.mr_config.simulation_budget, self.data_ndim), jnp.nan
+        )
         self.all_theta = {
             'mean_density': jnp.full((self.mr_config.simulation_budget,), jnp.nan),
             'observer_speed': jnp.full((self.mr_config.simulation_budget,), jnp.nan),
             'dipole_longitude': jnp.full((self.mr_config.simulation_budget,), jnp.nan),
             'dipole_latitude': jnp.full((self.mr_config.simulation_budget), jnp.nan)
         }
+        self.round_idx_badval = -1
+        self.all_round_id = jnp.full(
+            self.mr_config.simulation_budget, 
+            self.round_idx_badval, # bad (unfilled) int value
+            dtype=jnp.int32
+        )
+
         self.lnZ_per_round = []
         self.lnZerr_per_round = []
         self.final_nested_samples = None
 
-    def run_preloaded(self) -> None:
-        print(f'Loading simulations from {self.mr_config.simulation_path}...')
-        self.load_simulations(self.mr_config.simulation_path)
-
-        current_key = self.rng_key
-        current_key, train_key = jax.random.split(current_key)
-        self.current_round = self.mr_config.n_rounds
-
-        self.trn_set, self.val_set = self._make_train_val_set()
-
-        self.nle = self._instantiate_nle()
-
-        print('Starting training...')
-        self.nle.train(
-            hk.PRNGSequence(train_key),
-            self.trn_set, 
-            self.val_set,
-            config=self.train_config
-        )
-        self.nle.plot_loss_curve(
-            show=False, 
-            save_path=(
-                self.mr_config.plot_save_dir
-              + f'/loss_curve_{self.current_round}.png'
-            )
-        )
-        self._inspect_learned_likelihood(train_key)
-
-        self._compute_posterior()
-
-        self._clear_data_summary_stats()
-
-        self._benchmark_classic(current_key)
+    # def run_preloaded(self) -> None:
+    #     print(f'Loading simulations from {self.mr_config.simulation_path}...')
+    #     self.load_simulations(self.mr_config.simulation_path)
+    #
+    #     current_key = self.rng_key
+    #     current_key, train_key = jax.random.split(current_key)
+    #     self.current_round = self.mr_config.n_rounds
+    #
+    #     self.trn_set, self.val_set = self._make_train_val_set()
+    #
+    #     self.nle = self._instantiate_nle()
+    #
+    #     print('Starting training...')
+    #     self.nle.train(
+    #         hk.PRNGSequence(train_key),
+    #         self.trn_set, 
+    #         self.val_set,
+    #         config=self.train_config
+    #     )
+    #     self.nle.plot_loss_curve(
+    #         show=False, 
+    #         save_path=(
+    #             self.mr_config.plot_save_dir
+    #           + f'/loss_curve_{self.current_round}.png'
+    #         )
+    #     )
+    #     self._inspect_learned_likelihood(train_key)
+    #
+    #     self._compute_posterior()
+    #
+    #     self._clear_data_summary_stats()
+    #
+    #     self._benchmark_classic(current_key)
 
     def run(self):
         current_key = self.rng_key
-        inspect_every = 1
-        inspect_count = 0
 
         for round_idx in range(self.mr_config.n_rounds):
             self.current_round = round_idx
 
-            current_key, proposal_key, sim_key, train_key = jax.random.split(
-                current_key, 4
-            )
+            (
+                current_key, proposal_key, sim_key,
+                split_key, train_key, posterior_key
+            ) = jax.random.split(current_key, 6)
+
             theta = self._sample_proposal(
                 key=proposal_key,
                 n_samples=self.mr_config.simulations_per_round,
@@ -137,7 +147,7 @@ class MultiRoundInferer:
             print('Generating simulations...')
             data = self._generate_simulations(sim_key, theta)
             self._add_to_simulation_pool(sim_key, data, theta)
-            self.trn_set, self.val_set = self._make_train_val_set()
+            self.trn_set, self.val_set = self._make_train_val_set(split_key)
             del data; del theta
 
             self.nle = self._instantiate_nle()
@@ -150,19 +160,16 @@ class MultiRoundInferer:
                 config=self.train_config
             )
 
-            inspect_count += 1
-            if (inspect_count == inspect_every):
-                self.nle.plot_loss_curve(
-                    show=False, 
-                    save_path=(
-                        self.mr_config.plot_save_dir
-                      + f'/loss_curve_{self.current_round}.png'
-                    )
+            self.nle.plot_loss_curve(
+                show=False, 
+                save_path=(
+                    self.mr_config.plot_save_dir
+                  + f'/loss_curve_{self.current_round}.png'
                 )
-                self._inspect_learned_likelihood(train_key)
-                inspect_count = 0
+            )
+            self._inspect_learned_likelihood(train_key)
 
-            self._compute_posterior()
+            self._compute_posterior(posterior_key)
 
             self._clear_data_summary_stats()
 
@@ -322,6 +329,7 @@ class MultiRoundInferer:
         print(f'Adding data from {start} to {end}...')
         self.all_data = self.all_data.at[start:end, :].set(data)
         self.all_theta = self._write_contiguous(self.all_theta, theta, start)
+        self.all_round_id = self.all_round_id.at[start:end].set(self.current_round)
 
     def _write_contiguous(self, storage, batch, start: int):
         def put(dst, src):
@@ -330,16 +338,15 @@ class MultiRoundInferer:
             return lax.dynamic_update_slice(dst, src, idx)
         return jax.tree.map(put, storage, batch)
 
-    def _compute_posterior(self) -> None:
-        self.rng_key, ns_key = jax.random.split(self.rng_key)
+    def _compute_posterior(self, posterior_key: PRNGKey) -> None:
+        ns_key, dequantise_key = jax.random.split(posterior_key)
 
         # if the data has been dequantised, we need to marginalise out
         # over the introduced noise; this amounts to averaging permuted
         # x0s, but it has to be deterministic for the NS lnlike call
         if self.mr_config.dequantise_data:
-            _, self.ns_dequantise_key = jax.random.split(self.ns_dequantise_key)
             epsilon = jax.random.uniform(
-                self.ns_dequantise_key,
+                dequantise_key,
                 shape=(self.mr_config.n_requantisations, self.data_ndim), # type: ignore
                 minval=-0.5, 
                 maxval=0.5
@@ -392,9 +399,10 @@ class MultiRoundInferer:
         self.lnZ_per_round.append(self.nested_samples.logZ())
         self.lnZerr_per_round.append(self.nested_samples.logZ(100).std()) # type: ignore
 
-    def _make_train_val_set(self) -> tuple[named_dataset, named_dataset]:
-        (trn_data, val_data), (trn_theta, val_theta) = self._split_train_val(
-            self.all_data, self.all_theta
+    def _make_train_val_set(self, split_key: PRNGKey) -> tuple[named_dataset_idx, named_dataset]:
+        (trn_data, val_data), (trn_theta, val_theta), rnd_idx = self._split_train_val(
+            self.all_data, self.all_theta, self.all_round_id,
+            split_key=split_key
         )
 
         self._compute_theta_norm(trn_theta)
@@ -408,8 +416,9 @@ class MultiRoundInferer:
         assert not jnp.any(jnp.isnan(norm_train_theta))
         assert not jnp.any(jnp.isnan(norm_val_data))
         assert not jnp.any(jnp.isnan(norm_train_data))
+        assert not jnp.any(rnd_idx == self.round_idx_badval)
 
-        trn_set = named_dataset(norm_train_data, norm_train_theta)
+        trn_set = named_dataset_idx(norm_train_data, norm_train_theta, rnd_idx)
         val_set = named_dataset(norm_val_data, norm_val_theta)
 
         return trn_set, val_set
@@ -417,15 +426,23 @@ class MultiRoundInferer:
     def _split_train_val(
             self, 
             data: jnp.ndarray, 
-            theta: dict[str, jnp.ndarray]
+            theta: dict[str, jnp.ndarray],
+            round_idx: jnp.ndarray,
+            split_key: PRNGKey
     ) -> tuple[
         tuple[jnp.ndarray, jnp.ndarray], 
-        tuple[dict[str, jnp.ndarray], dict[str, jnp.ndarray]]
+        tuple[dict[str, jnp.ndarray], dict[str, jnp.ndarray]],
+        jnp.ndarray
     ]:
         cur_max_idx = (self.current_round+1) * self.mr_config.simulations_per_round
         cur_data = data[:cur_max_idx, :]
         cur_theta = jax.tree_map(lambda x: x[:cur_max_idx], theta)
-        return split_train_val_dict(cur_data, cur_theta)
+        cur_round_idx = round_idx[:cur_max_idx]
+        return split_train_val_dict(
+            cur_data, cur_theta, cur_round_idx,
+            validation_fraction=self.train_config.validation_fraction,
+            key=split_key
+        )
 
     def _compute_theta_norm(
             self,
@@ -476,9 +493,7 @@ class MultiRoundInferer:
             self,
             key: PRNGKey,
             n_samples: int, 
-            use_initial: bool = True,
-            learned_fraction: float = 0.7,
-            initial_fraction: float = 0.3
+            use_initial: bool = True
     ) -> dict[str, jnp.ndarray]:
         if use_initial:
             init_keys = jax.random.split(key, n_samples)
@@ -488,8 +503,8 @@ class MultiRoundInferer:
             n_prior = int(0.3 * n_samples)
             n_posterior = self.mr_config.simulations_per_round - n_prior
             print(
-                f'Sampling from learned posterior {learned_fraction} '
-                f'and initial proposal {initial_fraction}...'
+                f'Sampling from learned posterior {self.mr_config.learned_fraction} '
+                f'and initial proposal {self.mr_config.initial_fraction}...'
             )
             posterior_samples = self.nested_samples.sample(
                 n=n_posterior,

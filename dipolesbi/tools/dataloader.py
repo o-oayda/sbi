@@ -1,10 +1,13 @@
-from typing import Callable
+from collections import namedtuple
+from typing import Callable, Optional
 from jax.random import PRNGKey, permutation
 from torch.utils.data import Dataset
 from torch import Tensor
 from jax import numpy as jnp
 from dataclasses import dataclass, fields
 
+
+named_dataset_idx = namedtuple("named_dataset_idx", "y x round_id")
 
 class DataHandler(Dataset):
     def __init__(self, theta: Tensor, x: Tensor) -> None:
@@ -40,11 +43,13 @@ def split_train_val(
 def split_train_val_dict(
         y: jnp.ndarray, 
         x: dict[str, jnp.ndarray], 
+        round_idx: jnp.ndarray,
         validation_fraction: float = 0.1, 
-        key=PRNGKey(0)
+        key = PRNGKey(0)
 ) -> tuple[
         tuple[jnp.ndarray, jnp.ndarray],
-        tuple[dict[str, jnp.ndarray], dict[str, jnp.ndarray]]
+        tuple[dict[str, jnp.ndarray], dict[str, jnp.ndarray]],
+        jnp.ndarray
     ]:
     '''
     :return: Tuple[ tuple[y_train, x_train], tuple[y_val, x_val] ].
@@ -63,4 +68,5 @@ def split_train_val_dict(
     x_val = {key: val[val_idx] for key, val in x.items()}
     x_tuple = (x_tr, x_val)
 
-    return y_tuple, x_tuple
+    training_set_round_idxs = round_idx[train_idx]
+    return y_tuple, x_tuple, training_set_round_idxs

@@ -25,6 +25,8 @@ from abc import ABC, abstractmethod
 from dipolesbi.tools.configs import SurjectiveNLEConfig, TrainingConfig
 from dipolesbi.tools.distributions import IndependentWrapper, NegBinomDist, PoissonDist, StudentT
 from dipolesbi.tools.healpix_helpers import build_layer_perms, first_layer_stratifying_perm, get_healpix_superpixels, make_latent_dims, permute_within_types
+from dipolesbi.tools.dataloader import named_dataset_idx
+
 
 def make_mlp_with_dropout(sizes, activation=jax.nn.silu, dropout_rate=0.0):
     def net(x, *, training: bool):
@@ -115,23 +117,33 @@ class NeuralLikelihood(ABC):
         return _loss_fn
 
     def _nll_apply(self, params, **batch):
-        lp = self.model.apply(params, None, method='log_prob', **batch)
+        lp = self.model.apply(
+            params, None, method='log_prob', **self._model_kwargs(**batch)
+        )
         return -lp
+
+    def _make_round_weights(self, n_rounds: int, alpha: float = 1.):
+        t = jnp.arange(n_rounds)
+        w = jnp.exp(alpha * (t - (n_rounds - 1)))
+        return w / jnp.mean(w)
+
+    def _model_kwargs(self, **batch):
+        allowed = {"y", "x"}
+        return {k: v for k, v in batch.items() if k in allowed}
 
     def train(
             self,
             rng_seq: hk.PRNGSequence, 
-            training_data: named_dataset, 
+            training_data: named_dataset_idx, 
             validation_data: named_dataset,
-            config: TrainingConfig = TrainingConfig(),
-            round_weights: Optional[jnp.ndarray] = None
+            config: TrainingConfig = TrainingConfig()
     ) -> tuple[NDArray, NDArray]:
         assert self.model is not None
         self.trn_config = config
 
         train_iter = as_batch_iterator(
             rng_key=next(rng_seq), 
-            data=training_data,
+            data=training_data, # type: ignore
             batch_size=self.trn_config.batch_size,
             shuffle=self.trn_config.shuffle_train
         )
@@ -142,18 +154,32 @@ class NeuralLikelihood(ABC):
             shuffle=self.trn_config.shuffle_val
         )
         n_batches = train_iter.num_batches
-        assert n_batches == val_iter.num_batches
+        # assert n_batches == val_iter.num_batches
         steps_per_epoch = n_batches
 
         warmup_steps = max(10, int(self.trn_config.warmup_epochs * steps_per_epoch))
         total_steps = max(steps_per_epoch * self.trn_config.max_n_iter, warmup_steps + 1)
+        
+        cur_sim_round = max(training_data.round_id) + 1
+        if self.trn_config.weight_by_round:
+            round_weights = self._make_round_weights(
+                cur_sim_round, 
+                self.trn_config.alpha_weight
+            )
+        else:
+            round_weights = None
+        print(f'Round weights: {round_weights}')
 
         if (self.trn_config.restore_from_previous) and (self.best_params is not None):
             print('Initialising using previously-inferred params...')
             params = self.best_params
         else:
             print('No previous state to initialise from. Starting fresh...')
-            params = self.model.init(next(rng_seq), method='log_prob', **train_iter(0))
+            params = self.model.init(
+                next(rng_seq), 
+                method='log_prob', 
+                **self._model_kwargs(**train_iter(0))
+            )
 
         lr_schedule = self._make_lr_schedule(
             warmup_steps=warmup_steps,
@@ -419,8 +445,9 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
                 return IndependentWrapper(dist, reinterpreted_batch_ndims=1)
 
             elif decoder_distribution == 'poisson':
-                lambda_raw = params
-                lam = jax.nn.softplus(lambda_raw) + eps
+                log_lambda = params
+                log_lambda = jnp.clip(log_lambda, -10, 10)
+                lam = jnp.exp(log_lambda)
                 dist = PoissonDist(lam)
                 return IndependentWrapper(dist, reinterpreted_batch_ndims=1)
 

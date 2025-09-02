@@ -52,7 +52,7 @@ if __name__ == '__main__':
     rng_key = PRNGKey(42)
     # nle_config = SurjectiveNLEConfig.standard(n_layers=8)
 
-    NSIDE = 16
+    NSIDE = 32
     TOTAL_SOURCES = 1_920_000
     MEAN_DENSITY = jnp.asarray(TOTAL_SOURCES / hp.nside2npix(NSIDE))
     theta0 = {
@@ -61,8 +61,6 @@ if __name__ == '__main__':
         'dipole_longitude': jnp.asarray(215.),
         'dipole_latitude': jnp.asarray(40.)
     }
-
-    haar_transform = HaarWaveletTransform(first_nside=NSIDE, last_nside=1)
 
     model = SimpleDipoleMapJax(nside=NSIDE)
     x0_key, rng_key = split(rng_key)
@@ -81,30 +79,38 @@ if __name__ == '__main__':
     #     conditioner_n_neurons=256,
     #     decoder_n_layers=4,
     #     decoder_n_neurons=512,
+    #     decoder_distribution='poisson'
     # )
+    haar_transform = HaarWaveletTransform(first_nside=NSIDE, last_nside=1)
     nle_config = SurjectiveNLEConfig.heirarchical(
         blocks=haar_transform._build_surjective_blocks(n_chunks=1),
         maf_stack_size=15,
         conditioner_n_layers=4,
         conditioner_n_neurons=256,
-        decoder_n_layers=4,
-        decoder_n_neurons=512,
+        decoder_n_layers=3,
+        decoder_n_neurons=64,
         decoder_distribution='gaussian'
     )
     # low learning rate high nside?
+    # ok not weighting by round helps in keeping posterior narrow
+    # 5e-5 for optimal nside=16
     train_config = TrainingConfig(
         patience=20, 
-        learning_rate=1e-5, 
-        restore_from_previous=True
+        learning_rate=5e-5, 
+        restore_from_previous=True,
+        weight_by_round=False
     )
     mr_config = MultiRoundInfererConfig(
         simulation_budget=50_000,
         n_rounds=15,
         custom_data_transform=haar_transform,
         # custom_data_transform=ZScore(),
+        # custom_data_transform=None,
         reference_theta=theta0,
-        dequantise_data=True,
-        n_requantisations=32
+        dequantise_data=False,
+        initial_fraction=0.5,
+        learned_fraction=0.5
+        # n_requantisations=32
     )
 
     inferer = MultiRoundInferer(

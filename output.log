@@ -1,0 +1,88 @@
+Sampling from initial proposal...
+Generating simulations...
+Adding data from 0 to 3333...
+Starting training...
+Round weights: None
+No previous state to initialise from. Starting fresh...
+Iteration: 0 | Training NLL: 17435.9181 | Validation NLL: 17446.6460 | Early stopping at 20 (0)Iteration: 1 | Training NLL: 17435.6547 | Validation NLL: 17446.5610 | Early stopping at 20 (0)Iteration: 2 | Training NLL: 17435.0701 | Validation NLL: 17445.7383 | Early stopping at 20 (0)Iteration: 3 | Training NLL: 17433.0352 | Validation NLL: 17443.2095 | Early stopping at 20 (0)Iteration: 4 | Training NLL: 17429.8736 | Validation NLL: 17440.5181 | Early stopping at 20 (0)Iteration: 5 | Training NLL: 17426.4071 | Validation NLL: 17437.5513 | Early stopping at 20 (0)Iteration: 6 | Training NLL: 17422.3296 | Validation NLL: 17434.4053 | Early stopping at 20 (0)Iteration: 7 | Training NLL: 17417.0095 | Validation NLL: 17431.7822 | Early stopping at 20 (0)Iteration: 8 | Training NLL: 17411.1057 | Validation NLL: 17430.9800 | Early stopping at 20 (0)Iteration: 9 | Training NLL: 17406.2617 | Validation NLL: 17431.3779 | Early stopping at 20 (0)Iteration: 10 | Training NLL: 17402.3348 | Validation NLL: 17431.7422 | Early stopping at 20 (1)Iteration: 11 | Training NLL: 17398.7031 | Validation NLL: 17432.1167 | Early stopping at 20 (2)Iteration: 12 | Training NLL: 17395.2173 | Validation NLL: 17432.6123 | Early stopping at 20 (3)Iteration: 13 | Training NLL: 17391.9324 | Validation NLL: 17433.1870 | Early stopping at 20 (4)Iteration: 14 | Training NLL: 17388.9162 | Validation NLL: 17433.7471 | Early stopping at 20 (5)Iteration: 15 | Training NLL: 17386.1992 | Validation NLL: 17434.4048 | Early stopping at 20 (6)Iteration: 16 | Training NLL: 17383.7435 | Validation NLL: 17435.2119 | Early stopping at 20 (7)Iteration: 17 | Training NLL: 17381.4660 | Validation NLL: 17436.1450 | Early stopping at 20 (8)Iteration: 18 | Training NLL: 17379.3111 | Validation NLL: 17437.1841 | Early stopping at 20 (9)Iteration: 19 | Training NLL: 17377.2460 | Validation NLL: 17438.3130 | Early stopping at 20 (10)Iteration: 20 | Training NLL: 17375.2529 | Validation NLL: 17439.5083 | Early stopping at 20 (11)Iteration: 21 | Training NLL: 17373.3273 | Validation NLL: 17440.7646 | Early stopping at 20 (12)Iteration: 22 | Training NLL: 17371.4749 | Validation NLL: 17442.0664 | Early stopping at 20 (13)Iteration: 23 | Training NLL: 17369.7020 | Validation NLL: 17443.3945 | Early stopping at 20 (14)Iteration: 24 | Training NLL: 17368.0048 | Validation NLL: 17444.7197 | Early stopping at 20 (15)Iteration: 25 | Training NLL: 17366.3699 | Validation NLL: 17446.0156 | Early stopping at 20 (16)Iteration: 26 | Training NLL: 17364.7812 | Validation NLL: 17447.2764 | Early stopping at 20 (17)Iteration: 27 | Training NLL: 17363.2228 | Validation NLL: 17448.4980 | Early stopping at 20 (18)Iteration: 28 | Training NLL: 17361.6821 | Validation NLL: 17449.6919 | Early stopping at 20 (19)2025-09-02 17:41:45.059413: W external/xla/xla/tsl/framework/bfc_allocator.cc:501] Allocator (GPU_0_bfc) ran out of memory trying to allocate 3.43GiB (rounded to 3686400000)requested by op 
+2025-09-02 17:41:45.059690: W external/xla/xla/tsl/framework/bfc_allocator.cc:512] *****____***********__****************************************************__________________________
+2025-09-02 17:41:45.059711: W external/xla/xla/service/gpu/autotuning/gemm_fusion_autotuner.cc:1238] Autotuning candidate failed with out of memory error. Consider disabling correctness checking (i.e. --xla_gpu_autotune_level=3) to reduce autotuning memory usage.
+
+Early stopping at iteration 28 (best val NLL=17430.9800)
+Traceback (most recent call last):
+  File "/home/oliver/Documents/sbi/dipolesbi/scripts/run_multiround.py", line 122, in <module>
+    inferer.run()
+  File "/home/oliver/Documents/sbi/dipolesbi/scripts/evidence_comparison.py", line 170, in run
+    self._inspect_learned_likelihood(train_key)
+  File "/home/oliver/Documents/sbi/dipolesbi/scripts/evidence_comparison.py", line 212, in _inspect_learned_likelihood
+    samples = self.nle.sample_likelihood_func(
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/oliver/Documents/sbi/dipolesbi/tools/neural_flows.py", line 268, in sample_likelihood_func
+    samples = self.model.apply(
+              ^^^^^^^^^^^^^^^^^
+  File "/home/oliver/.cache/pypoetry/virtualenvs/dipolesbi-FmAK9iTz-py3.12/lib/python3.12/site-packages/haiku/_src/transform.py", line 183, in apply_fn
+    out, state = f.apply(params, None, *args, **kwargs)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/oliver/.cache/pypoetry/virtualenvs/dipolesbi-FmAK9iTz-py3.12/lib/python3.12/site-packages/haiku/_src/transform.py", line 456, in apply_fn
+    out = f(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^
+  File "/home/oliver/Documents/sbi/dipolesbi/tools/neural_flows.py", line 469, in _flow
+    return self._heirarchical_flow(method, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/oliver/Documents/sbi/dipolesbi/tools/neural_flows.py", line 589, in _heirarchical_flow
+    return td(method, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/oliver/.cache/pypoetry/virtualenvs/dipolesbi-FmAK9iTz-py3.12/lib/python3.12/site-packages/surjectors/_src/distributions/transformed_distribution.py", line 59, in __call__
+    return getattr(self, method)(**kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/oliver/.cache/pypoetry/virtualenvs/dipolesbi-FmAK9iTz-py3.12/lib/python3.12/site-packages/surjectors/_src/distributions/transformed_distribution.py", line 108, in sample
+    y, _ = self.sample_and_log_prob(sample_shape, x)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/oliver/.cache/pypoetry/virtualenvs/dipolesbi-FmAK9iTz-py3.12/lib/python3.12/site-packages/surjectors/_src/distributions/transformed_distribution.py", line 139, in sample_and_log_prob
+    y, fldj = self.transform.forward_and_likelihood_contribution(z, x=x)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/oliver/.cache/pypoetry/virtualenvs/dipolesbi-FmAK9iTz-py3.12/lib/python3.12/site-packages/surjectors/_src/surjectors/surjector.py", line 67, in forward_and_likelihood_contribution
+    return self._forward_and_likelihood_contribution(z, x=x, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/oliver/.cache/pypoetry/virtualenvs/dipolesbi-FmAK9iTz-py3.12/lib/python3.12/site-packages/surjectors/_src/surjectors/chain.py", line 52, in _forward_and_likelihood_contribution
+    y, lc = self._forward_and_log_contribution_dispatch(transform, y, x)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/oliver/.cache/pypoetry/virtualenvs/dipolesbi-FmAK9iTz-py3.12/lib/python3.12/site-packages/surjectors/_src/surjectors/chain.py", line 63, in _forward_and_log_contribution_dispatch
+    y, lc = fn(z, x)
+            ^^^^^^^^
+  File "/home/oliver/.cache/pypoetry/virtualenvs/dipolesbi-FmAK9iTz-py3.12/lib/python3.12/site-packages/surjectors/_src/surjectors/surjector.py", line 67, in forward_and_likelihood_contribution
+    return self._forward_and_likelihood_contribution(z, x=x, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/oliver/.cache/pypoetry/virtualenvs/dipolesbi-FmAK9iTz-py3.12/lib/python3.12/site-packages/surjectors/_src/surjectors/masked_autoregressive_inference_funnel.py", line 96, in _forward_and_likelihood_contribution
+    y_minus, jac_det = self.decoder(z_condition).sample_and_log_prob(
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/oliver/Documents/sbi/dipolesbi/tools/neural_flows.py", line 435, in _fn
+    params = decoder_net(z)
+             ^^^^^^^^^^^^^^
+  File "/home/oliver/.cache/pypoetry/virtualenvs/dipolesbi-FmAK9iTz-py3.12/lib/python3.12/site-packages/haiku/_src/module.py", line 464, in wrapped
+    out = f(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/contextlib.py", line 81, in inner
+    return func(*args, **kwds)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/oliver/.cache/pypoetry/virtualenvs/dipolesbi-FmAK9iTz-py3.12/lib/python3.12/site-packages/haiku/_src/module.py", line 305, in run_interceptors
+    return bound_method(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/oliver/.cache/pypoetry/virtualenvs/dipolesbi-FmAK9iTz-py3.12/lib/python3.12/site-packages/haiku/_src/nets/mlp.py", line 114, in __call__
+    out = layer(out)
+          ^^^^^^^^^^
+  File "/home/oliver/.cache/pypoetry/virtualenvs/dipolesbi-FmAK9iTz-py3.12/lib/python3.12/site-packages/haiku/_src/module.py", line 464, in wrapped
+    out = f(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/contextlib.py", line 81, in inner
+    return func(*args, **kwds)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/home/oliver/.cache/pypoetry/virtualenvs/dipolesbi-FmAK9iTz-py3.12/lib/python3.12/site-packages/haiku/_src/module.py", line 305, in run_interceptors
+    return bound_method(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/oliver/.cache/pypoetry/virtualenvs/dipolesbi-FmAK9iTz-py3.12/lib/python3.12/site-packages/haiku/_src/basic.py", line 180, in __call__
+    out = jnp.dot(inputs, w, precision=precision)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+jaxlib.xla_extension.XlaRuntimeError: RESOURCE_EXHAUSTED: Out of memory while trying to allocate 3686400000 bytes.
+--------------------
+For simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these.
