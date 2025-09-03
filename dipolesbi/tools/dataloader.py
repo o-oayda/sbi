@@ -1,10 +1,12 @@
 from collections import namedtuple
-from typing import Callable, Optional
-from jax.random import PRNGKey, permutation
 from torch.utils.data import Dataset
 from torch import Tensor
+import jax
 from jax import numpy as jnp
-from dataclasses import dataclass, fields
+import numpy as np
+from numpy.typing import NDArray
+from dipolesbi.tools.np_rngkey import NPKey
+from surjectors.util import _DataLoader, named_dataset
 
 
 named_dataset_idx = namedtuple("named_dataset_idx", "y x round_id")
@@ -22,34 +24,34 @@ class DataHandler(Dataset):
         return self.theta[index,...], self.x[index,...]
 
 def split_train_val(
-        y: jnp.ndarray, 
-        x: jnp.ndarray, 
-        validation_fraction: float = 0.1, 
-        key=PRNGKey(0)
-) -> tuple[tuple[jnp.ndarray, jnp.ndarray], tuple[jnp.ndarray, jnp.ndarray]]:
+        key: NPKey,
+        y: NDArray, 
+        x: NDArray, 
+        validation_fraction: float = 0.1
+) -> tuple[tuple[NDArray, NDArray], tuple[NDArray, NDArray]]:
     '''
     :return: Tuple[ tuple[y_train, y_val], tuple[x_train, x_val] ].
     '''
     n_batches = y.shape[0]
     assert n_batches == x.shape[0], 'Batch sizes of x and y are inconsistent!'
 
-    indexes = jnp.arange(n_batches)
-    perm = permutation(key, indexes)
+    indexes = np.arange(n_batches)
+    perm = key.permutation(indexes)
     n_validation = int(n_batches * validation_fraction)
 
     val_idx, train_idx = perm[:n_validation], perm[n_validation:]
     return (y[train_idx], y[val_idx]), (x[train_idx], x[val_idx])
 
 def split_train_val_dict(
-        y: jnp.ndarray, 
-        x: dict[str, jnp.ndarray], 
-        round_idx: jnp.ndarray,
+        key: NPKey,
+        y: NDArray, 
+        x: dict[str, NDArray], 
+        round_idx: NDArray,
         validation_fraction: float = 0.1, 
-        key = PRNGKey(0)
 ) -> tuple[
-        tuple[jnp.ndarray, jnp.ndarray],
-        tuple[dict[str, jnp.ndarray], dict[str, jnp.ndarray]],
-        jnp.ndarray
+        tuple[NDArray, NDArray],
+        tuple[dict[str, NDArray], dict[str, NDArray]],
+        NDArray
     ]:
     '''
     :return: Tuple[ tuple[y_train, x_train], tuple[y_val, x_val] ].
@@ -57,7 +59,7 @@ def split_train_val_dict(
     n_batches = y.shape[0]
 
     indexes = jnp.arange(n_batches)
-    perm = permutation(key, indexes)
+    perm = key.permutation(indexes)
     n_validation = int(n_batches * validation_fraction)
 
     val_idx, train_idx = perm[:n_validation], perm[n_validation:]
@@ -70,3 +72,42 @@ def split_train_val_dict(
 
     training_set_round_idxs = round_idx[train_idx]
     return y_tuple, x_tuple, training_set_round_idxs
+
+def as_batch_iterator_cpu2gpu(
+    rng_key: NPKey, data: named_dataset_idx | named_dataset, batch_size: int, shuffle=True
+):
+    """Create a batch iterator for a data set, converting from CPU (numpy)
+    to GPU (jax) as required.
+    Returns:
+        a data loader object
+    """
+    n = data.y.shape[0]
+    if n < batch_size:
+        num_batches = 1
+        batch_size = n
+    elif n % batch_size == 0:
+        num_batches = int(n // batch_size)
+    else:
+        num_batches = int(n // batch_size) + 1
+
+    idxs = jnp.arange(n)
+    if shuffle:
+        idxs = rng_key.permutation(idxs)
+
+    def get_batch(idx, idxs=idxs):
+        start_idx = idx * batch_size
+        step_size = int(np.minimum(n - start_idx, batch_size))
+
+        # NumPy slice to get the indices for this batch (CPU)
+        ret_idx = idxs[start_idx:start_idx + step_size]
+
+        # NumPy advanced indexing per field (CPU)
+        batch = {
+            name: array[ret_idx]
+            for name, array in zip(data._fields, data)
+        }
+
+        # Move JUST this batch to GPU
+        return jax.device_put(batch)
+
+    return _DataLoader(num_batches, idxs, get_batch)

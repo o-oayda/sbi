@@ -1,14 +1,15 @@
 from blackjax.types import PRNGKey
 import jax
 import numpy as np
-from numpy.typing import NDArray
+from numpy.typing import DTypeLike, NDArray
+from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.points import (
     sample_points_with_flux, boost_points_with_flux, flux_cut,
     add_noise_to_fluxes
 )
 import healpy as hp
 import torch
-from numpy.random import poisson
+from dipolesbi.tools.np_rngkey import poisson
 from torch.types import Tensor
 from dipolesbi.tools.utils import (
     enforce_batchwise_input, jax_sph2cart, spherical_to_cartesian, omega_to_theta,
@@ -139,9 +140,9 @@ class SimpleDipoleMapJax:
         )
 
 class SimpleDipoleMap:
-    def __init__(self, nside: int = 64, device: str = 'cpu'):
+    def __init__(self, nside: int = 64, dtype: DTypeLike = np.float32) -> None:
         self.nside = nside
-        self.device = device
+        self.dtype = dtype
         self.fiducial_amplitude = 0.005
         self.nest = True
         self.mask = Mask(nside=nside)
@@ -152,23 +153,22 @@ class SimpleDipoleMap:
         self.masked_pixels |= set(self.mask.equator_mask(angle))
 
     def generate_dipole(self,
-            mean_density: NDArray[np.floating],
-            observer_speed: NDArray[np.floating],
-            dipole_longitude: NDArray[np.floating],
-            dipole_latitude: NDArray[np.floating],
+            rng_key: NPKey,
+            theta: dict[str, NDArray],
             make_poisson_draws: bool = True
-    ) -> NDArray[np.float32]:
-        Theta = np.stack(
-            [mean_density, observer_speed, dipole_longitude, dipole_latitude],
-            axis=1
-        ) # shape (n_batches, n_dim)
-        poisson_mean = self.dipole_signal(Theta)
-
+    ) -> NDArray:
+        for key in theta.keys():
+            if theta[key].shape == ():
+                theta[key] = theta[key].reshape((1,))
+        poisson_mean = self.dipole_signal(**theta)
         if make_poisson_draws:
-            self._density_map = poisson(poisson_mean).astype('float32')
+            self._density_map = poisson(
+                rng_key, 
+                lam=poisson_mean, 
+                shape=poisson_mean.shape
+            ).astype(self.dtype)
         else:
-            self._density_map = poisson_mean.astype('float32')
-
+            self._density_map = poisson_mean.astype(self.dtype)
         return self.density_map
 
     @property
@@ -177,19 +177,23 @@ class SimpleDipoleMap:
         out_map[:, list(self.masked_pixels)] = self.fill_value
         return out_map
 
-    def dipole_signal(self, Theta: NDArray) -> NDArray:
-        Theta = enforce_batchwise_input(Theta, ndim=4)
-
-        n_batches = Theta.shape[0]
+    def dipole_signal(
+            self, 
+            mean_density: NDArray[np.floating],
+            observer_speed: NDArray[np.floating],
+            dipole_longitude: NDArray[np.floating],
+            dipole_latitude: NDArray[np.floating],
+    ) -> NDArray:
+        n_batches = len(mean_density)
         pixel_indices = np.arange(hp.nside2npix(self.nside))
         pixel_vectors = np.stack(
             hp.pix2vec(self.nside, pixel_indices, nest=True)
         )
 
-        mean_count = Theta[:, 0]
-        dipole_amplitude = Theta[:, 1] * self.fiducial_amplitude
-        dipole_longitude_rad = np.deg2rad(Theta[:, 2])
-        dipole_colatitude_rad = np.pi / 2 - np.deg2rad(Theta[:, 3])
+        mean_count = mean_density
+        dipole_amplitude = observer_speed * self.fiducial_amplitude
+        dipole_longitude_rad = np.deg2rad(dipole_longitude)
+        dipole_colatitude_rad = np.pi / 2 - np.deg2rad(dipole_latitude)
 
         dipole_unit_vector = spherical_to_cartesian(
             (dipole_colatitude_rad, dipole_longitude_rad)

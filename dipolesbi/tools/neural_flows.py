@@ -25,7 +25,8 @@ from abc import ABC, abstractmethod
 from dipolesbi.tools.configs import SurjectiveNLEConfig, TrainingConfig
 from dipolesbi.tools.distributions import IndependentWrapper, NegBinomDist, PoissonDist, StudentT
 from dipolesbi.tools.healpix_helpers import build_layer_perms, first_layer_stratifying_perm, get_healpix_superpixels, make_latent_dims, permute_within_types
-from dipolesbi.tools.dataloader import named_dataset_idx
+from dipolesbi.tools.dataloader import as_batch_iterator_cpu2gpu, named_dataset_idx
+from dipolesbi.tools.np_rngkey import NPKeySequence, npkey_from_jax, npkey_sequence_from_hk
 
 
 def make_mlp_with_dropout(sizes, activation=jax.nn.silu, dropout_rate=0.0):
@@ -140,15 +141,16 @@ class NeuralLikelihood(ABC):
     ) -> tuple[NDArray, NDArray]:
         assert self.model is not None
         self.trn_config = config
+        np_sequence = npkey_sequence_from_hk(rng_seq)
 
-        train_iter = as_batch_iterator(
-            rng_key=next(rng_seq), 
-            data=training_data, # type: ignore
+        train_iter = as_batch_iterator_cpu2gpu(
+            rng_key=next(np_sequence), 
+            data=training_data, 
             batch_size=self.trn_config.batch_size,
             shuffle=self.trn_config.shuffle_train
         )
-        val_iter = as_batch_iterator(
-            rng_key=next(rng_seq), 
+        val_iter = as_batch_iterator_cpu2gpu(
+            rng_key=next(np_sequence), 
             data=validation_data,
             batch_size=self.trn_config.batch_size,
             shuffle=self.trn_config.shuffle_val
@@ -231,10 +233,10 @@ class NeuralLikelihood(ABC):
             val_loss /= max(1, val_iter.num_batches)
 
             sys.stdout.write(
-                f"\rIteration: {i} | "
-                f"Training NLL: {train_loss:.4f} | "
-                f"Validation NLL: {val_loss:.4f} | "
-                f"Early stopping at {self.trn_config.patience} ({wait})"
+                f"\rIter: {i} | "
+                f"Train NLL: {train_loss:.4f} | "
+                f"Val NLL: {val_loss:.4f} | "
+                f"Stop at {self.trn_config.patience} ({wait})"
             )
             sys.stdout.flush()
 
@@ -263,13 +265,15 @@ class NeuralLikelihood(ABC):
     def sample_likelihood_func(
             self, 
             rng_key: PRNGKey, 
-            theta0: jnp.ndarray
+            theta0: jnp.ndarray,
+            **kwargs
     ) -> jnp.ndarray:
         samples = self.model.apply(
             self.best_params,
             rng_key,
             method='sample',
-            x=theta0
+            x=theta0,
+            **kwargs
         )
         return samples
 

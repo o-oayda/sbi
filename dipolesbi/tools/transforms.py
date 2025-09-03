@@ -1,6 +1,6 @@
 from typing import Optional, Tuple, cast, Literal
 from blackjax.types import Array
-from healpy import isnsideok, npix2nside, nside2npix
+from healpy import isnsideok, nside2npix
 from numpy.typing import NDArray
 import torch
 from torch import Tensor, device
@@ -11,9 +11,6 @@ import numpy as np
 from dipolesbi.tools.healpix_helpers import build_funnel_steps
 from dipolesbi.tools.utils import softplus_pos
 import torch.nn.functional as F
-from jax import numpy as jnp
-import jax
-from functools import partial
 from abc import ABC, abstractmethod
 import healpy as hp
 
@@ -22,7 +19,7 @@ class InvertibleDataTransform(ABC):
     def __init__(self) -> None:
         pass
     
-    def __call__(self, data: jnp.ndarray):
+    def __call__(self, data: NDArray) -> tuple[NDArray, NDArray]:
         return self.forward(data)
 
     @abstractmethod
@@ -30,11 +27,11 @@ class InvertibleDataTransform(ABC):
         pass
 
     @abstractmethod
-    def forward(self, data: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+    def forward(self, data: NDArray) -> tuple[NDArray, NDArray]:
         pass
 
     @abstractmethod
-    def inverse(self, transformed_data: jnp.ndarray) -> jnp.ndarray:
+    def inverse(self, transformed_data: NDArray) -> NDArray:
         pass
 
     @abstractmethod
@@ -48,11 +45,11 @@ class BlankTransform(InvertibleDataTransform):
     def __repr__(self) -> str:
         return 'BlankTransform(No transform to the data.)'
 
-    def forward(self, data: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+    def forward(self, data: NDArray) -> tuple[NDArray, NDArray]:
         n_batches = data.shape[0]
-        return data, jnp.zeros_like(n_batches)
+        return data, np.zeros_like(n_batches)
 
-    def inverse(self, transformed_data: jnp.ndarray) -> jnp.ndarray:
+    def inverse(self, transformed_data: NDArray) -> NDArray:
         return transformed_data
 
     def clear(self) -> None:
@@ -71,20 +68,20 @@ class ZScore(InvertibleDataTransform):
             f")"
         )
 
-    def forward(self, data: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+    def forward(self, data: NDArray) -> tuple[NDArray, NDArray]:
         '''
         Do a batchwise mean per data dimension.
         '''
         n_batches = data.shape[0]
         if (self.mu is None) or (self.sigma is None):
-            self.mu = jnp.nanmean(data, axis=0)
-            self.sigma = jnp.nanstd(data, axis=0)
+            self.mu = np.nanmean(data, axis=0)
+            self.sigma = np.nanstd(data, axis=0)
 
-        log_det_jac = - jnp.log(self.sigma).sum() * jnp.ones(n_batches)
+        log_det_jac = - np.log(self.sigma).sum() * np.ones(n_batches)
         z = (data - self.mu) / self.sigma
         return z, log_det_jac
 
-    def inverse(self, transformed_data: jnp.ndarray) -> jnp.ndarray:
+    def inverse(self, transformed_data: NDArray) -> NDArray:
         data = transformed_data * self.sigma + self.mu
         return data
 
@@ -245,16 +242,16 @@ class LearnableNormaliser(torch.nn.Module):
 
 class HaarWaveletTransform(InvertibleDataTransform):
     def __init__(self, first_nside: int, last_nside: int = 1) -> None:
-        self.Q = 0.5 * jnp.asarray(
+        self.Q = 0.5 * np.asarray(
             [[1., 1. , 1. ,  1.],
              [1., 1. , -1., -1.],
              [1., -1., 1. , -1.],
              [1., -1., -1.,  1.]]
         )
-        self.Q_inv = jnp.linalg.inv(self.Q)
+        self.Q_inv = np.linalg.inv(self.Q)
 
-        self.mu_at_level: list[list[jnp.ndarray]] = []
-        self.std_at_level: list[list[jnp.ndarray]] = []
+        self.mu_at_level: list[list[NDArray]] = []
+        self.std_at_level: list[list[NDArray]] = []
         self.empty_norm_stats_flag: bool = True
 
         self.first_nside = first_nside
@@ -293,13 +290,13 @@ class HaarWaveletTransform(InvertibleDataTransform):
         self.std_at_level = []
         self.empty_norm_stats_flag = True
 
-    def forward(self, data: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+    def forward(self, data: NDArray) -> tuple[NDArray, NDArray]:
         return self._cycle_healpix_tree(data)
 
-    def inverse(self, transformed_data: jnp.ndarray) -> jnp.ndarray:
+    def inverse(self, transformed_data: NDArray) -> NDArray:
         return self._reverse_cycle_healpix_tree(transformed_data)
 
-    def _build_surjective_blocks(self, n_chunks: int = 1) -> list[tuple[jnp.ndarray, int, int]]:
+    def _build_surjective_blocks(self, n_chunks: int = 1) -> list[tuple[NDArray, int, int]]:
         detail_sizes = []
         ns = self.first_nside
         while ns > self.last_nside:
@@ -318,19 +315,19 @@ class HaarWaveletTransform(InvertibleDataTransform):
 
     def _cycle_healpix_tree(
             self, 
-            y: jnp.ndarray
-    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+            y: NDArray
+    ) -> tuple[NDArray, NDArray]:
         batches, npix_fine = y.shape
         cur_npix = npix_fine
-        coefficients_fine2coarse: list[jnp.ndarray] = [] 
-        a_list: list[jnp.ndarray] = []
-        logdets_at_each_level: list[jnp.ndarray] = []
+        coefficients_fine2coarse: list[NDArray] = [] 
+        a_list: list[NDArray] = []
+        logdets_at_each_level: list[NDArray] = []
         
-        logdet = jnp.zeros(batches)
+        logdet = np.zeros(batches)
         downstream_coefficients = y
 
         for lvl, factor in enumerate(self.downscale_factors):
-            per_level_logdet = jnp.zeros(())
+            per_level_logdet = np.zeros(())
 
             P = cur_npix // factor
             child_pixels = downstream_coefficients.reshape(batches, P, factor)
@@ -359,8 +356,9 @@ class HaarWaveletTransform(InvertibleDataTransform):
                     mu = self.mu_at_level[lvl][i]
                     sigma = self.std_at_level[lvl][i]
 
-                z = z.at[..., i].set((z[..., i] - mu) / sigma)
-                per_level_logdet += - P * jnp.log(sigma)
+                z[..., i] = (z[..., i] - mu) / sigma
+
+                per_level_logdet += - P * np.log(sigma)
 
             if self.empty_norm_stats_flag:
                 self.mu_at_level.append(cur_mus)
@@ -382,13 +380,13 @@ class HaarWaveletTransform(InvertibleDataTransform):
         z_parts = [a_coarse.reshape(batches, -1)]  # list[ (B, out_npix) ]
         for y in reversed(coefficients_fine2coarse): # now coarse->fine
             z_parts.append(y[..., 1:].reshape(batches, -1))
-        z = jnp.concatenate(z_parts, axis=1)
+        z = np.concatenate(z_parts, axis=1)
 
         return z, logdet
 
     def _reverse_cycle_healpix_tree(self,
-        transformed_data: jnp.ndarray
-    ) -> jnp.ndarray:
+        transformed_data: np.ndarray
+    ) -> np.ndarray:
         batches, npix = transformed_data.shape
         P_levels = self.parents_at_levels
 
@@ -414,12 +412,12 @@ class HaarWaveletTransform(InvertibleDataTransform):
             # y_out is what forward produced after coupling: [a | d_out]
             a_here = upstream_data[..., None]
             a_here = cast(Array, a_here)
-            y_pre = jnp.concatenate([a_here, d_out], axis=-1) # (B, P_l, n_coefficients)
+            y_pre = np.concatenate([a_here, d_out], axis=-1) # (B, P_l, n_coefficients)
 
             for i in range(4):
                 mu = self.mu_at_level[-1 - lvl][i]
                 sigma = self.std_at_level[-1 - lvl][i]
-                y_pre = y_pre.at[..., i].set(y_pre[..., i] * sigma + mu)
+                y_pre[..., i] = y_pre[..., i] * sigma + mu
 
             data = self._inverse_matrix_product(y_pre)
 
@@ -429,10 +427,10 @@ class HaarWaveletTransform(InvertibleDataTransform):
         x_rec = upstream_data
         return x_rec
 
-    def _forward_matrix_product(self, v: jnp.ndarray) -> jnp.ndarray:
+    def _forward_matrix_product(self, v: NDArray) -> NDArray:
         return v @ self.Q
 
-    def _inverse_matrix_product(self, z: jnp.ndarray) -> jnp.ndarray:
+    def _inverse_matrix_product(self, z: NDArray) -> NDArray:
         return z @ self.Q_inv
 
     def int_haar4_forward(self, x):  # x: (..., 4) integer tensor

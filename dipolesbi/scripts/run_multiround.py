@@ -1,10 +1,12 @@
 from jax.random import PRNGKey, split
 from dipolesbi.scripts.evidence_comparison import MultiRoundInferer
 from dipolesbi.tools.configs import MultiRoundInfererConfig, SurjectiveNLEConfig, TrainingConfig
+from dipolesbi.tools.np_rngkey import npkey_from_jax, prng_key
 from dipolesbi.tools.priors_jax import DipolePriorJax
-from dipolesbi.tools.maps import SimpleDipoleMapJax
+from dipolesbi.tools.maps import SimpleDipoleMap, SimpleDipoleMapJax
 import healpy as hp
-from jax import numpy as jnp
+import numpy as np
+from dipolesbi.tools.priors_np import DipolePriorNP
 from dipolesbi.tools.transforms import HaarWaveletTransform, ZScore
 import matplotlib.pyplot as plt
 import os
@@ -50,23 +52,21 @@ def lnZ_plot(inferer: MultiRoundInferer) -> None:
 
 if __name__ == '__main__':
     rng_key = PRNGKey(42)
-    # nle_config = SurjectiveNLEConfig.standard(n_layers=8)
 
-    NSIDE = 32
+    NSIDE = 16
     TOTAL_SOURCES = 1_920_000
-    MEAN_DENSITY = jnp.asarray(TOTAL_SOURCES / hp.nside2npix(NSIDE))
+    MEAN_DENSITY = np.asarray(TOTAL_SOURCES / hp.nside2npix(NSIDE))
     theta0 = {
         'mean_density': MEAN_DENSITY,
-        'observer_speed': jnp.asarray(2.),
-        'dipole_longitude': jnp.asarray(215.),
-        'dipole_latitude': jnp.asarray(40.)
+        'observer_speed': np.asarray(2.),
+        'dipole_longitude': np.asarray(215.),
+        'dipole_latitude': np.asarray(40.)
     }
 
-    model = SimpleDipoleMapJax(nside=NSIDE)
-    x0_key, rng_key = split(rng_key)
-    x0 = model.generate_dipole(x0_key, theta=theta0)
+    model = SimpleDipoleMap(nside=NSIDE)
+    x0 = model.generate_dipole(npkey_from_jax(rng_key), theta=theta0)
 
-    prior = DipolePriorJax(
+    prior = DipolePriorNP(
         mean_count_range=[float(0.95*MEAN_DENSITY), float(1.05*MEAN_DENSITY)]
     )
 
@@ -109,7 +109,8 @@ if __name__ == '__main__':
         reference_theta=theta0,
         dequantise_data=False,
         initial_fraction=0.5,
-        learned_fraction=0.5
+        learned_fraction=0.5,
+        n_likelihood_samples=25_000
         # n_requantisations=32
     )
 

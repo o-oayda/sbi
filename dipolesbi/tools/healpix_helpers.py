@@ -12,7 +12,7 @@ def build_funnel_steps(
     n_coarse: int,
     detail_lengths: list[int],
     n_chunks: int | list[int] = 1,   # e.g. 2 => halves; can pass per-level list
-) -> list[tuple[jnp.ndarray, int, int]]:
+) -> list[tuple[np.ndarray, int, int]]:
     """
     State starts as [coarse | d1 | d2 | ...].
     If n_chunks > 1, each detail dℓ is split into n_chunks pieces and we peel them
@@ -31,7 +31,7 @@ def build_funnel_steps(
         chunks = _split_len(L, k) if k > 1 else [L]
         remaining.extend(chunks)
 
-    steps: list[tuple[jnp.ndarray, int, int]] = []
+    steps: list[tuple[np.ndarray, int, int]] = []
     while len(remaining) > 1:
         starts = np.cumsum([0] + remaining[:-1])
         blocks = [np.arange(starts[i], starts[i] + remaining[i]) for i in range(len(remaining))]
@@ -49,7 +49,7 @@ def build_funnel_steps(
         assert perm.shape[0] == dim_before
         assert np.array_equal(np.sort(perm), np.arange(dim_before))
 
-        steps.append((jnp.asarray(perm), int(keep_idx.size), int(drop_idx.size)))
+        steps.append((perm, int(keep_idx.size), int(drop_idx.size)))
 
         # After dropping this chunk, the new state is [coarse | (rest of chunks)]
         remaining = [remaining[0]] + remaining[2:]

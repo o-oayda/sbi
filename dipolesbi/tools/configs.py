@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Any, Optional, Literal
 from jax import numpy as jnp
+from numpy.typing import NDArray
 
 from dipolesbi.tools.transforms import InvertibleDataTransform, ZScore
 
@@ -43,17 +44,16 @@ class SurjectiveNLEConfig:
     permute_data: bool = False # only for coarse
     maf_stack_size: Optional[int] = None # only for heirarchical
     n_coarse: Optional[int] = 0 # only for coarse
-    blocks: list[tuple[jnp.ndarray, int, int]] = [] # only for heirarchical
     data_reduction_factor: Optional[float] = None # only for standard/coarse
 
-    blocks: list[tuple[jnp.ndarray, int, int]] = field(default_factory=list)
+    blocks: list[tuple[NDArray, int, int]] = field(default_factory=list)
     conditioner_kwargs: dict = field(default_factory=dict)
     flow_type: str = field(default='custom', init=False)
 
     @classmethod
     def heirarchical(
         cls,
-        blocks: list[tuple[jnp.ndarray, int, int]],
+        blocks: list[tuple[NDArray, int, int]],
         maf_stack_size: int = 8,
         **overrides
     ) -> 'SurjectiveNLEConfig':
@@ -97,7 +97,7 @@ class MultiRoundInfererConfig:
     simulation_budget: int
     n_rounds: int
     load_simulations: Optional[str] = None
-    reference_theta: Optional[dict[str, jnp.ndarray]] = None
+    reference_theta: Optional[dict[str, NDArray]] = None
     plot_save_dir: str = 'nle_out'
     custom_data_transform: Optional[InvertibleDataTransform] = ZScore()
     simulations_per_round: int = field(init=False)
@@ -106,6 +106,7 @@ class MultiRoundInfererConfig:
     n_requantisations: Optional[int] = None
     initial_fraction: float = 0.3
     learned_fraction: float = 0.7
+    n_likelihood_samples: int = 50_000
 
     def __post_init__(self) -> None:
         self.simulations_per_round = self.simulation_budget // self.n_rounds

@@ -10,11 +10,13 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 from operator import itemgetter
 import dill as pickle
-from numpy.typing import NDArray
+from numpy.typing import DTypeLike, NDArray
 from collections import defaultdict
 import torch.nn.functional as F
 from jax import numpy as jnp
 import jax
+
+from dipolesbi.tools.np_rngkey import NPKey
 
 def save_dict_npz(path, x: dict):
     jax.block_until_ready(jax.tree_util.tree_leaves(x))  # ensure computed
@@ -36,6 +38,19 @@ def spherical_to_cartesian(theta_phi: tuple[NDArray, NDArray]) -> NDArray:
     z = np.cos(theta_phi[0])
     xyz = np.stack([x, y, z])
     return xyz
+
+def np_sph2cart(
+        phi: NDArray, 
+        theta: NDArray
+) -> tuple[NDArray, NDArray, NDArray]:
+    '''
+    Transform spherical coordinates longitude and colatitude in radians to
+    Cartesian.
+    '''
+    x = np.sin(theta) * np.cos(phi)
+    y = np.sin(theta) * np.sin(phi)
+    z = np.cos(theta)
+    return x, y, z
 
 def jax_sph2cart(
         phi: jnp.ndarray, 
@@ -82,6 +97,21 @@ def sample_polar(unif: Tensor, low_high: tuple[Tensor, Tensor]) -> Tensor:
     unif_theta = torch.arccos(torch.cos(low) + unif * (torch.cos(high) - torch.cos(low)))
     return unif_theta
 
+def sample_polar_np(
+        rng_key: NPKey,
+        n_samples: int = 1,
+        low: float = -90.,
+        high: float = 90.,
+        dtype: DTypeLike = np.float32
+) -> NDArray:
+    unifs = rng_key.uniform((n_samples,), dtype=dtype)
+    low_rad = np.pi / 2 - np.deg2rad(low)
+    high_rad = np.pi / 2 - np.deg2rad(high)
+    unif_theta = np.arccos(
+        np.cos(low_rad) + unifs * (np.cos(high_rad) - np.cos(low_rad))
+    )
+    return 90. - np.rad2deg(unif_theta)
+
 def sample_polar_jax(
         rng_key, 
         minval: float = -90.,
@@ -103,6 +133,26 @@ def sample_polar_jax(
 def polar_pdf(theta: float, low_high: list[float]):
     low = low_high[0]; high = low_high[1]
     return - np.sin(theta) / (np.cos(high) - np.cos(low))
+
+def polar_logpdf_np(
+        latitude: NDArray,
+        low: float = -90.,
+        high: float = 90.
+) -> NDArray:
+    '''
+    :param latitude: Latitude in degrees (-90, 90).
+    '''
+    theta = np.pi / 2 - np.deg2rad(latitude)
+
+    # maxval and minval flip remapping from (-90, 90) to (0, pi) polar
+    high_rad = np.pi / 2 - np.deg2rad(low)
+    low_rad = np.pi / 2 - np.deg2rad(high)
+
+    return (
+        np.log(-np.sin(theta) / (np.cos(high_rad) - np.cos(low_rad)))
+      + np.log(np.pi / 180) # p(theta_rad) -> p(theta_deg) Jacobian
+    )
+
 
 def polar_logpdf_jax(
         latitude: jnp.ndarray, 
