@@ -2,6 +2,7 @@ from blackjax.types import PRNGKey
 import jax
 import numpy as np
 from numpy.typing import DTypeLike, NDArray
+import scipy as sp
 from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.points import (
     sample_points_with_flux, boost_points_with_flux, flux_cut,
@@ -140,7 +141,12 @@ class SimpleDipoleMapJax:
         )
 
 class SimpleDipoleMap:
-    def __init__(self, nside: int = 64, dtype: DTypeLike = np.float32) -> None:
+    def __init__(
+            self, 
+            nside: int = 64, 
+            dtype: DTypeLike = np.float32,
+            reference_data: Optional[NDArray] = None
+    ) -> None:
         self.nside = nside
         self.dtype = dtype
         self.fiducial_amplitude = 0.005
@@ -148,6 +154,7 @@ class SimpleDipoleMap:
         self.mask = Mask(nside=nside)
         self.masked_pixels = set()
         self.fill_value = np.nan
+        self.reference_data = reference_data
     
     def equatorial_plane_mask(self, angle: float) -> None:
         self.masked_pixels |= set(self.mask.equator_mask(angle))
@@ -204,6 +211,16 @@ class SimpleDipoleMap:
             1 + np.einsum('ji,jk', dipole_vector, pixel_vectors)
         )
         return poisson_mean
+
+    def log_likelihood(self, theta: dict[str, NDArray]) -> NDArray:
+        dipole_signal = self.dipole_signal(**theta)
+        return np.sum(
+            sp.stats.poisson.logpmf(
+                k=self.reference_data,
+                mu=dipole_signal
+            ),
+            axis=1
+        )
 
 class SkyMap:
     def __init__(self, nside: int = 32, device: str = 'cpu'):

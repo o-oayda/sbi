@@ -83,6 +83,12 @@ def sample_unif(unif: Tensor, low_high: tuple[Tensor, Tensor]) -> Tensor:
     low = low_high[0]; high = low_high[1]
     return (high - low) * unif + low
 
+def sample_unif_np(unif: NDArray, low: NDArray, high=NDArray) -> NDArray:
+    '''
+    (b - a) * u + a
+    '''
+    return (high - low) * unif + low
+
 def unif_pdf(low_high: list[float]) -> float:
     low = low_high[0]; high = low_high[1]
     return 1 / (high - low)
@@ -98,13 +104,17 @@ def sample_polar(unif: Tensor, low_high: tuple[Tensor, Tensor]) -> Tensor:
     return unif_theta
 
 def sample_polar_np(
-        rng_key: NPKey,
+        rngkey_or_unifs: NPKey | NDArray,
         n_samples: int = 1,
         low: float = -90.,
         high: float = 90.,
         dtype: DTypeLike = np.float32
 ) -> NDArray:
-    unifs = rng_key.uniform((n_samples,), dtype=dtype)
+    if type(rngkey_or_unifs) == NPKey:
+        unifs = rngkey_or_unifs.uniform((n_samples,), dtype=dtype)
+    else:
+        unifs = rngkey_or_unifs
+
     low_rad = np.pi / 2 - np.deg2rad(low)
     high_rad = np.pi / 2 - np.deg2rad(high)
     unif_theta = np.arccos(

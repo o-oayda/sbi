@@ -31,6 +31,7 @@ import ultranest
 import jax
 from jax import numpy as jnp
 from dipolesbi.tools.priors_jax import JaxPrior
+from dipolesbi.tools.priors_np import DipolePriorNP
 
 
 class LikelihoodFreeInferer:
@@ -473,6 +474,58 @@ class JaxNestedSampler:
         )
         
         return self.nested_samples
+
+class NotShitLikelihoodBasedInferer:
+    def __init__(
+            self,
+            lnlike: Callable[[dict[str, NDArray]], NDArray],
+            prior: DipolePriorNP,
+            data: NDArray
+    ) -> None:
+        self.lnlike = lnlike
+        self.prior = prior
+        self.data = data
+
+    def run_ultranest(self) -> None:
+        def log_likelihood_wrapper(theta: NDArray) -> NDArray:
+            theta_dict: dict[str, NDArray] = {}
+            for i in range(self.prior.ndim):
+                theta_dict[self.prior.simulator_kwargs[i]] = theta[:, i]
+            return self.lnlike(theta=theta_dict) # type: ignore fuck off you fucking piece of shit
+
+        def prior_transform_wrapper(unifcube_samples: NDArray) -> NDArray:
+            unif_dict: dict[str, NDArray] = {}
+            for i in range(self.prior.ndim):
+                unif_dict[self.prior.prior_names[i]] = unifcube_samples[:, i]
+            tformed_samples = self.prior.transform(unif_dict)
+            tformed_list = [val for val in tformed_samples.values()]
+            return np.stack(tformed_list, axis=1)
+
+        self.ultranest_sampler = ultranest.ReactiveNestedSampler(
+            param_names=self.prior.prior_names,
+            loglike=log_likelihood_wrapper,
+            transform=prior_transform_wrapper,
+            **{
+                'log_dir': 'ultranest_logs',
+                'resume': 'subfolder',
+                'vectorized': True
+            }
+        )
+
+        self.results = self.ultranest_sampler.run()
+        self.ultranest_sampler.print_results()
+
+        try:
+            self.ultranest_sampler.plot()
+        except ValueError as e:
+            print(e)
+        
+        if self.results is not None:
+            self._samples = self.results['samples']
+            self.log_bayesian_evidence = self.results['logz']
+            self.log_bayesian_evidence_err = self.results['logzerr']
+        else:
+            raise Exception('Ultranest results are undefined.')
 
 class LikelihoodBasedInferer:
     def __init__(self, data: NDArray, model: LikelihoodBasedModel):

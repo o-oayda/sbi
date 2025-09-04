@@ -3,7 +3,7 @@ from typing import Callable
 import scipy
 from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.priors_jax import DipolePriorJax
-from dipolesbi.tools.utils import polar_logpdf_np, sample_polar_np
+from dipolesbi.tools.utils import polar_logpdf_np, sample_polar_np, sample_unif_np
 import numpy as np
 from numpy.typing import NDArray, DTypeLike
 
@@ -61,7 +61,8 @@ class NPPrior(ABC):
             simulator_kwargs: list[str],
             ranges: list[list[float]],
             sample_funcs: list[Callable],
-            logpdf_funcs: list[Callable]
+            logpdf_funcs: list[Callable],
+            tform_funcs: list[Callable]
             
     ) -> dict[str, dict]:
         '''
@@ -82,7 +83,8 @@ class NPPrior(ABC):
                 'low_range': np.asarray(ranges[i][0], dtype=self.dtype),
                 'high_range': np.asarray(ranges[i][1], dtype=self.dtype),
                 'sample_func':  sample_funcs[i],
-                'logpdf_func': logpdf_funcs[i]
+                'logpdf_func': logpdf_funcs[i],
+                'tform_func': tform_funcs[i]
             }
         return prior_dict
 
@@ -98,6 +100,15 @@ class NPPrior(ABC):
             )
         return params
 
+    def transform(self, unifs: dict[str, NDArray]) -> dict[str, NDArray]:
+        transformed = {}
+        for key, val in unifs.items():
+            a = self.prior_dict[key]['low_range']
+            b = self.prior_dict[key]['high_range']
+            tform = self.prior_dict[key]['tform_func']
+            transformed[key] = tform(val, a, b)
+        return transformed
+
     def get_initial_live_samples(
             self, 
             rng_key: NPKey, 
@@ -106,7 +117,8 @@ class NPPrior(ABC):
         return self.sample(rng_key, num_live)
 
     def log_prob(self, params: dict[str, NDArray]) -> NDArray:
-        log_prior = np.zeros(())
+        n_batches = len(params[ next(iter(params)) ])
+        log_prior = np.zeros((n_batches,))
         for _, name in enumerate(self.prior_names): 
             long_name = self.prior_dict[name]['simulator_kwarg']
             x = params[long_name]
@@ -146,16 +158,20 @@ class DipolePriorNP(NPPrior):
         polar_func = lambda key, n, a, b: sample_polar_np(key, n_samples=n, low=a, high=b)
         unif_logpdf = lambda x, a, b: scipy.stats.uniform.logpdf(x, a, b - a)
         polar_logpdf = lambda x, a, b: polar_logpdf_np(x, low=a, high=b)
+        unif_transform = lambda u, a, b: sample_unif_np(u, low=a, high=b)
+        polar_transform = lambda u, a, b: sample_polar_np(u, low=a, high=b)
 
         sample_func = 3 * [unif_func] + [polar_func]
         logpdf_func = 3 * [unif_logpdf] + [polar_logpdf]
+        tform_func  = 3 * [unif_transform] + [polar_transform]
 
         self._prior_dict = self._construct_prior_dict(
             self._prior_names,
             kwargs,
             ranges,
             sample_func,
-            logpdf_func
+            logpdf_func,
+            tform_func
         )
     
     @property

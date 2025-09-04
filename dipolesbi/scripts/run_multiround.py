@@ -1,6 +1,7 @@
 from jax.random import PRNGKey, split
 from dipolesbi.scripts.evidence_comparison import MultiRoundInferer
 from dipolesbi.tools.configs import MultiRoundInfererConfig, SurjectiveNLEConfig, TrainingConfig
+from dipolesbi.tools.inference import NotShitLikelihoodBasedInferer
 from dipolesbi.tools.np_rngkey import npkey_from_jax, prng_key
 from dipolesbi.tools.priors_jax import DipolePriorJax
 from dipolesbi.tools.maps import SimpleDipoleMap, SimpleDipoleMapJax
@@ -11,6 +12,7 @@ from dipolesbi.tools.transforms import HaarWaveletTransform, ZScore
 import matplotlib.pyplot as plt
 import os
 import glob
+from corner import corner
 
 
 def lnZ_plot(inferer: MultiRoundInferer) -> None:
@@ -65,10 +67,17 @@ if __name__ == '__main__':
 
     model = SimpleDipoleMap(nside=NSIDE)
     x0 = model.generate_dipole(npkey_from_jax(rng_key), theta=theta0)
+    model.reference_data = x0
 
     prior = DipolePriorNP(
-        mean_count_range=[float(0.95*MEAN_DENSITY), float(1.05*MEAN_DENSITY)]
+        mean_count_range=[float(0.95*MEAN_DENSITY), float(1.05*MEAN_DENSITY)],
     )
+    prior.change_kwarg('N', 'mean_density')
+
+    # lb_inferer = NotShitLikelihoodBasedInferer(model.log_likelihood, prior, x0)
+    # lb_inferer.run_ultranest()
+    # corner(lb_inferer._samples)
+    # plt.show()
 
     # possibly widening and deepening the decoder network improves
     # convergence to true lnZ -> e.g. 3000 pixels dropped w low n_neurons not great
