@@ -1,6 +1,6 @@
 from jax.random import PRNGKey, split
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
-from dipolesbi.tools.configs import MultiRoundInfererConfig, SurjectiveNLEConfig, TrainingConfig
+from dipolesbi.tools.configs import ConfigOfConfigs, MultiRoundInfererConfig, SurjectiveNLEConfig, TrainingConfig
 from dipolesbi.tools.inference import NotShitLikelihoodBasedInferer
 from dipolesbi.tools.np_rngkey import npkey_from_jax, prng_key
 from dipolesbi.tools.priors_jax import DipolePriorJax
@@ -72,63 +72,26 @@ if __name__ == '__main__':
     prior = DipolePriorNP(
         mean_count_range=[float(0.95*MEAN_DENSITY), float(1.05*MEAN_DENSITY)],
     )
-    prior.change_kwarg('N', 'mean_density')
 
+    # prior.change_kwarg('N', 'mean_density')
     # lb_inferer = NotShitLikelihoodBasedInferer(model.log_likelihood, prior, x0)
     # lb_inferer.run_ultranest()
     # corner(lb_inferer._samples)
     # plt.show()
 
-    # possibly widening and deepening the decoder network improves
-    # convergence to true lnZ -> e.g. 3000 pixels dropped w low n_neurons not great
-    # nle_config = SurjectiveNLEConfig.standard(
-    #     n_layers=10,
-    #     data_reduction_factor=0.75,
-    #     conditioner_n_layers=4,
-    #     conditioner_n_neurons=256,
-    #     decoder_n_layers=4,
-    #     decoder_n_neurons=512,
-    #     decoder_distribution='poisson'
-    # )
-    # keep decoder_n_neurons ~ 64 for nside=16?
-    haar_transform = HaarWaveletTransform(first_nside=NSIDE, last_nside=1)
-    nle_config = SurjectiveNLEConfig.heirarchical(
-        blocks=haar_transform._build_surjective_blocks(n_chunks=1),
-        maf_stack_size=15,
-        conditioner_n_layers=4,
-        conditioner_n_neurons=256,
-        decoder_n_layers=3,
-        decoder_n_neurons=64,
-        decoder_distribution='gaussian'
-    )
-    # low learning rate high nside?
-    # ok not weighting by round helps in keeping posterior narrow
-    # 5e-5 for optimal nside=16
-    train_config = TrainingConfig(
-        patience=20, 
-        learning_rate=5e-5, 
-        restore_from_previous=False,
-        weight_by_round=False
-    )
-    mr_config = MultiRoundInfererConfig(
-        simulation_budget=50_000,
-        n_rounds=15,
-        custom_data_transform=haar_transform,
-        # custom_data_transform=ZScore(),
-        # custom_data_transform=None,
-        reference_theta=theta0,
-        dequantise_data=False,
-        initial_fraction=0.5,
-        learned_fraction=0.5,
-        n_likelihood_samples=25_000
-        # n_requantisations=32
-    )
+    nside16_config = ConfigOfConfigs.nside16(theta0)
+    nside32_config = ConfigOfConfigs.nside32(theta0)
+    meta_cfg = {
+        16: nside16_config,
+        32: nside32_config
+    }
+    cur_cfg = meta_cfg[NSIDE]
 
     inferer = MultiRoundInferer(
         rng_key, prior, model.generate_dipole, x0,
-        multi_round_config=mr_config,
-        nle_config=nle_config,
-        train_config=train_config
+        multi_round_config=cur_cfg.multiround_config,
+        nle_config=cur_cfg.ssnle_config,
+        train_config=cur_cfg.training_config
     )
     inferer.run()
 

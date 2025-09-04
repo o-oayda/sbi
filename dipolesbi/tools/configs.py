@@ -3,7 +3,7 @@ from typing import Any, Optional, Literal
 from jax import numpy as jnp
 from numpy.typing import NDArray
 
-from dipolesbi.tools.transforms import InvertibleDataTransform, ZScore
+from dipolesbi.tools.transforms import HaarWaveletTransform, InvertibleDataTransform, ZScore
 
 
 @dataclass
@@ -120,3 +120,107 @@ class MultiRoundInfererConfig:
             assert self.n_requantisations is not None, (
                 'Supply number of requantisations when setting dequantise_data=True.'
             )
+
+@dataclass
+class ConfigOfConfigs:
+    '''
+    Meta configuration class for configs which, from experimenting, work well in
+    particular settings. Access each setting by calling the relevant class method.
+    '''
+    training_config: TrainingConfig
+    multiround_config: MultiRoundInfererConfig
+    ssnle_config: SurjectiveNLEConfig
+
+    # low learning rate high nside?
+    # ok not weighting by round helps in keeping posterior narrow
+    @classmethod
+    def nside16(
+            cls,
+            reference_theta: dict[str, NDArray],
+            training_overrides: dict = {},
+            multiround_overrides: dict = {},
+            ssnle_overrides: dict = {}
+    ) -> 'ConfigOfConfigs':
+        haar_transform = HaarWaveletTransform(first_nside=16, last_nside=1)
+        train_dict = {
+            'patience': 20, 
+            'learning_rate': 5e-5, # 5e-5 for optimal nside=16
+            'restore_from_previous': False,
+            'weight_by_round': False,
+            **training_overrides
+        }
+        mr_dict = {
+            'simulation_budget': 50_000,
+            'n_rounds': 15,
+            'custom_data_transform': haar_transform,
+            'reference_theta': reference_theta,
+            'dequantise_data': False,
+            'initial_fraction': 0.5,
+            'learned_fraction': 0.5,
+            'n_likelihood_samples': 25_000,
+            **multiround_overrides
+        }
+        nle_dict = {
+            'blocks': haar_transform._build_surjective_blocks(n_chunks=1),
+            'maf_stack_size': 15,
+            'conditioner_n_layers': 4,
+            'conditioner_n_neurons': 256,
+            'decoder_n_layers': 3,
+            'decoder_n_neurons': 64, # keep decoder_n_neurons ~ 64 for nside=16?
+            'decoder_distribution': 'gaussian',
+            **ssnle_overrides
+        }
+        train_config = TrainingConfig(**train_dict)
+        mr_config = MultiRoundInfererConfig(**mr_dict)
+        nle_config = SurjectiveNLEConfig.heirarchical(**nle_dict)
+        return cls(
+            training_config=train_config,
+            multiround_config=mr_config,
+            ssnle_config=nle_config
+        )
+
+    @classmethod
+    def nside32(
+            cls,
+            reference_theta: dict[str, NDArray],
+            training_overrides: dict = {},
+            multiround_overrides: dict = {},
+            ssnle_overrides: dict = {}
+    ) -> 'ConfigOfConfigs':
+        haar_transform = HaarWaveletTransform(first_nside=32, last_nside=1)
+        train_dict = {
+            'patience': 20, 
+            'learning_rate': 1e-5,
+            'restore_from_previous': False,
+            'weight_by_round': False,
+            **training_overrides
+        }
+        mr_dict = {
+            'simulation_budget': 50_000,
+            'n_rounds': 15,
+            'custom_data_transform': haar_transform,
+            'reference_theta': reference_theta,
+            'dequantise_data': False,
+            'initial_fraction': 0.5,
+            'learned_fraction': 0.5,
+            'n_likelihood_samples': 25_000,
+            **multiround_overrides
+        }
+        nle_dict = {
+            'blocks': haar_transform._build_surjective_blocks(n_chunks=1),
+            'maf_stack_size': 15,
+            'conditioner_n_layers': 4,
+            'conditioner_n_neurons': 256,
+            'decoder_n_layers': 3,
+            'decoder_n_neurons': 64,
+            'decoder_distribution': 'gaussian',
+            **ssnle_overrides
+        }
+        train_config = TrainingConfig(**train_dict)
+        mr_config = MultiRoundInfererConfig(**mr_dict)
+        nle_config = SurjectiveNLEConfig.heirarchical(**nle_dict)
+        return cls(
+            training_config=train_config,
+            multiround_config=mr_config,
+            ssnle_config=nle_config
+        )
