@@ -25,6 +25,23 @@ class MultiRoundInfererUI:
         self._progress = None
         self._task_id = None
         self._logs = deque(maxlen=log_lines)
+        self._live = None
+        self._lock = Lock()
+
+    @contextmanager
+    def session(self, refresh_per_second: int = 20, transient: bool = False):
+        from rich.live import Live
+        with Live(self.render(), refresh_per_second=refresh_per_second, transient=transient) as live:
+            self._live = live
+            try:
+                yield self
+            finally:
+                self._live = None
+
+    def _refresh(self):
+        # safe to call from anywhere in same thread; guard just in case
+        if self._live is not None:
+            self._live.update(self.render())
 
     # ---------- public API ----------
     def start_step(
@@ -51,48 +68,42 @@ class MultiRoundInfererUI:
                 )
             self._progress.stop()
             self._progress.tasks.clear()
-            self._task_id = self._progress.add_task(
-                self.tasks[idx],
-                total=(total or 100),
-                start=False
-            )
+            self._task_id = self._progress.add_task(self.tasks[idx], total=(total or 100), start=False)
         else:
             self._task_id = None
+        self._refresh()
 
     def advance_progress(self, advance: int = 1, total: Optional[int] = None) -> None:
         if self._progress is not None and self._task_id is not None:
-
             if total is not None and math.isfinite(total):
                 self._progress.update(self._task_id, total=total)
-
             if not self._progress.tasks[self._task_id].started:
                 self._progress.start_task(self._task_id)
             self._progress.update(self._task_id, advance=advance)
+        self._refresh()
 
     def set_subtitle(self, text: str) -> None:
         self.subtitle = text
+        self._refresh()
 
     def log(self, message: str, style: str = "") -> None:
         # style examples: "dim", "yellow", "red", "green", "italic cyan"
-        t = (
-                Text.from_markup(message) if '[' in message and ']' in message
-                else Text(message)
-        )
+        t = Text.from_markup(message) if '[' in message and ']' in message else Text(message)
         if style:
             t.stylize(style)
         self._logs.append(t)
+        self._refresh()
 
     def finish_step(self, subtitle: Optional[str] = None) -> None:
         self.finished = max(self.finished, self.current + 1)
         if subtitle is not None:
             self.subtitle = subtitle
         if self._progress is not None and self._task_id is not None:
-            remaining = (
-                self._progress.tasks[self._task_id].total
-              - self._progress.tasks[self._task_id].completed
-            )
+            remaining = (self._progress.tasks[self._task_id].total
+                         - self._progress.tasks[self._task_id].completed)
             if remaining > 0:
                 self._progress.update(self._task_id, advance=remaining)
+        self._refresh()
 
     def is_done(self):
         return self.finished >= len(self.tasks)
@@ -133,3 +144,4 @@ class MultiRoundInfererUI:
             subtitle=self.subtitle,
             border_style="white",
         )
+

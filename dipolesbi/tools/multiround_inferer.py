@@ -20,6 +20,7 @@ from dipolesbi.tools.neural_flows import MAFSurjectiveNeuralLikelihood
 from dipolesbi.tools.np_rngkey import NPKey, npkey_from_jax
 from dipolesbi.tools.priors_np import DipolePriorNP
 from dipolesbi.tools.transforms import BlankTransform
+from dipolesbi.tools.ui import MultiRoundInfererUI
 from dipolesbi.tools.utils import jax_sph2cart, load_dict_npz, np_sph2cart, save_dict_npz
 from jax import lax
 import datetime
@@ -127,38 +128,44 @@ class MultiRoundInferer:
 
     def run(self):
         current_key = self.rng_key
+        tasks = [
+            'Sample proposal', 'Generate simulations', 'Instantiate NLE',
+            'Train NLE', 'Sample likelihood', 'Compute posterior'
+        ]
+        self.ui = MultiRoundInfererUI(tasks, steps_with_progress={4})
 
-        for round_idx in range(self.mr_config.n_rounds):
-            self.current_round = round_idx
+        with self.ui.session(refresh_per_second=20):
+            for round_idx in range(self.mr_config.n_rounds):
+                self.current_round = round_idx
 
-            npkey = npkey_from_jax(current_key)
-            proposal_key, sim_key, split_key = npkey.split(3)
-            current_key, train_key, inspect_key, posterior_key = jax.random.split(
-                current_key, 4
-            )
+                npkey = npkey_from_jax(current_key)
+                proposal_key, sim_key, split_key = npkey.split(3)
+                current_key, train_key, inspect_key, posterior_key = jax.random.split(
+                    current_key, 4
+                )
 
-            theta = self._sample_proposal(
-                key=proposal_key,
-                n_samples=self.mr_config.simulations_per_round,
-                use_initial=True if round_idx == 0 else False
-            )
-            data = self._generate_simulations(sim_key, theta)
-            self._add_to_simulation_pool(sim_key, data, theta)
-            self.trn_set, self.val_set = self._make_train_val_set(split_key)
-            del data; del theta
+                theta = self._sample_proposal(
+                    key=proposal_key,
+                    n_samples=self.mr_config.simulations_per_round,
+                    use_initial=True if round_idx == 0 else False
+                )
+                data = self._generate_simulations(sim_key, theta)
+                self._add_to_simulation_pool(sim_key, data, theta)
+                self.trn_set, self.val_set = self._make_train_val_set(split_key)
+                del data; del theta
 
-            self.nle = self._instantiate_nle()
-            self._train_nle(train_key)
+                self.nle = self._instantiate_nle()
+                self._train_nle(train_key)
 
-            self._inspect_learned_likelihood(
-                inspect_key, 
-                self.mr_config.n_likelihood_samples
-            )
+                self._inspect_learned_likelihood(
+                    inspect_key, 
+                    self.mr_config.n_likelihood_samples
+                )
 
-            self._compute_posterior(posterior_key)
+                self._compute_posterior(posterior_key)
 
-            self._clear_data_summary_stats()
-            plt.close('all')
+                self._clear_data_summary_stats()
+                plt.close('all')
 
         self._benchmark_classic(current_key)
         self.final_nle_samples = self.nested_samples
