@@ -27,6 +27,7 @@ from dipolesbi.tools.distributions import IndependentWrapper, NegBinomDist, Pois
 from dipolesbi.tools.healpix_helpers import build_layer_perms, first_layer_stratifying_perm, get_healpix_superpixels, make_latent_dims, permute_within_types
 from dipolesbi.tools.dataloader import as_batch_iterator_cpu2gpu, named_dataset_idx
 from dipolesbi.tools.np_rngkey import NPKeySequence, npkey_from_jax, npkey_sequence_from_hk
+from dipolesbi.tools.ui import MultiRoundInfererUI
 
 
 def make_mlp_with_dropout(sizes, activation=jax.nn.silu, dropout_rate=0.0):
@@ -137,11 +138,17 @@ class NeuralLikelihood(ABC):
             rng_seq: hk.PRNGSequence, 
             training_data: named_dataset_idx, 
             validation_data: named_dataset,
-            config: TrainingConfig = TrainingConfig()
+            config: TrainingConfig = TrainingConfig(),
+            ui: Optional[MultiRoundInfererUI] = None
     ) -> tuple[NDArray, NDArray]:
         assert self.model is not None
         self.trn_config = config
         np_sequence = npkey_sequence_from_hk(rng_seq)
+
+        if ui:
+            print_func = ui.log
+        else:
+            print_func = print
 
         train_iter = as_batch_iterator_cpu2gpu(
             rng_key=next(np_sequence), 
@@ -170,13 +177,13 @@ class NeuralLikelihood(ABC):
             )
         else:
             round_weights = None
-        print(f'Round weights: {round_weights}')
+        print_func(f'Round weights: {round_weights}')
 
         if (self.trn_config.restore_from_previous) and (self.best_params is not None):
-            print('Initialising using previously-inferred params...')
+            print_func('Initialising using previously-inferred params...')
             params = self.best_params
         else:
-            print('No previous state to initialise from. Starting fresh...')
+            print_func('No previous state to initialise from. Starting fresh...')
             params = self.model.init(
                 next(rng_seq), 
                 method='log_prob', 
@@ -232,13 +239,21 @@ class NeuralLikelihood(ABC):
                 val_loss += float(val_step(params, **batch))
             val_loss /= max(1, val_iter.num_batches)
 
-            sys.stdout.write(
-                f"\rIter: {i} | "
-                f"Train NLL: {train_loss:.4f} | "
-                f"Val NLL: {val_loss:.4f} | "
-                f"Stop at {self.trn_config.patience} ({wait})"
-            )
-            sys.stdout.flush()
+            if ui:
+                ui.set_subtitle(
+                    f"Iter: {i} | "
+                    f"Train NLL: {train_loss:.4f} | "
+                    f"Val NLL: {val_loss:.4f} | "
+                    f"Stop at {self.trn_config.patience} ({wait})"
+                )
+            else:
+                sys.stdout.write(
+                    f"\rIter: {i} | "
+                    f"Train NLL: {train_loss:.4f} | "
+                    f"Val NLL: {val_loss:.4f} | "
+                    f"Stop at {self.trn_config.patience} ({wait})"
+                )
+                sys.stdout.flush()
 
             losses[i] = train_loss
             val_losses[i] = val_loss
@@ -250,7 +265,7 @@ class NeuralLikelihood(ABC):
             else:
                 wait += 1
                 if i >= self.trn_config.min_n_iter and wait >= self.trn_config.patience:
-                    print(
+                    print_func(
                         f"\nEarly stopping at iteration {i} "
                         f"(best val NLL={best_val:.4f})"
                     )

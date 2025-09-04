@@ -1,4 +1,5 @@
 import os
+import time
 from typing import Callable
 from anesthetic import NestedSamples
 from blackjax.types import PRNGKey
@@ -24,7 +25,6 @@ from dipolesbi.tools.ui import MultiRoundInfererUI
 from dipolesbi.tools.utils import jax_sph2cart, load_dict_npz, np_sph2cart, save_dict_npz
 from jax import lax
 import datetime
-from tqdm import tqdm 
 
 
 class MultiRoundInferer:
@@ -129,13 +129,16 @@ class MultiRoundInferer:
     def run(self):
         current_key = self.rng_key
         tasks = [
-            'Sample proposal', 'Generate simulations', 'Instantiate NLE',
-            'Train NLE', 'Sample likelihood', 'Compute posterior'
+            'Sample proposal', 'Generate simulations',
+            'Train NLE', 'Sample likelihood', 'Compute posterior',
+            'Benchmark'
         ]
         self.ui = MultiRoundInfererUI(tasks, steps_with_progress={4})
 
         with self.ui.session(refresh_per_second=20):
+            time.sleep(1) # avoid spam
             for round_idx in range(self.mr_config.n_rounds):
+                self.ui.reset()
                 self.current_round = round_idx
 
                 npkey = npkey_from_jax(current_key)
@@ -144,32 +147,43 @@ class MultiRoundInferer:
                     current_key, 4
                 )
 
+                self.ui.start_step(0, subtitle='sampling')
                 theta = self._sample_proposal(
                     key=proposal_key,
                     n_samples=self.mr_config.simulations_per_round,
                     use_initial=True if round_idx == 0 else False
                 )
+                self.ui.finish_step('sampled')
+
+                self.ui.start_step(1, subtitle='simulating')
                 data = self._generate_simulations(sim_key, theta)
                 self._add_to_simulation_pool(sim_key, data, theta)
                 self.trn_set, self.val_set = self._make_train_val_set(split_key)
                 del data; del theta
+                self.ui.finish_step('simulated')
 
+                self.ui.start_step(2, subtitle='training')
                 self.nle = self._instantiate_nle()
                 self._train_nle(train_key)
+                self.ui.finish_step('trained')
 
-                self._inspect_learned_likelihood(
-                    inspect_key, 
-                    self.mr_config.n_likelihood_samples
-                )
+                n_samps = self.mr_config.n_likelihood_samples
+                self.ui.start_step(3, 'inspecting', total=n_samps)
+                self._inspect_learned_likelihood(inspect_key, n_samps)
+                self.ui.finish_step('inspected')
 
+                self.ui.start_step(4, 'computing')
                 self._compute_posterior(posterior_key)
+                self.ui.finish_step('computed')
 
                 self._clear_data_summary_stats()
                 plt.close('all')
 
+        self.ui.start_step(5, 'benchmarking')
         self._benchmark_classic(current_key)
         self.final_nle_samples = self.nested_samples
         self.final_classic_samples = self.classic_nested_samples
+        self.ui.finish_step('benchmarked')
 
         self._dump_configs()
 
@@ -181,7 +195,8 @@ class MultiRoundInferer:
             hk.PRNGSequence(train_key),
             self.trn_set, 
             self.val_set,
-            config=self.train_config
+            config=self.train_config,
+            ui=self.ui
         )
         self.nle.plot_loss_curve(
             show=False, 
@@ -233,7 +248,7 @@ class MultiRoundInferer:
             int((chunk_bytes_gb * (1024**3)) // (ndim * bytes_per_elem))
         )
         m = min(n_repeats, max_per_chunk)
-        print(f'Chunk size: {m}')
+        self.ui.log(f'Chunk size: {m}')
 
         out = np.empty((n_repeats, ndim), dtype=np.float32)
 
@@ -241,7 +256,6 @@ class MultiRoundInferer:
         theta0_ndim = theta0.shape[-1]
 
         start = 0
-        pbar = tqdm(total=n_repeats)
         while start < n_repeats:
             end = min(n_repeats, start + m)
             batch_size = end - start
@@ -261,7 +275,7 @@ class MultiRoundInferer:
             del samples, samples_host, theta_chunk
 
             start = end
-            pbar.update(batch_size)
+            self.ui.advance_progress(batch_size)
 
         return out
 
@@ -312,11 +326,11 @@ class MultiRoundInferer:
 
         self.true_lnZ = self.classic_nested_samples.logZ()
         self.true_lnZerr = self.classic_nested_samples.logZ(100).std() # type: ignore
-        print(
+        self.ui.log(
             f"NLE Log Evidence: {self.nested_samples.logZ():.2f} "
             f"± {self.nested_samples.logZ(100).std():.2f}" # type: ignore
         )
-        print(
+        self.ui.log(
             f"Classic Log Evidence: {self.true_lnZ:.2f} "
             f"± {self.true_lnZerr:.2f}" # type: ignore
         )
@@ -328,7 +342,7 @@ class MultiRoundInferer:
               + self.true_lnZerr**2 # type: ignore
             ) 
         )
-        print(f'Tension: {sigma}')
+        self.ui.log(f'Tension: {sigma}')
 
         nle_raw_samples = self.nested_samples.to_numpy()[:, :-3]
         idx_weights = self.nested_samples.index.to_numpy()
@@ -379,7 +393,7 @@ class MultiRoundInferer:
             _, dequantise_key = rng_key.split(2)
             data += dequantise_key.uniform(shape=data.shape, low=-0.5, high=0.5)
 
-        print(f'Adding data from {start} to {end}...')
+        self.ui.log(f'Adding data from idx {start} to idx {end}...')
         self.all_data[start:end, :] = data
         self.all_round_id[start:end] = self.current_round
 
@@ -582,12 +596,12 @@ class MultiRoundInferer:
             use_initial: bool = True
     ) -> dict[str, NDArray]:
         if use_initial:
-            print('Sampling from initial proposal...')
+            self.ui.log('Sampling from initial proposal...')
             prior_samples = self.initial_proposal.sample(key, n_samples)
         else:
             n_prior = int(0.3 * n_samples)
             n_posterior = self.mr_config.simulations_per_round - n_prior
-            print(
+            self.ui.log(
                 f'Sampling from learned posterior {self.mr_config.learned_fraction} '
                 f'and initial proposal {self.mr_config.initial_fraction}...'
             )
@@ -627,7 +641,6 @@ class MultiRoundInferer:
             key: NPKey,
             theta: dict[str, NDArray]
     ) -> NDArray:
-        print('Generating simulations...')
         return self.simulator_function(key, theta, True)
 
     def _instantiate_nle(self) -> MAFSurjectiveNeuralLikelihood:

@@ -1,5 +1,7 @@
+from contextlib import contextmanager
 import math
 from collections import deque
+from threading import Lock
 from typing import Optional
 from rich.console import Group
 from rich.panel import Panel
@@ -19,8 +21,8 @@ class MultiRoundInfererUI:
         self.tasks = list(tasks)
         self.title = title
         self.finished = 0
-        self.current = 0
-        self.subtitle = "starting"
+        self.current = None
+        self.subtitle = ""
         self.steps_with_progress = set(steps_with_progress or [])
         self._progress = None
         self._task_id = None
@@ -108,6 +110,14 @@ class MultiRoundInfererUI:
     def is_done(self):
         return self.finished >= len(self.tasks)
 
+    def reset(self, subtitle: str = "ready"):
+        self.finished = 0
+        self.current = None
+        self.subtitle = subtitle
+        self._progress = None
+        self._task_id = None
+        self._refresh()
+
     # ---------- rendering ----------
     def _render_checklist(self) -> Table:
         table = Table.grid(padding=(0, 1))
@@ -115,7 +125,7 @@ class MultiRoundInfererUI:
             if i < self.finished:
                 mark = "[green]✓[/]"
                 style = "green"
-            elif i == self.current:
+            elif self.current is not None and i == self.current:
                 mark = "[cyan]…[/]"
                 style = "cyan"
             else:
