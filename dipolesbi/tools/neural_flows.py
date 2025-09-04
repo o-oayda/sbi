@@ -266,7 +266,7 @@ class NeuralLikelihood(ABC):
                 wait += 1
                 if i >= self.trn_config.min_n_iter and wait >= self.trn_config.patience:
                     print_func(
-                        f"\nEarly stopping at iteration {i} "
+                        f"Early stopping at iteration {i} "
                         f"(best val NLL={best_val:.4f})"
                     )
                     break

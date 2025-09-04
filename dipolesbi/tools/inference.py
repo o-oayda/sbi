@@ -32,6 +32,7 @@ import jax
 from jax import numpy as jnp
 from dipolesbi.tools.priors_jax import JaxPrior
 from dipolesbi.tools.priors_np import DipolePriorNP
+from dipolesbi.tools.ui import MultiRoundInfererUI
 
 
 class LikelihoodFreeInferer:
@@ -413,10 +414,20 @@ class LikelihoodFreeInferer:
         plt.show()
 
 class JaxNestedSampler:
-    def __init__(self, lnlike: Callable, prior: JaxPrior) -> None:
+    def __init__(
+            self,
+            lnlike: Callable, 
+            prior: JaxPrior, 
+            ui: Optional[MultiRoundInfererUI] = None
+    ) -> None:
         self.lnlike = lnlike
         self.prior = prior
         self.ndim = self.prior.ndim
+        self.ui = ui
+        if self.ui:
+            self.print_func = self.ui.log
+        else:
+            self.print_func = print
 
     def setup(
             self,
@@ -426,6 +437,7 @@ class JaxNestedSampler:
     ) -> None:
         n_inner_steps = self.ndim * 5
         self.n_delete = n_delete
+        self.n_live = n_live
         self.rng_key, self.prior_key = jax.random.split(rng_key)
         self.particles = self.prior.get_initial_live_samples(self.prior_key, n_live)
 
@@ -435,26 +447,34 @@ class JaxNestedSampler:
             num_delete=n_delete,
             num_inner_steps=n_inner_steps,
         )
-        print(f"Initialised nested sampler with {n_live} live points.")
+        self.print_func(f"Initialised nested sampler with {n_live} live points.")
 
         self._jit_functions()
 
     def _jit_functions(self) -> None:
         self.init_fn = jax.jit(self.nested_sampler.init)
         self.step_fn = jax.jit(self.nested_sampler.step)
-        print("Functions compiled - ready to run!")
 
     def run(self) -> NestedSamples:
-        print("Running nested sampling...")
+        self.print_func("Running nested sampling...")
         live = self.init_fn(self.particles)
         dead = []
 
-        with tqdm(desc="Dead points", unit=" dead points") as pbar:
+        if self.ui:
+            self.ui.begin_progress(total=None, description='Dead points')
             while not live.logZ_live - live.logZ < -3:  # Convergence criterion
                 self.rng_key, subkey = jax.random.split(self.rng_key, 2)
                 live, dead_info = self.step_fn(subkey, live)
                 dead.append(dead_info)
-                pbar.update(self.n_delete)
+                self.ui.update_progress(self.n_delete)
+            self.ui.end_progress()
+        else:
+            with tqdm(desc="Dead points", unit=" dead points") as pbar:
+                while not live.logZ_live - live.logZ < -3:  # Convergence criterion
+                    self.rng_key, subkey = jax.random.split(self.rng_key, 2)
+                    live, dead_info = self.step_fn(subkey, live)
+                    dead.append(dead_info)
+                    pbar.update(self.n_delete)
 
         dead = blackjax.ns.utils.finalise(live, dead)
         columns = self.prior.simulator_kwargs
@@ -468,9 +488,9 @@ class JaxNestedSampler:
             logzero=jnp.nan,
         )
 
-        print(
-            f"Log Evidence: {self.nested_samples.logZ():.2f} "
-            f"± {self.nested_samples.logZ(100).std():.2f}" # type: ignore
+        self.print_func(
+            f"[cyan]ln Z: {self.nested_samples.logZ():.2f} "
+            f"± {self.nested_samples.logZ(100).std():.2f}[/cyan]" # type: ignore
         )
         
         return self.nested_samples

@@ -133,12 +133,13 @@ class MultiRoundInferer:
             'Train NLE', 'Sample likelihood', 'Compute posterior',
             'Benchmark'
         ]
-        self.ui = MultiRoundInfererUI(tasks, steps_with_progress={4})
+        self.ui = MultiRoundInfererUI(tasks)
 
         with self.ui.session(refresh_per_second=20):
             time.sleep(1) # avoid spam
             for round_idx in range(self.mr_config.n_rounds):
                 self.ui.reset()
+                self.ui.set_round(round_idx, self.mr_config.n_rounds)
                 self.current_round = round_idx
 
                 npkey = npkey_from_jax(current_key)
@@ -190,7 +191,6 @@ class MultiRoundInferer:
     def _train_nle(self, train_key: PRNGKey) -> None:
         assert self.nle is not None
 
-        print('Starting training...')
         self.nle.train(
             hk.PRNGSequence(train_key),
             self.trn_set, 
@@ -249,6 +249,7 @@ class MultiRoundInferer:
         )
         m = min(n_repeats, max_per_chunk)
         self.ui.log(f'Chunk size: {m}')
+        self.ui.begin_progress(total=n_repeats)
 
         out = np.empty((n_repeats, ndim), dtype=np.float32)
 
@@ -275,7 +276,8 @@ class MultiRoundInferer:
             del samples, samples_host, theta_chunk
 
             start = end
-            self.ui.advance_progress(batch_size)
+            self.ui.update_progress(batch_size)
+        self.ui.end_progress()
 
         return out
 
@@ -455,7 +457,11 @@ class MultiRoundInferer:
             log_like += log_det_jac
             return log_like.squeeze()
 
-        self.jax_ns = JaxNestedSampler(lnlike_jax, self.initial_proposal_jax)
+        self.jax_ns = JaxNestedSampler(
+            lnlike_jax, 
+            self.initial_proposal_jax, 
+            self.ui
+        )
         self.jax_ns.setup(ns_key, n_live=1000, n_delete=200)
         self.nested_samples = self.jax_ns.run()
 
