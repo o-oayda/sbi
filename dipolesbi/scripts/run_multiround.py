@@ -1,5 +1,5 @@
 from jax.random import PRNGKey, split
-from dipolesbi.scripts.evidence_comparison import MultiRoundInferer
+from dipolesbi.tools.multiround_inferer import MultiRoundInferer
 from dipolesbi.tools.configs import MultiRoundInfererConfig, SurjectiveNLEConfig, TrainingConfig
 from dipolesbi.tools.inference import NotShitLikelihoodBasedInferer
 from dipolesbi.tools.np_rngkey import npkey_from_jax, prng_key
@@ -55,7 +55,7 @@ def lnZ_plot(inferer: MultiRoundInferer) -> None:
 if __name__ == '__main__':
     rng_key = PRNGKey(42)
 
-    NSIDE = 16
+    NSIDE = 32
     TOTAL_SOURCES = 1_920_000
     MEAN_DENSITY = np.asarray(TOTAL_SOURCES / hp.nside2npix(NSIDE))
     theta0 = {
@@ -90,6 +90,7 @@ if __name__ == '__main__':
     #     decoder_n_neurons=512,
     #     decoder_distribution='poisson'
     # )
+    # keep decoder_n_neurons ~ 64 for nside=16?
     haar_transform = HaarWaveletTransform(first_nside=NSIDE, last_nside=1)
     nle_config = SurjectiveNLEConfig.heirarchical(
         blocks=haar_transform._build_surjective_blocks(n_chunks=1),
@@ -106,7 +107,7 @@ if __name__ == '__main__':
     train_config = TrainingConfig(
         patience=20, 
         learning_rate=5e-5, 
-        restore_from_previous=True,
+        restore_from_previous=False,
         weight_by_round=False
     )
     mr_config = MultiRoundInfererConfig(
