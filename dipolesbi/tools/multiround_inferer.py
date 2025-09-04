@@ -133,37 +133,23 @@ class MultiRoundInferer:
 
             npkey = npkey_from_jax(current_key)
             proposal_key, sim_key, split_key = npkey.split(3)
-            current_key, train_key, inspect_key, posterior_key = jax.random.split(current_key, 4)
+            current_key, train_key, inspect_key, posterior_key = jax.random.split(
+                current_key, 4
+            )
 
             theta = self._sample_proposal(
                 key=proposal_key,
                 n_samples=self.mr_config.simulations_per_round,
                 use_initial=True if round_idx == 0 else False
             )
-
-            print('Generating simulations...')
             data = self._generate_simulations(sim_key, theta)
             self._add_to_simulation_pool(sim_key, data, theta)
             self.trn_set, self.val_set = self._make_train_val_set(split_key)
             del data; del theta
 
             self.nle = self._instantiate_nle()
+            self._train_nle(train_key)
 
-            print('Starting training...')
-            self.nle.train(
-                hk.PRNGSequence(train_key),
-                self.trn_set, 
-                self.val_set,
-                config=self.train_config
-            )
-
-            self.nle.plot_loss_curve(
-                show=False, 
-                save_path=(
-                    self.mr_config.plot_save_dir
-                  + f'/loss_curve_{self.current_round}.png'
-                )
-            )
             self._inspect_learned_likelihood(
                 inspect_key, 
                 self.mr_config.n_likelihood_samples
@@ -172,13 +158,31 @@ class MultiRoundInferer:
             self._compute_posterior(posterior_key)
 
             self._clear_data_summary_stats()
+            plt.close('all')
 
         self._benchmark_classic(current_key)
         self.final_nle_samples = self.nested_samples
         self.final_classic_samples = self.classic_nested_samples
-        plt.close('all')
 
         self._dump_configs()
+
+    def _train_nle(self, train_key: PRNGKey) -> None:
+        assert self.nle is not None
+
+        print('Starting training...')
+        self.nle.train(
+            hk.PRNGSequence(train_key),
+            self.trn_set, 
+            self.val_set,
+            config=self.train_config
+        )
+        self.nle.plot_loss_curve(
+            show=False, 
+            save_path=(
+                self.mr_config.plot_save_dir
+              + f'/loss_curve_{self.current_round}.png'
+            )
+        )
 
     def save_simulations(self) -> None:
         data_path = self.mr_config.plot_save_dir + '/data'
@@ -616,6 +620,7 @@ class MultiRoundInferer:
             key: NPKey,
             theta: dict[str, NDArray]
     ) -> NDArray:
+        print('Generating simulations...')
         return self.simulator_function(key, theta, True)
 
     def _instantiate_nle(self) -> MAFSurjectiveNeuralLikelihood:

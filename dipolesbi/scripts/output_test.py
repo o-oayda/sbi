@@ -3,13 +3,15 @@ import itertools
 import math
 import time
 from collections import deque
-
+from threading import Lock
 from rich.console import Group
 from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from rich.progress import Progress, BarColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
+from contextlib import contextmanager
+
 
 class PipelineUI:
     def __init__(self, tasks, steps_with_progress=None, title="Pipeline", log_lines=8):
@@ -22,6 +24,23 @@ class PipelineUI:
         self._progress = None
         self._task_id = None
         self._logs = deque(maxlen=log_lines)
+        self._live = None
+        self._lock = Lock()
+
+    @contextmanager
+    def session(self, refresh_per_second=20, transient=False):
+        from rich.live import Live
+        with Live(self.render(), refresh_per_second=refresh_per_second, transient=transient) as live:
+            self._live = live
+            try:
+                yield self
+            finally:
+                self._live = None
+
+    def _refresh(self):
+        # safe to call from anywhere in same thread; guard just in case
+        if self._live is not None:
+            self._live.update(self.render())
 
     # ---------- public API ----------
     def start_step(self, idx, subtitle=None, total=None):
@@ -46,6 +65,7 @@ class PipelineUI:
             self._task_id = self._progress.add_task(self.tasks[idx], total=(total or 100), start=False)
         else:
             self._task_id = None
+        self._refresh()
 
     def advance_progress(self, advance=1, total=None):
         if self._progress is not None and self._task_id is not None:
@@ -54,9 +74,11 @@ class PipelineUI:
             if not self._progress.tasks[self._task_id].started:
                 self._progress.start_task(self._task_id)
             self._progress.update(self._task_id, advance=advance)
+        self._refresh()
 
     def set_subtitle(self, text):
         self.subtitle = text
+        self._refresh()
 
     def log(self, message, style=""):
         # style examples: "dim", "yellow", "red", "green", "italic cyan"
@@ -64,6 +86,7 @@ class PipelineUI:
         if style:
             t.stylize(style)
         self._logs.append(t)
+        self._refresh()
 
     def finish_step(self, subtitle=None):
         self.finished = max(self.finished, self.current + 1)
@@ -74,6 +97,7 @@ class PipelineUI:
                          - self._progress.tasks[self._task_id].completed)
             if remaining > 0:
                 self._progress.update(self._task_id, advance=remaining)
+        self._refresh()
 
     def is_done(self):
         return self.finished >= len(self.tasks)
