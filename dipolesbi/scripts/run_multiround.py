@@ -1,18 +1,15 @@
-from jax.random import PRNGKey, split
+from jax.random import PRNGKey
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
-from dipolesbi.tools.configs import ConfigOfConfigs, MultiRoundInfererConfig, SurjectiveNLEConfig, TrainingConfig
+from dipolesbi.tools.configs import ConfigOfConfigs
 from dipolesbi.tools.inference import NotShitLikelihoodBasedInferer
-from dipolesbi.tools.np_rngkey import npkey_from_jax, prng_key
-from dipolesbi.tools.priors_jax import DipolePriorJax
-from dipolesbi.tools.maps import SimpleDipoleMap, SimpleDipoleMapJax
+from dipolesbi.tools.np_rngkey import npkey_from_jax
+from dipolesbi.tools.maps import SimpleDipoleMap
 import healpy as hp
 import numpy as np
 from dipolesbi.tools.priors_np import DipolePriorNP
-from dipolesbi.tools.transforms import HaarWaveletTransform, ZScore
 import matplotlib.pyplot as plt
 import os
 import glob
-from corner import corner
 
 
 def lnZ_plot(inferer: MultiRoundInferer) -> None:

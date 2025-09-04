@@ -1,8 +1,6 @@
 from dataclasses import dataclass, field
-from typing import Any, Optional, Literal
-from jax import numpy as jnp
+from typing import Optional, Literal
 from numpy.typing import NDArray
-
 from dipolesbi.tools.transforms import HaarWaveletTransform, InvertibleDataTransform, ZScore
 
 
