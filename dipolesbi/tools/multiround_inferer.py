@@ -22,7 +22,7 @@ from dipolesbi.tools.np_rngkey import NPKey, npkey_from_jax
 from dipolesbi.tools.priors_np import DipolePriorNP
 from dipolesbi.tools.transforms import BlankTransform
 from dipolesbi.tools.ui import MultiRoundInfererUI
-from dipolesbi.tools.utils import jax_sph2cart, load_dict_npz, np_sph2cart, save_dict_npz
+from dipolesbi.tools.utils import HidePrints, jax_sph2cart, load_dict_npz, np_sph2cart, save_dict_npz
 from jax import lax
 import datetime
 
@@ -30,7 +30,6 @@ import datetime
 class MultiRoundInferer:
     def __init__(
             self, 
-            rng_key: PRNGKey,
             initial_proposal: DipolePriorNP,
             simulator_function: Callable[
                 [NPKey, dict[str, NDArray[np.float32]], bool],
@@ -43,7 +42,7 @@ class MultiRoundInferer:
     ) -> None:
         self.mr_config = multi_round_config
 
-        self.rng_key = rng_key
+        self.rng_key = jax.random.PRNGKey(self.mr_config.prng_integer_seed)
 
         self.initial_proposal = initial_proposal
         self.initial_proposal.change_kwarg('N', 'mean_density')
@@ -136,11 +135,16 @@ class MultiRoundInferer:
         self.ui = MultiRoundInfererUI(tasks)
 
         with self.ui.session(refresh_per_second=20):
+
             time.sleep(1) # avoid spam
+            self.ui.begin_global_progress(total=self.mr_config.simulation_budget)
+            self.ui.set_stats_columns(columns=['Round', 'Evidence'])
+
             for round_idx in range(self.mr_config.n_rounds):
                 self.ui.reset()
                 self.ui.set_round(round_idx, self.mr_config.n_rounds)
                 self.current_round = round_idx
+                self.ui.add_stats_row(row={'Round': round_idx+1, 'Evidence': ""})
 
                 npkey = npkey_from_jax(current_key)
                 proposal_key, sim_key, split_key = npkey.split(3)
@@ -175,10 +179,12 @@ class MultiRoundInferer:
 
                 self.ui.start_step(4, 'computing')
                 self._compute_posterior(posterior_key)
+                self.ui.update_last_stats_row({'Evidence': self.jax_ns.evidence_str})
                 self.ui.finish_step('computed')
 
                 self._clear_data_summary_stats()
                 plt.close('all')
+                self.ui.advance_global(n=self.mr_config.simulations_per_round)
 
         self.ui.start_step(5, 'benchmarking')
         self._benchmark_classic(current_key)
@@ -248,7 +254,6 @@ class MultiRoundInferer:
             int((chunk_bytes_gb * (1024**3)) // (ndim * bytes_per_elem))
         )
         m = min(n_repeats, max_per_chunk)
-        self.ui.log(f'Chunk size: {m}')
         self.ui.begin_progress(total=n_repeats)
 
         out = np.empty((n_repeats, ndim), dtype=np.float32)
@@ -322,7 +327,11 @@ class MultiRoundInferer:
         def lnlike_jax(params: dict[str, jnp.ndarray]) -> jnp.ndarray:
             return classic_model.log_likelihood(params)
 
-        self.classic_jax_ns = JaxNestedSampler(lnlike_jax, self.initial_proposal_jax)
+        self.classic_jax_ns = JaxNestedSampler(
+            lnlike_jax, 
+            self.initial_proposal_jax,
+            ui=self.ui
+        )
         self.classic_jax_ns.setup(rng_key, n_live=1000, n_delete=200)
         self.classic_nested_samples = self.classic_jax_ns.run()
 
@@ -354,28 +363,29 @@ class MultiRoundInferer:
         classic_idx_weights = self.classic_nested_samples.index.to_numpy()
         classic_weights = np.asarray([el[1] for el in classic_idx_weights])
 
-        nle_samples = MCSamples(
-            samples=nle_raw_samples,
-            weights=weights,
-            sampler='nested',
-            names=self.initial_proposal.prior_names,
-            labels=self.initial_proposal.prior_names
-        )
-        classic_samples = MCSamples(
-            samples=classic_raw_samples, # type: ignore
-            weights=classic_weights,
-            sampler='nested',
-            names=self.initial_proposal.prior_names,
-            labels=self.initial_proposal.prior_names
-        )
-        g = plots.get_subplot_plotter()
-        g.triangle_plot(
-            [nle_samples, classic_samples],
-            filled=True,
-            markers=list(self.mr_config.reference_theta.values()), # type: ignore
-            marker_args={'lw': 1}, # type: ignore
-            legend_labels=['NLE', 'Truth']
-        )
+        with HidePrints():
+            nle_samples = MCSamples(
+                samples=nle_raw_samples,
+                weights=weights,
+                sampler='nested',
+                names=self.initial_proposal.prior_names,
+                labels=self.initial_proposal.prior_names
+            )
+            classic_samples = MCSamples(
+                samples=classic_raw_samples, # type: ignore
+                weights=classic_weights,
+                sampler='nested',
+                names=self.initial_proposal.prior_names,
+                labels=self.initial_proposal.prior_names
+            )
+            g = plots.get_subplot_plotter()
+            g.triangle_plot(
+                [nle_samples, classic_samples],
+                filled=True,
+                markers=list(self.mr_config.reference_theta.values()), # type: ignore
+                marker_args={'lw': 1}, # type: ignore
+                legend_labels=['NLE', 'Truth']
+            )
         plt.savefig(
             self.mr_config.plot_save_dir
           + f'/corner_final.png',

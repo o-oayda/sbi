@@ -488,10 +488,11 @@ class JaxNestedSampler:
             logzero=jnp.nan,
         )
 
-        self.print_func(
+        self.evidence_str = (
             f"[cyan]ln Z: {self.nested_samples.logZ():.2f} "
             f"± {self.nested_samples.logZ(100).std():.2f}[/cyan]" # type: ignore
         )
+        self.print_func(self.evidence_str)
         
         return self.nested_samples
 

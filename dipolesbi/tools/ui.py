@@ -1,14 +1,14 @@
 from contextlib import contextmanager
-import math
 from collections import deque
 from threading import Lock
-from typing import Optional
+from typing import Optional, Sequence, Mapping
 from rich.align import Align
 from rich.console import Group
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from rich.progress import Progress, BarColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
+from rich.columns import Columns
 
 
 class MultiRoundInfererUI:
@@ -28,6 +28,11 @@ class MultiRoundInfererUI:
         self._logs = deque(maxlen=log_lines)
         self._live = None
         self._lock = Lock()
+        self._global_prog = None
+        self._global_task = None
+        self.global_desc = "Simulations"
+        self._stats_columns: list[str] = ["Round", "Value"]
+        self._stats_rows: list[list[str]] = []
 
         self.round_idx = None
         self.round_total = None
@@ -163,6 +168,115 @@ class MultiRoundInfererUI:
         self._task_id = None
         self._refresh()
 
+# ----------- simulation progress bar -------------
+    def begin_global_progress(self, total: int | None, description: str | None = None):
+        """Create/replace a global progress bar (indeterminate if total=None)."""
+        if self._global_prog is None:
+            self._global_prog = Progress(
+                TextColumn("{task.description}"),
+                BarColumn(),
+                TextColumn("{task.completed}" + ("/{task.total}" if total is not None else "")),
+                TextColumn("{task.percentage:>3.0f}%"),
+                TimeElapsedColumn(),
+                TimeRemainingColumn(),
+                transient=False,
+                expand=True,
+            )
+        else:
+            self._global_prog.stop()
+            self._global_prog.tasks.clear()
+        desc = description or self.global_desc
+        # NOTE: total=None → indeterminate bar
+        self._global_task = self._global_prog.add_task(desc, total=total, start=True)
+        self._refresh()
+
+    def set_global_total(self, total: int | None):
+        """Switch between determinate and indeterminate by setting total."""
+        if self._global_prog is None or self._global_task is None:
+            return
+        self._global_prog.update(self._global_task, total=total)
+        self._refresh()
+
+    def set_global_description(self, description: str):
+        self.global_desc = description
+        if self._global_prog is not None and self._global_task is not None:
+            self._global_prog.update(self._global_task, description=description)
+            self._refresh()
+
+    def advance_global(self, n: int = 1):
+        if self._global_prog is None or self._global_task is None:
+            return
+        self._global_prog.update(self._global_task, advance=n)
+        self._refresh()
+
+    def set_global_completed(self, completed: int):
+        if self._global_prog is None or self._global_task is None:
+            return
+        self._global_prog.update(self._global_task, completed=completed)
+        self._refresh()
+
+    def end_global_progress(self, complete: bool = True):
+        if self._global_prog is None or self._global_task is None:
+            return
+        if complete:
+            t = self._global_prog.tasks[self._global_task]
+            if t.total is not None:
+                remaining = t.total - t.completed
+                if remaining > 0:
+                    self._global_prog.update(self._global_task, advance=remaining)
+        # remove the task so the bar disappears next render
+        self._global_prog.tasks.clear()
+        self._global_task = None
+        self._refresh()
+
+# ------------------- evidence panel --------------------
+    def set_stats_columns(self, columns: Sequence[str]) -> None:
+        """Define the table schema (call once, e.g., at startup)."""
+        self._stats_columns = list(columns)
+        self._refresh()
+
+    def add_stats_row(self, row: Sequence[object] | Mapping[str, object]) -> None:
+        """
+        Append one row. Accepts a sequence (must match column order) or a mapping
+        (keys matched to columns; missing keys become '').
+        """
+        if isinstance(row, Mapping):
+            ordered = [row.get(col, "") for col in self._stats_columns]
+        else:
+            ordered = list(row)
+            # pad/trim to fit schema
+            if len(ordered) < len(self._stats_columns):
+                ordered += [""] * (len(self._stats_columns) - len(ordered))
+            elif len(ordered) > len(self._stats_columns):
+                ordered = ordered[:len(self._stats_columns)]
+        # stringify with light formatting
+        self._stats_rows.append([self._fmt_cell(v) for v in ordered])
+        self._refresh()
+
+    def update_last_stats_row(self, updates: Mapping[str, object]) -> None:
+        """Update specific columns in the most recently added row."""
+        if not self._stats_rows:
+            return
+        last = self._stats_rows[-1]
+        for k, v in updates.items():
+            try:
+                idx = self._stats_columns.index(k)
+            except ValueError:
+                continue
+            last[idx] = self._fmt_cell(v)
+        self._refresh()
+
+    def clear_stats(self) -> None:
+        """Manually clear the accumulated metrics table."""
+        self._stats_rows.clear()
+        self._refresh()
+
+    def _fmt_cell(self, v: object) -> str:
+        # Nice defaults for numbers; tweak if you like.
+        if isinstance(v, float):
+            return f"{v:.4f}"
+        return str(v)
+
     # ---------- rendering ----------
     def _render_checklist(self) -> Table:
         table = Table.grid(padding=(0, 1))
@@ -196,11 +310,35 @@ class MultiRoundInfererUI:
         t.add_row(left)
         return Align.left(t)
 
+    def _render_stats(self) -> Panel:
+        table = Table.grid(padding=(0, 1))
+        # Header row:
+        header = Table.grid()
+        header.add_row("[bold]Round Metrics[/bold]")
+        # Data table:
+        data = Table(*[c for c in self._stats_columns], expand=True)
+        for row in self._stats_rows:
+            data.add_row(*row)
+        return Panel(Group(header, data), border_style="grey50")
+
     def render(self) -> Panel:
-        body = [self._render_header(), self._render_checklist()]
+        left_body = [self._render_checklist()]
+        left_panel = Panel(Group(*left_body), border_style='white')
+
+        right_panel = None
+        if self._stats_rows:
+            right_panel = self._render_stats()
+
+        row = Columns([left_panel, right_panel] if right_panel else [left_panel], expand=True)
+
+        body = [self._render_header()]
+        if self._global_task is not None:
+            body.append(self._global_prog)
         if self._task_id is not None:
             body.append(self._progress)
         body.append(self._render_logs())
+        body.append(row)
+
         return Panel(
             Group(*body),
             title=self.title,

@@ -52,7 +52,7 @@ def lnZ_plot(inferer: MultiRoundInferer) -> None:
 if __name__ == '__main__':
     rng_key = PRNGKey(42)
 
-    NSIDE = 16
+    NSIDE = 32
     TOTAL_SOURCES = 1_920_000
     MEAN_DENSITY = np.asarray(TOTAL_SOURCES / hp.nside2npix(NSIDE))
     theta0 = {
@@ -76,8 +76,13 @@ if __name__ == '__main__':
     # corner(lb_inferer._samples)
     # plt.show()
 
-    nside16_config = ConfigOfConfigs.nside16(theta0)
-    nside32_config = ConfigOfConfigs.nside32(theta0)
+    nside16_config = ConfigOfConfigs.nside16(theta0, training_overrides={'restore_from_previous': False})
+    nside32_config = ConfigOfConfigs.nside32(
+        theta0, 
+        multiround_overrides={'simulation_budget': 100_000, 'dequantise_data': False}, # 'n_requantisations': 32},
+        ssnle_overrides={'conditioner_n_layers': 4, 'conditioner_n_neurons': 256},
+        training_overrides={'warmup_epochs': 0.5, 'restore_from_previous': False, 'batch_size': 400}
+    )
     meta_cfg = {
         16: nside16_config,
         32: nside32_config
@@ -85,7 +90,7 @@ if __name__ == '__main__':
     cur_cfg = meta_cfg[NSIDE]
 
     inferer = MultiRoundInferer(
-        rng_key, prior, model.generate_dipole, x0,
+        prior, model.generate_dipole, x0,
         multi_round_config=cur_cfg.multiround_config,
         nle_config=cur_cfg.ssnle_config,
         train_config=cur_cfg.training_config

@@ -6,6 +6,7 @@ from torch import poisson
 from torch.types import Tensor
 from scipy.interpolate import interp1d
 import os
+import sys
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 from operator import itemgetter
@@ -15,8 +16,17 @@ from collections import defaultdict
 import torch.nn.functional as F
 from jax import numpy as jnp
 import jax
-
 from dipolesbi.tools.np_rngkey import NPKey
+
+
+class HidePrints:
+    def __enter__(self):
+        self._original_stdout = sys.stdout
+        sys.stdout = open(os.devnull, 'w')
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.stdout.close()
+        sys.stdout = self._original_stdout
 
 def save_dict_npz(path, x: dict):
     jax.block_until_ready(jax.tree_util.tree_leaves(x))  # ensure computed

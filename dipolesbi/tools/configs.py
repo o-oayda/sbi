@@ -94,6 +94,7 @@ class MultiRoundInfererConfig:
     '''
     simulation_budget: int
     n_rounds: int
+    prng_integer_seed: int = 42
     load_simulations: Optional[str] = None
     reference_theta: Optional[dict[str, NDArray]] = None
     plot_save_dir: str = 'nle_out'
@@ -143,7 +144,7 @@ class ConfigOfConfigs:
         train_dict = {
             'patience': 20, 
             'learning_rate': 5e-5, # 5e-5 for optimal nside=16
-            'restore_from_previous': False,
+            'restore_from_previous': True,
             'weight_by_round': False,
             **training_overrides
         }
@@ -189,7 +190,7 @@ class ConfigOfConfigs:
         train_dict = {
             'patience': 20, 
             'learning_rate': 1e-5,
-            'restore_from_previous': False,
+            'restore_from_previous': True,
             'weight_by_round': False,
             **training_overrides
         }
@@ -208,7 +209,7 @@ class ConfigOfConfigs:
             'blocks': haar_transform._build_surjective_blocks(n_chunks=1),
             'maf_stack_size': 15,
             'conditioner_n_layers': 4,
-            'conditioner_n_neurons': 256,
+            'conditioner_n_neurons': 256, # don't drop these, hinders inference, 20250905_094425
             'decoder_n_layers': 3,
             'decoder_n_neurons': 64,
             'decoder_distribution': 'gaussian',
