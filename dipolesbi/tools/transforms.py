@@ -309,7 +309,8 @@ class HaarWaveletTransform(InvertibleDataTransform):
             f"n_levels={self.n_levels}, "
             f"downscale_factors={self.downscale_factors}, "
             f"mu_at_level={self.mu_at_level}, "
-            f"std_at_level={self.std_at_level}"
+            f"std_at_level={self.std_at_level}, "
+            f"post_normalise={self.post_normalise}"
             f")"
         )
 
@@ -359,8 +360,9 @@ class HaarWaveletTransform(InvertibleDataTransform):
         coefficients_fine2coarse: list[NDArray] = [] 
         a_list: list[NDArray] = []
         logdets_at_each_level: list[NDArray] = []
+        post_norm_logdet: NDArray = np.asarray(0.)
         
-        if self.post_normalise:
+        if self.post_normalise and self.empty_norm_stats_flag:
             assert batches > 1, 'More than 1 batch needed to define std.'
         
         logdet = np.zeros(batches)
@@ -416,9 +418,16 @@ class HaarWaveletTransform(InvertibleDataTransform):
         a_coarse = downstream_coefficients # (batches, out_npix)
 
         if self.post_normalise:
-            mean_coarse = a_coarse.mean(axis=0) # across the batch axis
-            std_coarse = a_coarse.std(axis=0)
+            if self.empty_norm_stats_flag:
+                mean_coarse = a_coarse.mean(axis=0) # across the batch axis
+                std_coarse = a_coarse.std(axis=0)
+            else:
+                mean_coarse = self.mu_at_level_post['coarse']
+                std_coarse = self.std_at_level_post['coarse']
+
             a_coarse = ( a_coarse - mean_coarse ) / std_coarse
+
+            post_norm_logdet += -np.log(std_coarse).sum(axis=-1) # sum over pixels
 
             if self.empty_norm_stats_flag:
                 self.mu_at_level_post['coarse'] = mean_coarse
@@ -427,21 +436,34 @@ class HaarWaveletTransform(InvertibleDataTransform):
         # Build z: keep a_coarse, then details from coarse->fine
         # (drop the a's there)
         z_parts = [a_coarse.reshape(batches, -1)]  # list[ (B, out_npix) ]
+        lvl_idx = self.n_levels - 1
         for lvl, y in enumerate(reversed(coefficients_fine2coarse)): # now coarse->fine
             
             if self.post_normalise:
-                mean_d1 = y[..., 1].mean(axis=0)
-                mean_d2 = y[..., 2].mean(axis=0)
-                mean_d3 = y[..., 3].mean(axis=0)
-                std_d1 = y[..., 1].std(axis=0)
-                std_d2 = y[..., 2].std(axis=0)
-                std_d3 = y[..., 3].std(axis=0)
+                if self.empty_norm_stats_flag:
+                    mean_d1 = y[..., 1].mean(axis=0)
+                    mean_d2 = y[..., 2].mean(axis=0)
+                    mean_d3 = y[..., 3].mean(axis=0)
+                    std_d1 = y[..., 1].std(axis=0)
+                    std_d2 = y[..., 2].std(axis=0)
+                    std_d3 = y[..., 3].std(axis=0)
+                else:
+                    mean_d1 = self.mu_at_level_post['detail'][0][lvl_idx - lvl]
+                    mean_d2 = self.mu_at_level_post['detail'][1][lvl_idx - lvl]
+                    mean_d3 = self.mu_at_level_post['detail'][2][lvl_idx - lvl]
+
+                    std_d1 = self.std_at_level_post['detail'][0][lvl_idx - lvl]
+                    std_d2 = self.std_at_level_post['detail'][1][lvl_idx - lvl]
+                    std_d3 = self.std_at_level_post['detail'][2][lvl_idx - lvl]
                 
                 y[..., 1] = ( y[..., 1] - mean_d1 ) / std_d1
                 y[..., 2] = ( y[..., 2] - mean_d2 ) / std_d2
                 y[..., 3] = ( y[..., 3] - mean_d3 ) / std_d3
 
-                lvl_idx = self.n_levels - 1
+                post_norm_logdet += - np.log(std_d1).sum(axis=-1)
+                post_norm_logdet += - np.log(std_d2).sum(axis=-1)
+                post_norm_logdet += - np.log(std_d3).sum(axis=-1)
+
                 if self.empty_norm_stats_flag:
                     self.mu_at_level_post['detail'][0][lvl_idx - lvl] = mean_d1
                     self.mu_at_level_post['detail'][1][lvl_idx - lvl] = mean_d2
@@ -455,7 +477,10 @@ class HaarWaveletTransform(InvertibleDataTransform):
         z = np.concatenate(z_parts, axis=1)
 
         self.empty_norm_stats_flag = False
-        return z, logdet
+        if self.post_normalise:
+            return z, post_norm_logdet
+        else:
+            return z, logdet
 
     def _reverse_cycle_healpix_tree(self,
         transformed_data: np.ndarray

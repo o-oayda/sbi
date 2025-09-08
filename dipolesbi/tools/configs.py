@@ -147,9 +147,16 @@ class ConfigOfConfigs:
             reference_theta: dict[str, NDArray],
             training_overrides: dict = {},
             multiround_overrides: dict = {},
-            ssnle_overrides: dict = {}
+            ssnle_overrides: dict = {},
+            transform_overrides: dict = {}
     ) -> 'ConfigOfConfigs':
-        haar_transform = HaarWaveletTransform(first_nside=16, last_nside=1)
+        transform_dict = {
+            'first_nside': 16,
+            'last_nside': 1,
+            'post_normalise': False,
+            **transform_overrides
+        }
+        haar_transform = HaarWaveletTransform(**transform_dict)
         train_dict = {
             'patience': 20, 
             'learning_rate': 5e-5, # 5e-5 for optimal nside=16

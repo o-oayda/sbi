@@ -500,7 +500,7 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
 
     def _get_surjective_layer(self, name: str):
         name_to_class = {
-            'affineMAF': AffineMaskedAutoregressiveInferenceFunnel,
+            'affine_MAF': AffineMaskedAutoregressiveInferenceFunnel,
             'rational_quadratic_MAF': RationalQuadraticSplineMaskedAutoregressiveInferenceFunnel
         }
         return name_to_class[name]
