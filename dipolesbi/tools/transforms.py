@@ -3,7 +3,7 @@ from blackjax.types import Array
 from healpy import isnsideok, nside2npix
 from numpy.typing import NDArray
 import torch
-from torch import Tensor, device
+from torch import Tensor, device, poisson
 from nflows.transforms.base import Transform
 from torch.utils.data import Dataset, DataLoader, random_split
 import math
@@ -241,7 +241,7 @@ class LearnableNormaliser(torch.nn.Module):
         return a_norm, d_norm, logdet
 
 class HaarWaveletTransform(InvertibleDataTransform):
-    def __init__(self, first_nside: int, last_nside: int = 1) -> None:
+    def __init__(self, first_nside: int, last_nside: int = 1, post_normalise: bool = False) -> None:
         self.Q = 0.5 * np.asarray(
             [[1., 1. , 1. ,  1.],
              [1., 1. , -1., -1.],
@@ -252,15 +252,52 @@ class HaarWaveletTransform(InvertibleDataTransform):
 
         self.mu_at_level: list[list[NDArray]] = []
         self.std_at_level: list[list[NDArray]] = []
-        self.empty_norm_stats_flag: bool = True
 
         self.first_nside = first_nside
-        self.first_npix = hp.nside2npix(first_nside)
         self.last_nside = last_nside
-        self.last_npix = hp.nside2npix(last_nside)
+
+        nside = first_nside
+        self.npix_per_level = []
+
+        # stop before nside = 1: out map has nside=2 resolution coarse and details
+        # i.e. 12 coarse, 12 x 3 details, total of 48
+        while nside > 1:
+            self.npix_per_level.append(hp.nside2npix(nside))
+            nside //= 2
+
+        self.first_npix = self.npix_per_level[0]
+        self.last_npix = 12 * last_nside ** 2
 
         self.n_levels = int(np.log2(first_nside) - np.log2(last_nside))
         self.downscale_factors = self.n_levels * [4]
+
+        # 3 detail coefficients; ell levels per coefficient
+        # at every level ell, we have nside(ell) total pixels
+        # 3/4 are details, the other 1/4 coarse
+        self.mu_at_level_post: dict = {
+            'coarse': np.nan * np.empty(self.npix_per_level[-1] // 4),
+            'detail': {i:
+                {
+                    j: np.nan * np.empty(self.npix_per_level[::-1][j] // 4)
+                    for j in range(self.n_levels)
+                }
+            for i in range(3)
+            }
+        }
+        self.std_at_level_post: dict = {
+            'coarse': np.nan * np.empty(self.npix_per_level[-1] // 4),
+            'detail': {i:
+                {
+                    j: np.nan * np.empty(self.npix_per_level[::-1][j] // 4)
+                    for j in range(self.n_levels)
+                }
+            for i in range(3)
+            }
+        }
+
+        self.empty_norm_stats_flag: bool = True
+        self.post_normalise: bool = post_normalise
+
 
     def __repr__(self) -> str:
         return (
@@ -323,6 +360,9 @@ class HaarWaveletTransform(InvertibleDataTransform):
         a_list: list[NDArray] = []
         logdets_at_each_level: list[NDArray] = []
         
+        if self.post_normalise:
+            assert batches > 1, 'More than 1 batch needed to define std.'
+        
         logdet = np.zeros(batches)
         downstream_coefficients = y
 
@@ -356,7 +396,8 @@ class HaarWaveletTransform(InvertibleDataTransform):
                     mu = self.mu_at_level[lvl][i]
                     sigma = self.std_at_level[lvl][i]
 
-                z[..., i] = (z[..., i] - mu) / sigma
+                if not self.post_normalise:
+                    z[..., i] = (z[..., i] - mu) / sigma
 
                 per_level_logdet += - P * np.log(sigma)
 
@@ -373,15 +414,47 @@ class HaarWaveletTransform(InvertibleDataTransform):
             cur_npix = P
 
         a_coarse = downstream_coefficients # (batches, out_npix)
-        self.empty_norm_stats_flag = False
+
+        if self.post_normalise:
+            mean_coarse = a_coarse.mean(axis=0) # across the batch axis
+            std_coarse = a_coarse.std(axis=0)
+            a_coarse = ( a_coarse - mean_coarse ) / std_coarse
+
+            if self.empty_norm_stats_flag:
+                self.mu_at_level_post['coarse'] = mean_coarse
+                self.std_at_level_post['coarse'] = std_coarse
 
         # Build z: keep a_coarse, then details from coarse->fine
         # (drop the a's there)
         z_parts = [a_coarse.reshape(batches, -1)]  # list[ (B, out_npix) ]
-        for y in reversed(coefficients_fine2coarse): # now coarse->fine
+        for lvl, y in enumerate(reversed(coefficients_fine2coarse)): # now coarse->fine
+            
+            if self.post_normalise:
+                mean_d1 = y[..., 1].mean(axis=0)
+                mean_d2 = y[..., 2].mean(axis=0)
+                mean_d3 = y[..., 3].mean(axis=0)
+                std_d1 = y[..., 1].std(axis=0)
+                std_d2 = y[..., 2].std(axis=0)
+                std_d3 = y[..., 3].std(axis=0)
+                
+                y[..., 1] = ( y[..., 1] - mean_d1 ) / std_d1
+                y[..., 2] = ( y[..., 2] - mean_d2 ) / std_d2
+                y[..., 3] = ( y[..., 3] - mean_d3 ) / std_d3
+
+                lvl_idx = self.n_levels - 1
+                if self.empty_norm_stats_flag:
+                    self.mu_at_level_post['detail'][0][lvl_idx - lvl] = mean_d1
+                    self.mu_at_level_post['detail'][1][lvl_idx - lvl] = mean_d2
+                    self.mu_at_level_post['detail'][2][lvl_idx - lvl] = mean_d3
+
+                    self.std_at_level_post['detail'][0][lvl_idx - lvl] = std_d1
+                    self.std_at_level_post['detail'][1][lvl_idx - lvl] = std_d2
+                    self.std_at_level_post['detail'][2][lvl_idx - lvl] = std_d3
+
             z_parts.append(y[..., 1:].reshape(batches, -1))
         z = np.concatenate(z_parts, axis=1)
 
+        self.empty_norm_stats_flag = False
         return z, logdet
 
     def _reverse_cycle_healpix_tree(self,
@@ -393,6 +466,9 @@ class HaarWaveletTransform(InvertibleDataTransform):
         # z = [a_coarse | d_coarse ... d_fine ]
         offset = self.last_npix
         a = transformed_data[:, :offset] # (B, out_npix)
+
+        if self.post_normalise:
+            a = a * self.std_at_level_post['coarse'] + self.mu_at_level_post['coarse']
 
         # iterate from high resolution to low resolution
         details_coarse2fine = []
@@ -414,10 +490,20 @@ class HaarWaveletTransform(InvertibleDataTransform):
             a_here = cast(Array, a_here)
             y_pre = np.concatenate([a_here, d_out], axis=-1) # (B, P_l, n_coefficients)
 
+            lvl_idx = self.n_levels - 1
             for i in range(4):
-                mu = self.mu_at_level[-1 - lvl][i]
-                sigma = self.std_at_level[-1 - lvl][i]
-                y_pre[..., i] = y_pre[..., i] * sigma + mu
+                if not self.post_normalise:
+                    mu = self.mu_at_level[-1 - lvl][i]
+                    sigma = self.std_at_level[-1 - lvl][i]
+                    y_pre[..., i] = y_pre[..., i] * sigma + mu
+                else:
+                    if i == 0:
+                        pass
+                    else:
+                        mean_di = self.mu_at_level_post['detail'][i-1][lvl_idx - lvl]
+                        std_di = self.std_at_level_post['detail'][i-1][lvl_idx - lvl]
+
+                        y_pre[..., i] = y_pre[..., i] * std_di + mean_di
 
             data = self._inverse_matrix_product(y_pre)
 
