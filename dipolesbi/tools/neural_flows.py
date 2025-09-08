@@ -10,6 +10,7 @@ from surjectors import (
     Chain,
     MaskedAutoregressive,
     Permutation,
+    RationalQuadraticSplineMaskedAutoregressiveInferenceFunnel,
     TransformedDistribution,
 )
 from surjectors.nn import MADE, make_mlp, make_transformer
@@ -497,6 +498,12 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
                 f'Flow type {self.nle_config.flow_type} in config not recognised.'
             )
 
+    def _get_surjective_layer(self, name: str):
+        name_to_class = {
+            'affineMAF': AffineMaskedAutoregressiveInferenceFunnel,
+            'rational_quadratic_MAF': RationalQuadraticSplineMaskedAutoregressiveInferenceFunnel
+        }
+        return name_to_class[name]
     
     def _standard_flow(self, method: str, **kwargs):
         assert self.nle_config.data_reduction_factor is not None
@@ -555,6 +562,9 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
 
         self.layers = []
         dim0 = self.data_ndim
+        surjective_layer_type = self._get_surjective_layer(
+            self.nle_config.surjective_layer_type
+        )
 
         dim = dim0
         self.drop_idxs = []
@@ -568,7 +578,7 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
 
             self.layers.append(Permutation(perm, 1))
 
-            surjective_layer = AffineMaskedAutoregressiveInferenceFunnel(
+            surjective_layer = surjective_layer_type(
                 n_keep=n_keep,
                 decoder=self._decoder_fn(
                     n_dimension=n_drop,
