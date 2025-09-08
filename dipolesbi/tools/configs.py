@@ -31,6 +31,9 @@ class SurjectiveNLEConfig:
     '''
     Configuration for the NLE.
     '''
+    surjective_layer_type: Literal[
+        'affine_MAF', 'rational_quadratic_MAF'
+    ] = 'affine_MAF'
     decoder_distribution: Literal['gaussian', 'poisson', 'nb', 'students_t'] = 'gaussian'
     decoder_n_neurons: int = 64
     decoder_n_layers: int = 3
@@ -47,6 +50,12 @@ class SurjectiveNLEConfig:
     blocks: list[tuple[NDArray, int, int]] = field(default_factory=list)
     conditioner_kwargs: dict = field(default_factory=dict)
     flow_type: str = field(default='custom', init=False)
+
+    def __post_init__(self):
+        if self.surjective_layer_type in ['affine_MAF', 'rational_quadratic_MAF']:
+            assert self.conditioner == 'made', (
+                f'Conditioner must be MADE when using {self.surjective_layer_type}.'
+            )
 
     @classmethod
     def heirarchical(
