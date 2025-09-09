@@ -52,7 +52,7 @@ def lnZ_plot(inferer: MultiRoundInferer) -> None:
 if __name__ == '__main__':
     rng_key = PRNGKey(42)
 
-    NSIDE = 16
+    NSIDE = 32
     TOTAL_SOURCES = 1_920_000
     MEAN_DENSITY = np.asarray(TOTAL_SOURCES / hp.nside2npix(NSIDE))
     theta0 = {
@@ -79,12 +79,12 @@ if __name__ == '__main__':
     nside16_config = ConfigOfConfigs.nside16(
         theta0, 
         transform_overrides={'post_normalise': True},
-        training_overrides={'restore_from_previous': False}
+        training_overrides={'restore_from_previous': True}
     )
     nside32_config = ConfigOfConfigs.nside32(
         theta0, 
+        transform_overrides={'post_normalise': True},
         multiround_overrides={'simulation_budget': 100_000, 'dequantise_data': False}, # 'n_requantisations': 32},
-        ssnle_overrides={'conditioner_n_layers': 4, 'conditioner_n_neurons': 256},
         training_overrides={'warmup_epochs': 0.5, 'restore_from_previous': False, 'batch_size': 400}
     )
     meta_cfg = {

@@ -17,6 +17,12 @@ zmap1 = zmap1.squeeze()
 
 lam = 50 * np.ones((NBATCH, NPIX))
 dmap2 = key.poisson(lam=lam, shape=lam.shape)
-transform2 = HaarWaveletTransform(first_nside=NSIDE, last_nside=1, post_normalise=True)
+transform2 = HaarWaveletTransform(
+    first_nside=NSIDE, 
+    last_nside=1, 
+    post_normalise=True, 
+    matrix_type='sparse_average',
+    normalise_details=False
+)
 zmap2, _ = transform2(dmap2)
 zmap2 = zmap2.squeeze()

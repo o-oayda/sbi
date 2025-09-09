@@ -241,14 +241,39 @@ class LearnableNormaliser(torch.nn.Module):
         return a_norm, d_norm, logdet
 
 class HaarWaveletTransform(InvertibleDataTransform):
-    def __init__(self, first_nside: int, last_nside: int = 1, post_normalise: bool = False) -> None:
-        self.Q = 0.5 * np.asarray(
+    def __init__(
+            self, 
+            first_nside: int, 
+            last_nside: int = 1,
+            post_normalise: bool = False,
+            matrix_type: Literal['hadamard', 'sparse_average'] = 'hadamard',
+            normalise_details: bool = True
+    ) -> None:
+        self.matrix_type = matrix_type
+        self.H = 0.5 * np.asarray(
             [[1., 1. , 1. ,  1.],
              [1., 1. , -1., -1.],
              [1., -1., 1. , -1.],
              [1., -1., -1.,  1.]]
         )
-        self.Q_inv = np.linalg.inv(self.Q)
+        self.H_inv = np.linalg.inv(self.H)
+
+        self.A = np.asarray(
+            [[1., 1., 1., 1.],
+             [0., 1., 0., 1.],
+             [0., 0., 1., 0.],
+             [0., 0., 0., 1.]]
+        )
+        self.A_inv = np.linalg.inv(self.A)
+
+        if matrix_type == 'hadamard':
+            self.Q = self.H
+            self.Q_inv = self.H_inv
+        elif matrix_type == 'sparse_average':
+            self.Q = self.A
+            self.Q_inv = self.A_inv
+        else:
+            raise Exception(f'Unrecognised matrix type {self.matrix_type}.')
 
         self.mu_at_level: list[list[NDArray]] = []
         self.std_at_level: list[list[NDArray]] = []
@@ -297,7 +322,7 @@ class HaarWaveletTransform(InvertibleDataTransform):
 
         self.empty_norm_stats_flag: bool = True
         self.post_normalise: bool = post_normalise
-
+        self.normalise_details: bool = normalise_details
 
     def __repr__(self) -> str:
         return (
@@ -456,13 +481,14 @@ class HaarWaveletTransform(InvertibleDataTransform):
                     std_d2 = self.std_at_level_post['detail'][1][lvl_idx - lvl]
                     std_d3 = self.std_at_level_post['detail'][2][lvl_idx - lvl]
                 
-                y[..., 1] = ( y[..., 1] - mean_d1 ) / std_d1
-                y[..., 2] = ( y[..., 2] - mean_d2 ) / std_d2
-                y[..., 3] = ( y[..., 3] - mean_d3 ) / std_d3
+                if self.normalise_details:
+                    y[..., 1] = ( y[..., 1] - mean_d1 ) / std_d1
+                    y[..., 2] = ( y[..., 2] - mean_d2 ) / std_d2
+                    y[..., 3] = ( y[..., 3] - mean_d3 ) / std_d3
 
-                post_norm_logdet += - np.log(std_d1).sum(axis=-1)
-                post_norm_logdet += - np.log(std_d2).sum(axis=-1)
-                post_norm_logdet += - np.log(std_d3).sum(axis=-1)
+                    post_norm_logdet += - np.log(std_d1).sum(axis=-1)
+                    post_norm_logdet += - np.log(std_d2).sum(axis=-1)
+                    post_norm_logdet += - np.log(std_d3).sum(axis=-1)
 
                 if self.empty_norm_stats_flag:
                     self.mu_at_level_post['detail'][0][lvl_idx - lvl] = mean_d1
