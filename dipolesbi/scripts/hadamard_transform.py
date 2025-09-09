@@ -3,6 +3,7 @@ import healpy as hp
 import matplotlib.pyplot as plt
 import numpy as np
 from dipolesbi.tools.np_rngkey import prng_key
+from scipy.stats import poisson, norm
 
 
 NSIDE = 32
@@ -26,3 +27,9 @@ transform2 = HaarWaveletTransform(
 )
 zmap2, _ = transform2(dmap2)
 zmap2 = zmap2.squeeze()
+
+bins = np.arange(0, 100)
+plt.hist(zmap2[:, 12:].flatten(), bins=bins, density=True)
+plt.plot(bins, poisson.pmf(bins, mu=50))
+plt.plot(bins, norm.pdf(bins, loc=50, scale=np.sqrt(50)))
+plt.show()

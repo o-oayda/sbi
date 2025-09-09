@@ -260,7 +260,7 @@ class HaarWaveletTransform(InvertibleDataTransform):
 
         self.A = np.asarray(
             [[1., 1., 1., 1.],
-             [0., 1., 0., 1.],
+             [0., 1., 0., 0.],
              [0., 0., 1., 0.],
              [0., 0., 0., 1.]]
         )
@@ -270,8 +270,8 @@ class HaarWaveletTransform(InvertibleDataTransform):
             self.Q = self.H
             self.Q_inv = self.H_inv
         elif matrix_type == 'sparse_average':
-            self.Q = self.A
-            self.Q_inv = self.A_inv
+            self.Q = self.A.T
+            self.Q_inv = self.A_inv.T
         else:
             raise Exception(f'Unrecognised matrix type {self.matrix_type}.')
 
