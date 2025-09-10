@@ -599,13 +599,15 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         else:
             integer_transform = None
 
-        for lvl, (per, nk, nd) in enumerate(self.blocks):
+        for lvl, (nk, nd) in enumerate(self.blocks):
             n_drop = nd
             n_keep = nk
-            perm = per
+            # perm = per
 
-            self.layers.append(Permutation(perm, 1))
+            # self.layers.append(Permutation(perm, 1))
 
+            # n_keep and n_dropped split data into y_minus and y_plus, as in
+            # y_plus, y_minus = y[..., : self.n_keep], y[..., self.n_keep :]
             surjective_layer = surjective_layer_type(
                 n_keep=n_keep,
                 decoder=self._decoder_fn(

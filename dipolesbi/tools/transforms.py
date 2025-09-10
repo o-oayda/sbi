@@ -8,7 +8,7 @@ from nflows.transforms.base import Transform
 from torch.utils.data import Dataset, DataLoader, random_split
 import math
 import numpy as np
-from dipolesbi.tools.healpix_helpers import build_funnel_steps
+from dipolesbi.tools.healpix_helpers import build_funnel_steps, split_off_details
 from dipolesbi.tools.utils import softplus_pos
 import torch.nn.functional as F
 from abc import ABC, abstractmethod
@@ -427,21 +427,22 @@ class HaarWaveletTransform(InvertibleDataTransform):
     def inverse(self, transformed_data: NDArray) -> NDArray:
         return self._reverse_cycle_healpix_tree(transformed_data)
 
-    def _build_surjective_blocks(self) -> list[tuple[NDArray, int, int]]:
-        detail_sizes = []
-        ns = self.first_nside
-        while ns > self.last_nside:
-            ns //= 2
-            npi = 12 * ns**2
-            detail_sizes.append(3*npi)
-        block_lengths = [self.last_npix] + detail_sizes # a coeffs + 3 details per level
-        assert 12 * self.first_nside**2 == sum(block_lengths)
-
-        steps = build_funnel_steps(
-            n_coarse=self.last_npix, 
-            detail_lengths=block_lengths[1:],
-            n_chunks=self.n_chunks
-        )
+    def _build_surjective_blocks(self) -> list[tuple[int, int]]:
+        steps = split_off_details(self.first_nside, self.last_nside)
+        # detail_sizes = []
+        # ns = self.first_nside
+        # while ns > self.last_nside:
+        #     ns //= 2
+        #     npi = 12 * ns**2
+        #     detail_sizes.append(3*npi)
+        # block_lengths = [self.last_npix] + detail_sizes # a coeffs + 3 details per level
+        # assert 12 * self.first_nside**2 == sum(block_lengths)
+        #
+        # steps = build_funnel_steps(
+        #     n_coarse=self.last_npix, 
+        #     detail_lengths=block_lengths[1:],
+        #     n_chunks=self.n_chunks
+        # )
         return steps
 
     def _cycle_healpix_tree(

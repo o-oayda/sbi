@@ -8,6 +8,21 @@ def _split_len(L: int, n: int) -> list[int]:
     q, r = divmod(L, n)
     return [q + (1 if i < r else 0) for i in range(n)]
 
+def split_off_details(
+    initial_nside: int,
+    output_nside: int
+) -> list[tuple[int, int]]:
+    ns = initial_nside
+    nkeep_ndrop = []
+    while ns > output_nside:
+        n_pix = 12 * ns**2
+        n_details = 0.75 * n_pix 
+        n_keep = int(n_pix - n_details)
+        n_drop = int(n_details)
+        nkeep_ndrop.append((n_keep, n_drop))
+        ns //= 2
+    return nkeep_ndrop
+
 def build_funnel_steps(
     n_coarse: int,
     detail_lengths: list[int],
