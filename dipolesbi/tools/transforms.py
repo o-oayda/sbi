@@ -1,9 +1,9 @@
-from typing import Optional, Tuple, cast, Literal
+from typing import Callable, Optional, Tuple, cast, Literal
 from blackjax.types import Array
 from healpy import isnsideok, nside2npix
 from numpy.typing import NDArray
 import torch
-from torch import Tensor, device, poisson
+from torch import Tensor, device
 from nflows.transforms.base import Transform
 from torch.utils.data import Dataset, DataLoader, random_split
 import math
@@ -13,6 +13,7 @@ from dipolesbi.tools.utils import softplus_pos
 import torch.nn.functional as F
 from abc import ABC, abstractmethod
 import healpy as hp
+from jax import numpy as jnp
 
 
 class InvertibleDataTransform(ABC):
@@ -247,7 +248,8 @@ class HaarWaveletTransform(InvertibleDataTransform):
             last_nside: int = 1,
             post_normalise: bool = False,
             matrix_type: Literal['hadamard', 'sparse_average'] = 'hadamard',
-            normalise_details: bool = True
+            normalise_details: bool = True,
+            n_chunks: int = 1
     ) -> None:
         self.matrix_type = matrix_type
         self.H = 0.5 * np.asarray(
@@ -299,17 +301,17 @@ class HaarWaveletTransform(InvertibleDataTransform):
         # 3 detail coefficients; ell levels per coefficient
         # at every level ell, we have nside(ell) total pixels
         # 3/4 are details, the other 1/4 coarse
-        self.mu_at_level_post: dict = {
-            'coarse': np.nan * np.empty(self.npix_per_level[-1] // 4),
-            'detail': {i:
-                {
-                    j: np.nan * np.empty(self.npix_per_level[::-1][j] // 4)
-                    for j in range(self.n_levels)
-                }
-            for i in range(3)
-            }
-        }
-        self.std_at_level_post: dict = {
+        self.mu_at_level_post = self._make_mu_post_dict()
+        self.std_at_level_post = self._make_std_post_dict()
+
+        self.empty_norm_stats_flag: bool = True
+        self.post_normalise: bool = post_normalise
+        self.normalise_details: bool = normalise_details
+        self.n_chunks = n_chunks
+        self.blocks = self._build_surjective_blocks()
+
+    def _make_mu_post_dict(self) -> dict:
+        return {
             'coarse': np.nan * np.empty(self.npix_per_level[-1] // 4),
             'detail': {i:
                 {
@@ -320,9 +322,17 @@ class HaarWaveletTransform(InvertibleDataTransform):
             }
         }
 
-        self.empty_norm_stats_flag: bool = True
-        self.post_normalise: bool = post_normalise
-        self.normalise_details: bool = normalise_details
+    def _make_std_post_dict(self) -> dict:
+        return {
+            'coarse': np.nan * np.empty(self.npix_per_level[-1] // 4),
+            'detail': {i:
+                {
+                    j: np.nan * np.empty(self.npix_per_level[::-1][j] // 4)
+                    for j in range(self.n_levels)
+                }
+            for i in range(3)
+            }
+        }
 
     def __repr__(self) -> str:
         return (
@@ -348,9 +358,67 @@ class HaarWaveletTransform(InvertibleDataTransform):
             cur //= dscale_factor
         return P_levels
 
+    def make_unnormalise_details_func(
+            self, 
+            level: int
+    ) -> Callable[[jnp.ndarray], jnp.ndarray]:
+        # in mu_at_level_post, level_idx 0 corresponds to the finest level
+        # being the first one thrown away in the heirarchical SSNLE
+        # note details are interleaved
+        # [d1_0, d2_0, d3_0,  d1_1, d2_1, d3_1, ..., d1_{P-1}, d2_{P-1}, d3_{P-1}]
+
+        # get stats for the three detail coefficients
+        mu1, mu2, mu3 = (self.mu_at_level_post['detail'][i][level] for i in range(3))
+        std1, std2, std3 = (self.std_at_level_post['detail'][i][level] for i in range(3))
+        n_detail1s = mu1.shape[0]
+
+        # take in a block of 3 detail coefficients; unnormalise
+        def _unnormalise(z: jnp.ndarray):
+            assert z.ndim == 2
+            assert 3 * n_detail1s == z.shape[-1]
+
+            B, threeP = z.shape
+            P = threeP // 3
+
+            # reshape to (B, P, 3): channels last
+            z3 = z.reshape(B, P, 3)
+
+            mu  = jnp.stack([mu1,  mu2,  mu3],  axis=-1)  # (P, 3)
+            std = jnp.stack([std1, std2, std3], axis=-1)  # (P, 3)
+
+            x3 = z3 * std[None, :, :] + mu[None, :, :]
+            x_final = x3.reshape(B, threeP)
+
+            # x_list = []
+            # start = 0
+            # end = n_detail0s
+            # for mu, sigma in zip([mu1, mu2, mu3], [std1, std2, std3]):
+            #     print(sigma.shape)
+            #     print(mu.shape)
+            #     print(start)
+            #     print(end)
+            #     x = z[:, start:end] * sigma[None, :] + mu[None, :]
+            #     x_list.append(x)
+            #
+            #     start += n_detail1s
+            #     end += n_detail1s
+            #
+            # # z shape is (batch, npix=3*detail_npix)
+            # x_final = jnp.concatenate(x_list, axis=1)
+
+            assert x_final.shape == z.shape, (
+                f'Shapes do not match, ({x_final.shape} vs. {z.shape}).'
+            )
+
+            return x_final
+            
+        return _unnormalise
+
     def clear(self) -> None:
         self.mu_at_level = []
         self.std_at_level = []
+        self.mu_at_level_post = self._make_mu_post_dict()
+        self.std_at_level_post = self._make_std_post_dict()
         self.empty_norm_stats_flag = True
 
     def forward(self, data: NDArray) -> tuple[NDArray, NDArray]:
@@ -359,7 +427,7 @@ class HaarWaveletTransform(InvertibleDataTransform):
     def inverse(self, transformed_data: NDArray) -> NDArray:
         return self._reverse_cycle_healpix_tree(transformed_data)
 
-    def _build_surjective_blocks(self, n_chunks: int = 1) -> list[tuple[NDArray, int, int]]:
+    def _build_surjective_blocks(self) -> list[tuple[NDArray, int, int]]:
         detail_sizes = []
         ns = self.first_nside
         while ns > self.last_nside:
@@ -372,7 +440,7 @@ class HaarWaveletTransform(InvertibleDataTransform):
         steps = build_funnel_steps(
             n_coarse=self.last_npix, 
             detail_lengths=block_lengths[1:],
-            n_chunks=n_chunks
+            n_chunks=self.n_chunks
         )
         return steps
 
@@ -385,7 +453,7 @@ class HaarWaveletTransform(InvertibleDataTransform):
         coefficients_fine2coarse: list[NDArray] = [] 
         a_list: list[NDArray] = []
         logdets_at_each_level: list[NDArray] = []
-        post_norm_logdet: NDArray = np.asarray(0.)
+        post_norm_logdet: NDArray = np.zeros(batches)
         
         if self.post_normalise and self.empty_norm_stats_flag:
             assert batches > 1, 'More than 1 batch needed to define std.'
@@ -551,10 +619,11 @@ class HaarWaveletTransform(InvertibleDataTransform):
                     if i == 0:
                         pass
                     else:
-                        mean_di = self.mu_at_level_post['detail'][i-1][lvl_idx - lvl]
-                        std_di = self.std_at_level_post['detail'][i-1][lvl_idx - lvl]
+                        if self.normalise_details:
+                            mean_di = self.mu_at_level_post['detail'][i-1][lvl_idx - lvl]
+                            std_di = self.std_at_level_post['detail'][i-1][lvl_idx - lvl]
 
-                        y_pre[..., i] = y_pre[..., i] * std_di + mean_di
+                            y_pre[..., i] = y_pre[..., i] * std_di + mean_di
 
             data = self._inverse_matrix_product(y_pre)
 

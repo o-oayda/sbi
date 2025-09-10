@@ -1,7 +1,7 @@
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Optional, Literal
 from numpy.typing import NDArray
-from dipolesbi.tools.transforms import HaarWaveletTransform, InvertibleDataTransform, ZScore
+from dipolesbi.tools.transforms import BlankTransform, HaarWaveletTransform, InvertibleDataTransform, ZScore
 
 
 @dataclass
@@ -47,7 +47,6 @@ class SurjectiveNLEConfig:
     n_coarse: Optional[int] = 0 # only for coarse
     data_reduction_factor: Optional[float] = None # only for standard/coarse
 
-    blocks: list[tuple[NDArray, int, int]] = field(default_factory=list)
     conditioner_kwargs: dict = field(default_factory=dict)
     flow_type: str = field(default='custom', init=False)
 
@@ -60,13 +59,11 @@ class SurjectiveNLEConfig:
     @classmethod
     def heirarchical(
         cls,
-        blocks: list[tuple[NDArray, int, int]],
         maf_stack_size: int = 8,
         **overrides
     ) -> 'SurjectiveNLEConfig':
         """Coarse-grained flow configuration for faster training."""
         config = cls(
-            blocks=blocks,
             maf_stack_size=maf_stack_size,
             **overrides
         )
@@ -107,7 +104,6 @@ class MultiRoundInfererConfig:
     load_simulations: Optional[str] = None
     reference_theta: Optional[dict[str, NDArray]] = None
     plot_save_dir: str = 'nle_out'
-    custom_data_transform: Optional[InvertibleDataTransform] = ZScore()
     simulations_per_round: int = field(init=False)
     simulation_path: Optional[str] = field(init=False)
     dequantise_data: bool = False
@@ -130,6 +126,40 @@ class MultiRoundInfererConfig:
             )
 
 @dataclass
+class TransformConfig:
+    transform: InvertibleDataTransform = field(default=BlankTransform(), init=False)
+    first_nside: Optional[int] = None
+    last_nside: Optional[int] = None
+    post_normalise: Optional[bool] = None
+    matrix_type: Optional[str] = None
+    normalise_details: Optional[bool] = None
+    n_chunks: Optional[int] = None
+
+    @classmethod
+    def haar_wavelet(
+            cls,
+            first_nside: int = 16,
+            last_nside: int = 1,
+            post_normalise: bool = False,
+            matrix_type: str = 'hadamard',
+            normalise_details: bool = True,
+            n_chunks: int = 1
+    ) -> 'TransformConfig':
+        config = cls(
+            first_nside=first_nside,
+            last_nside=last_nside,
+            post_normalise=post_normalise,
+            matrix_type=matrix_type,
+            normalise_details=normalise_details,
+            n_chunks=n_chunks
+        )
+        config_dict = asdict(config)
+        del config_dict['transform']
+        data_transform_instance = HaarWaveletTransform(**config_dict)
+        config.transform = data_transform_instance
+        return config
+        
+@dataclass
 class ConfigOfConfigs:
     '''
     Meta configuration class for configs which, from experimenting, work well in
@@ -138,6 +168,7 @@ class ConfigOfConfigs:
     training_config: TrainingConfig
     multiround_config: MultiRoundInfererConfig
     ssnle_config: SurjectiveNLEConfig
+    transform_config: TransformConfig
 
     # low learning rate high nside?
     # ok not weighting by round helps in keeping posterior narrow
@@ -154,9 +185,11 @@ class ConfigOfConfigs:
             'first_nside': 16,
             'last_nside': 1,
             'post_normalise': False,
+            'matrix_type': 'hadamard',
+            'normalise_details': True,
+            'n_chunks': 1,
             **transform_overrides
         }
-        haar_transform = HaarWaveletTransform(**transform_dict)
         train_dict = {
             'patience': 20, 
             'learning_rate': 5e-5, # 5e-5 for optimal nside=16
@@ -167,7 +200,6 @@ class ConfigOfConfigs:
         mr_dict = {
             'simulation_budget': 50_000,
             'n_rounds': 15,
-            'custom_data_transform': haar_transform,
             'reference_theta': reference_theta,
             'dequantise_data': False,
             'initial_fraction': 0.5,
@@ -176,7 +208,6 @@ class ConfigOfConfigs:
             **multiround_overrides
         }
         nle_dict = {
-            'blocks': haar_transform._build_surjective_blocks(n_chunks=1),
             'maf_stack_size': 15,
             'conditioner_n_layers': 4,
             'conditioner_n_neurons': 256,
@@ -188,10 +219,12 @@ class ConfigOfConfigs:
         train_config = TrainingConfig(**train_dict)
         mr_config = MultiRoundInfererConfig(**mr_dict)
         nle_config = SurjectiveNLEConfig.heirarchical(**nle_dict)
+        transform_config = TransformConfig.haar_wavelet(**transform_dict)
         return cls(
             training_config=train_config,
             multiround_config=mr_config,
-            ssnle_config=nle_config
+            ssnle_config=nle_config,
+            transform_config=transform_config
         )
 
     @classmethod
@@ -209,7 +242,6 @@ class ConfigOfConfigs:
             'post_normalise': False,
             **transform_overrides
         }
-        haar_transform = HaarWaveletTransform(**transform_dict)
         train_dict = {
             'patience': 20, 
             'learning_rate': 1e-5,
@@ -220,7 +252,6 @@ class ConfigOfConfigs:
         mr_dict = {
             'simulation_budget': 50_000,
             'n_rounds': 15,
-            'custom_data_transform': haar_transform,
             'reference_theta': reference_theta,
             'dequantise_data': False,
             'initial_fraction': 0.5,
@@ -229,7 +260,6 @@ class ConfigOfConfigs:
             **multiround_overrides
         }
         nle_dict = {
-            'blocks': haar_transform._build_surjective_blocks(n_chunks=1),
             'maf_stack_size': 15,
             'conditioner_n_layers': 4,
             'conditioner_n_neurons': 256, # don't drop these, hinders inference, 20250905_094425
@@ -241,8 +271,10 @@ class ConfigOfConfigs:
         train_config = TrainingConfig(**train_dict)
         mr_config = MultiRoundInfererConfig(**mr_dict)
         nle_config = SurjectiveNLEConfig.heirarchical(**nle_dict)
+        transform_config = TransformConfig.haar_wavelet(**transform_dict)
         return cls(
             training_config=train_config,
             multiround_config=mr_config,
-            ssnle_config=nle_config
+            ssnle_config=nle_config,
+            transform_config=transform_config
         )

@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Callable
+from typing import Callable, Optional
 from anesthetic import NestedSamples
 from blackjax.types import PRNGKey
 from getdist import MCSamples, plots
@@ -11,7 +11,7 @@ from numpy.typing import NDArray
 from jax import numpy as jnp
 from matplotlib import pyplot as plt
 import healpy as hp
-from dipolesbi.tools.configs import MultiRoundInfererConfig, SurjectiveNLEConfig, TrainingConfig
+from dipolesbi.tools.configs import MultiRoundInfererConfig, SurjectiveNLEConfig, TrainingConfig, TransformConfig
 from dipolesbi.tools.dataloader import split_train_val_dict
 from dipolesbi.tools.inference import JaxNestedSampler
 from dipolesbi.tools.maps import SimpleDipoleMapJax
@@ -37,8 +37,9 @@ class MultiRoundInferer:
             ],
             reference_observation: NDArray,
             multi_round_config: MultiRoundInfererConfig,
+            transform_config: Optional[TransformConfig] = None,
             nle_config: SurjectiveNLEConfig = SurjectiveNLEConfig.standard(),
-            train_config: TrainingConfig = TrainingConfig()
+            train_config: TrainingConfig = TrainingConfig(),
     ) -> None:
         self.mr_config = multi_round_config
 
@@ -69,8 +70,12 @@ class MultiRoundInferer:
         self.theta_mean = None
         self.theta_std = None
 
-        if self.mr_config.custom_data_transform is None:
-            self.mr_config.custom_data_transform = BlankTransform()
+        if transform_config is None:
+            self.data_transform = BlankTransform()
+            self.transform_config = None
+        else:
+            self.data_transform = transform_config.transform
+            self.transform_config = transform_config
 
         self.all_data = np.full(
             (self.mr_config.simulation_budget, self.data_ndim), np.nan,
@@ -140,6 +145,8 @@ class MultiRoundInferer:
             self.ui.begin_global_progress(total=self.mr_config.simulation_budget)
             self.ui.set_stats_columns(columns=['Round', 'Evidence'])
 
+            self._dump_configs()
+
             for round_idx in range(self.mr_config.n_rounds):
                 self.ui.reset()
                 self.ui.set_round(round_idx, self.mr_config.n_rounds)
@@ -192,8 +199,6 @@ class MultiRoundInferer:
         self.final_classic_samples = self.classic_nested_samples
         self.ui.finish_step('benchmarked')
 
-        self._dump_configs()
-
     def _train_nle(self, train_key: PRNGKey) -> None:
         assert self.nle is not None
 
@@ -234,7 +239,7 @@ class MultiRoundInferer:
             f.write("TrainingConfig:\n")
             f.write(str(self.train_config) + "\n\n")
             f.write("TransformConfig:\n")
-            f.write(str(self.mr_config.custom_data_transform) + "\n")
+            f.write(str(self.transform_config) + "\n")
 
     def _sample_likelihood_stream(
             self,
@@ -597,13 +602,13 @@ class MultiRoundInferer:
         '''
         Normalise only using stats computed from the training data.
         '''
-        return self.mr_config.custom_data_transform(data) # type: ignore
+        return self.data_transform(data) # type: ignore
 
     def _untransform_data(self, z: np.ndarray) -> np.ndarray:
-        return self.mr_config.custom_data_transform.inverse(z) # type: ignore
+        return self.data_transform.inverse(z) # type: ignore
 
     def _clear_data_summary_stats(self) -> None:
-        self.mr_config.custom_data_transform.clear() # type: ignore
+        self.data_transform.clear() # type: ignore
 
     def _sample_proposal(
             self,
@@ -663,7 +668,8 @@ class MultiRoundInferer:
         if (not self.train_config.restore_from_previous) or (self.nle is None):
             nle = MAFSurjectiveNeuralLikelihood(
                 self.data_ndim,
-                config=self.nle_config
+                config=self.nle_config,
+                data_transform=self.data_transform
             )
         else:
             nle = self.nle

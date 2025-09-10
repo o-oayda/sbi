@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Callable, Optional
 import distrax
 import haiku as hk
 from haiku._src.transform import Transformed
@@ -28,6 +28,7 @@ from dipolesbi.tools.distributions import IndependentWrapper, NegBinomDist, Pois
 from dipolesbi.tools.healpix_helpers import build_layer_perms, first_layer_stratifying_perm, get_healpix_superpixels, make_latent_dims, permute_within_types
 from dipolesbi.tools.dataloader import as_batch_iterator_cpu2gpu, named_dataset_idx
 from dipolesbi.tools.np_rngkey import NPKeySequence, npkey_from_jax, npkey_sequence_from_hk
+from dipolesbi.tools.transforms import HaarWaveletTransform, InvertibleDataTransform
 from dipolesbi.tools.ui import MultiRoundInfererUI
 
 
@@ -361,11 +362,22 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
     def __init__(
             self,
             data_ndim: int, 
-            config: SurjectiveNLEConfig = SurjectiveNLEConfig()
+            config: SurjectiveNLEConfig = SurjectiveNLEConfig(),
+            data_transform: Optional[InvertibleDataTransform] = None,
     ) -> None:
+        '''
+        If using a heirarchical flow, pass an invertible data transform so
+        the detail blocks can be accessed.
+        '''
         super().__init__()
         self.data_ndim = data_ndim
         self.nle_config = config
+        self.data_transform = data_transform
+
+        if self.nle_config.flow_type == 'heirarchical':
+            assert isinstance(self.data_transform, HaarWaveletTransform)
+            self.blocks = self.data_transform.blocks
+
         self.model = self.get_flow()
 
     def __repr__(self):
@@ -430,7 +442,8 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
             self, 
             n_dimension: int, 
             decoder_distribution: str,
-            eps: float = 1e-8
+            eps: float = 1e-8,
+            integer_transform: Optional[Callable[[jnp.ndarray], jnp.ndarray]] = None
     ):
         decoder_params_lookup = {
             'gaussian': 2,
@@ -439,11 +452,15 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
             'students_t': 3
         }
         self.n_decoder_params = decoder_params_lookup[decoder_distribution]
+        if decoder_distribution == 'poisson':
+            assert integer_transform is not None
+
         # decoder_net = make_mlp_with_dropout(
         #     [self.decoder_n_neurons] * self.decoder_n_layers
         #   + [n_dimension * self.n_decoder_params],
         #     dropout_rate=0.1
         # )
+
         decoder_net = make_mlp(
             [self.nle_config.decoder_n_neurons] * self.nle_config.decoder_n_layers
           + [n_dimension * self.n_decoder_params],
@@ -469,7 +486,11 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
                 log_lambda = jnp.clip(log_lambda, -10, 10)
                 lam = jnp.exp(log_lambda)
                 dist = PoissonDist(lam)
-                return IndependentWrapper(dist, reinterpreted_batch_ndims=1)
+                return IndependentWrapper(
+                    dist, 
+                    reinterpreted_batch_ndims=1, 
+                    integer_transform=integer_transform
+                )
 
             elif decoder_distribution == 'students_t':
                 mu, log_scale, log_df = jnp.split(params, 3, -1)
@@ -557,7 +578,8 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
     def _heirarchical_flow(self, method: str, **kwargs):
         # coarse_block = self.blocks[0]
         # detail_blocks = self.blocks[1:]
-        assert len(self.nle_config.blocks) > 0
+        assert self.data_transform is not None
+        assert len(self.blocks) > 0
         assert self.nle_config.maf_stack_size is not None
 
         self.layers = []
@@ -569,9 +591,15 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         dim = dim0
         self.drop_idxs = []
         self.keep_idxs = []
-        dropped_total = 0       
+        dropped_total = 0
 
-        for _, (per, nk, nd) in enumerate(self.nle_config.blocks):
+        if self.nle_config.decoder_distribution == 'poisson':
+            assert isinstance(self.data_transform, HaarWaveletTransform)
+            integer_transform = self.data_transform.make_unnormalise_details_func
+        else:
+            integer_transform = None
+
+        for lvl, (per, nk, nd) in enumerate(self.blocks):
             n_drop = nd
             n_keep = nk
             perm = per
@@ -582,7 +610,10 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
                 n_keep=n_keep,
                 decoder=self._decoder_fn(
                     n_dimension=n_drop,
-                    decoder_distribution=self.nle_config.decoder_distribution
+                    decoder_distribution=self.nle_config.decoder_distribution,
+                    integer_transform=(
+                        integer_transform(lvl) if integer_transform else None
+                    )
                 ),
                 conditioner=self._conditioner_fn(
                     input_dim=n_keep,

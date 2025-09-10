@@ -1,3 +1,4 @@
+from typing import Callable, Optional
 import jax
 import jax.numpy as jnp
 import jax.random as jr
@@ -107,14 +108,23 @@ class StudentT:
 
 class IndependentWrapper:
     """Minimal 'Independent' wrapper: sums over the last `ndims` dims."""
-    def __init__(self, base_dist, reinterpreted_batch_ndims=1):
+    def __init__(
+            self, 
+            base_dist, 
+            reinterpreted_batch_ndims=1, 
+            integer_transform: Optional[Callable[[jnp.ndarray], jnp.ndarray]] = None
+    ) -> None:
         self.base = base_dist
         self.ndims = reinterpreted_batch_ndims
+        self.integer_transform = integer_transform
 
     def log_prob(self, value):
+        if self.integer_transform is not None:
+            value = self.integer_transform(value)
         lp = self.base.log_prob(value)
         lp_sum = lp.sum(axis=tuple(range(-self.ndims, 0)))  # -> (...,)
-        # jax.debug.print("lp: {l}", l=lp_sum)
+        jax.debug.print("lp: {l}", l=lp_sum)
+        jax.debug.print("value: {val}", val=value)
         return lp_sum
 
     def sample(self, seed, sample_shape=()):

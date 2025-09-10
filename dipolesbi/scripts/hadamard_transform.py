@@ -23,13 +23,13 @@ transform2 = HaarWaveletTransform(
     last_nside=1, 
     post_normalise=True, 
     matrix_type='sparse_average',
-    normalise_details=False
+    normalise_details=True
 )
 zmap2, _ = transform2(dmap2)
 zmap2 = zmap2.squeeze()
 
-bins = np.arange(0, 100)
-plt.hist(zmap2[:, 12:].flatten(), bins=bins, density=True)
-plt.plot(bins, poisson.pmf(bins, mu=50))
-plt.plot(bins, norm.pdf(bins, loc=50, scale=np.sqrt(50)))
-plt.show()
+# bins = np.arange(0, 100)
+# plt.hist(zmap2[:, 12:].flatten(), bins=bins, density=True)
+# plt.plot(bins, poisson.pmf(bins, mu=50))
+# plt.plot(bins, norm.pdf(bins, loc=50, scale=np.sqrt(50)))
+# plt.show()
