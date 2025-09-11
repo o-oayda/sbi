@@ -374,7 +374,7 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         self.nle_config = config
         self.data_transform = data_transform
 
-        if self.nle_config.flow_type == 'heirarchical':
+        if self.nle_config.flow_type in ['heirarchical', 'one_and_done']:
             assert isinstance(self.data_transform, HaarWaveletTransform)
             self.blocks = self.data_transform.blocks
 
@@ -453,6 +453,15 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         }
         self.n_decoder_params = decoder_params_lookup[decoder_distribution]
         if decoder_distribution == 'poisson':
+            # raise NotImplementedError('See comments below.') 
+            # I think the idea to untransform is going to be impossible here
+            # for any surjective flow with n_layers > 1 -> the flow transforms
+            # y to z, so at the next layer I can't recover the original integers
+            # unless I do the chain of inverse transforms and then use the
+            # integer inverse transform.
+
+            # if integer_transform is None:
+            #     integer_transform = lambda x: x
             assert integer_transform is not None
 
         # decoder_net = make_mlp_with_dropout(
@@ -505,19 +514,20 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         return _fn
 
     def _flow(self, method: str, **kwargs):
-        if self.nle_config.flow_type == 'heirarchical':
-            # print('Using heirarchical flow...')
-            return self._heirarchical_flow(method, **kwargs)
-        elif self.nle_config.flow_type == 'standard':
-            # print('Using standard flow...')
-            return self._standard_flow(method, **kwargs)
-        elif self.nle_config.flow_type == 'coarse':
-            # print('Using coarse flow...')
-            return self._coarse_flow(method, **kwargs)
-        else:
-            raise Exception(
+        flow_type_to_method = {
+            'heirarchical': self._heirarchical_flow,
+            'standard': self._standard_flow,
+            'coarse': self._coarse_flow,
+            'one_and_done': self._one_and_done_flow
+        }
+        try:
+            flow_method = flow_type_to_method[self.nle_config.flow_type]
+        except KeyError:
+            raise KeyError(
                 f'Flow type {self.nle_config.flow_type} in config not recognised.'
             )
+
+        return flow_method(method, **kwargs)
 
     def _get_surjective_layer(self, name: str):
         name_to_class = {
@@ -615,6 +625,87 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
                     decoder_distribution=self.nle_config.decoder_distribution,
                     integer_transform=(
                         integer_transform(lvl) if integer_transform else None
+                    )
+                ),
+                conditioner=self._conditioner_fn(
+                    input_dim=n_keep,
+                    output_dim=2 * n_keep
+                )
+            )
+            setattr(surjective_layer, 'n_drop', n_drop) # for __repr__
+            self.layers.append(surjective_layer)
+
+            dim = n_keep
+            dropped_total += n_drop
+
+        # add a MAF bijective stack at the end
+        for _ in range(self.nle_config.maf_stack_size):
+            self.layers.append(
+                MaskedAutoregressive(
+                    bijector_fn=self._bijector_fn,
+                    conditioner=self._conditioner_fn(
+                        input_dim=dim,
+                        output_dim=2 * dim
+                    )
+                )
+            )
+            order = jnp.arange(dim)
+            order = order[::-1]
+            self.layers.append(Permutation(order, 1))
+
+        if self.nle_config.maf_stack_size > 0:
+            self.layers = self.layers[:-1]
+
+        chain = Chain(self.layers)
+        td = TransformedDistribution(self._base_distribution_fn(dim), chain)
+        return td(method, **kwargs)
+
+    def _one_and_done_flow(self, method: str, **kwargs):
+        # coarse_block = self.blocks[0]
+        # detail_blocks = self.blocks[1:]
+        assert self.data_transform is not None
+        assert len(self.blocks) > 0
+        assert self.nle_config.maf_stack_size is not None
+
+        self.layers = []
+        dim0 = self.data_ndim
+        surjective_layer_type = self._get_surjective_layer(
+            self.nle_config.surjective_layer_type
+        )
+
+        dim = dim0
+        self.drop_idxs = []
+        self.keep_idxs = []
+        dropped_total = 0
+
+        if self.nle_config.decoder_distribution == 'poisson':
+            assert isinstance(self.data_transform, HaarWaveletTransform)
+            integer_transform = self.data_transform.make_unnormalise_details_func
+        else:
+            integer_transform = None
+
+        # in a one and done, we want to split off all details immediately
+        n_kp = self.blocks[-1][0]
+        n_drp = dim0 - n_kp
+        assert n_kp + n_drp == dim0
+        truncated_blocks = [(n_kp, n_drp)]
+
+        for lvl, (nk, nd) in enumerate(truncated_blocks):
+            n_drop = nd
+            n_keep = nk
+            # perm = per
+
+            # self.layers.append(Permutation(perm, 1))
+
+            # n_keep and n_dropped split data into y_minus and y_plus, as in
+            # y_plus, y_minus = y[..., : self.n_keep], y[..., self.n_keep :]
+            surjective_layer = surjective_layer_type(
+                n_keep=n_keep,
+                decoder=self._decoder_fn(
+                    n_dimension=n_drop,
+                    decoder_distribution=self.nle_config.decoder_distribution,
+                    integer_transform=(
+                        integer_transform('all') if integer_transform else None
                     )
                 ),
                 conditioner=self._conditioner_fn(

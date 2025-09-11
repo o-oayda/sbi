@@ -10,6 +10,7 @@ from dipolesbi.tools.priors_np import DipolePriorNP
 import matplotlib.pyplot as plt
 import os
 import glob
+import argparse
 
 
 def lnZ_plot(inferer: MultiRoundInferer) -> None:
@@ -46,13 +47,34 @@ def lnZ_plot(inferer: MultiRoundInferer) -> None:
     # Save the plot to the latest folder
     save_path = os.path.join(latest_folder, 'lnZ_evolution.png')
     plt.savefig(save_path, bbox_inches='tight')
-
     plt.show()
 
-if __name__ == '__main__':
-    rng_key = PRNGKey(42)
+    # save epoch vs lnz
+    array_save_path = os.path.join(latest_folder, 'epoch_lnZ.npy')
+    np.save(array_save_path, [lnZ_estimates, lnZ_estimates_err])
 
-    NSIDE = 16
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--nside',
+        type=int,
+        help='Nside of simulated maps.'
+    )
+    parser.add_argument(
+        '--ssnle_seed',
+        type=int,
+        help='Integer seed for the multiround inferer pipeline.'
+    )
+    parser.add_argument(
+        '--out_dir',
+        tyoe=str,
+        help='Diretory for simulation outputs.'
+    )
+    args = parser.parse_args()
+
+    x0_rng_key = PRNGKey(42)
+
+    NSIDE = args.nside 
     TOTAL_SOURCES = 1_920_000
     MEAN_DENSITY = np.asarray(TOTAL_SOURCES / hp.nside2npix(NSIDE))
     theta0 = {
@@ -63,7 +85,7 @@ if __name__ == '__main__':
     }
 
     model = SimpleDipoleMap(nside=NSIDE)
-    x0 = model.generate_dipole(npkey_from_jax(rng_key), theta=theta0)
+    x0 = model.generate_dipole(npkey_from_jax(x0_rng_key), theta=theta0)
     model.reference_data = x0
 
     prior = DipolePriorNP(
@@ -76,21 +98,40 @@ if __name__ == '__main__':
     # corner(lb_inferer._samples)
     # plt.show()
 
+    blank_config = ConfigOfConfigs.blank(
+        theta0, 
+        ssnle_overrides={'decoder_distribution': 'poisson'}
+    )
     nside16_config = ConfigOfConfigs.nside16(
         theta0, 
         transform_overrides={
             'post_normalise': True, 
-            'matrix_type': 'sparse_average',
+            'matrix_type': 'hadamard',
             'normalise_details': True
         },
         training_overrides={'restore_from_previous': True},
-        ssnle_overrides={'decoder_distribution': 'poisson'}
+        ssnle_overrides={'decoder_distribution': 'gaussian'},
+        flow_type_override=None,
+        multiround_overrides={
+            'prng_integer_seed': args.ssnle_seed,
+            'dequantise_data': False,
+            # 'n_requantisations': 32,
+            'plot_save_dir': args.out_dir
+        }
     )
     nside32_config = ConfigOfConfigs.nside32(
         theta0, 
         transform_overrides={'post_normalise': True},
-        multiround_overrides={'simulation_budget': 100_000, 'dequantise_data': False}, # 'n_requantisations': 32},
-        training_overrides={'warmup_epochs': 0.5, 'restore_from_previous': False, 'batch_size': 400}
+        multiround_overrides={
+            'simulation_budget': 100_000, 
+            'dequantise_data': True,
+            'n_requantisations': 32,
+        },
+        training_overrides={
+            'warmup_epochs': 0.5, 
+            'restore_from_previous': True, 
+            'batch_size': 200
+        }
     )
     meta_cfg = {
         16: nside16_config,

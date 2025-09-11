@@ -71,6 +71,20 @@ class SurjectiveNLEConfig:
         return config
 
     @classmethod
+    def one_and_done(
+        cls,
+        maf_stack_size: int = 8,
+        **overrides
+    ) -> 'SurjectiveNLEConfig':
+        """Coarse-grained flow configuration for faster training."""
+        config = cls(
+            maf_stack_size=maf_stack_size,
+            **overrides
+        )
+        config.flow_type = 'one_and_done'
+        return config
+
+    @classmethod
     def standard(
         cls,
         n_layers: int = 3,
@@ -158,6 +172,12 @@ class TransformConfig:
         data_transform_instance = HaarWaveletTransform(**config_dict)
         config.transform = data_transform_instance
         return config
+
+    @classmethod
+    def blank_transform(cls) -> 'TransformConfig':
+        config = cls()
+        config.transform = BlankTransform()
+        return config
         
 @dataclass
 class ConfigOfConfigs:
@@ -170,6 +190,33 @@ class ConfigOfConfigs:
     ssnle_config: SurjectiveNLEConfig
     transform_config: TransformConfig
 
+    @classmethod
+    def blank(
+            cls,
+            reference_theta: dict[str, NDArray],
+            training_overrides: dict = {},
+            multiround_overrides: dict = {},
+            ssnle_overrides: dict = {}
+    ) -> 'ConfigOfConfigs':
+        transform_config = TransformConfig.blank_transform()
+        train_config = TrainingConfig(**training_overrides)
+        mr_config_dict = {
+            'simulation_budget': 10_000,
+            'n_rounds': 15,
+            **multiround_overrides
+        }
+        mr_config = MultiRoundInfererConfig(
+            reference_theta=reference_theta, 
+            **mr_config_dict
+        )
+        nle_config = SurjectiveNLEConfig.standard(**ssnle_overrides)
+        return cls(
+            training_config=train_config,
+            multiround_config=mr_config,
+            ssnle_config=nle_config,
+            transform_config=transform_config
+        )
+
     # low learning rate high nside?
     # ok not weighting by round helps in keeping posterior narrow
     @classmethod
@@ -179,7 +226,8 @@ class ConfigOfConfigs:
             training_overrides: dict = {},
             multiround_overrides: dict = {},
             ssnle_overrides: dict = {},
-            transform_overrides: dict = {}
+            transform_overrides: dict = {},
+            flow_type_override: Optional[Literal['one_and_done']] = None
     ) -> 'ConfigOfConfigs':
         transform_dict = {
             'first_nside': 16,
@@ -218,7 +266,13 @@ class ConfigOfConfigs:
         }
         train_config = TrainingConfig(**train_dict)
         mr_config = MultiRoundInfererConfig(**mr_dict)
-        nle_config = SurjectiveNLEConfig.heirarchical(**nle_dict)
+
+        if flow_type_override:
+            type_to_method = {'one_and_done': SurjectiveNLEConfig.one_and_done}
+            nle_config = type_to_method[flow_type_override](**nle_dict)
+        else:
+            nle_config = SurjectiveNLEConfig.heirarchical(**nle_dict)
+
         transform_config = TransformConfig.haar_wavelet(**transform_dict)
         return cls(
             training_config=train_config,

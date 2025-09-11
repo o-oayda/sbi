@@ -19,6 +19,14 @@ import jax
 from dipolesbi.tools.np_rngkey import NPKey
 
 
+def is_integerish_f32(x, ulps=1):
+    x = np.asarray(x, dtype=np.float32)
+    # handle zeros cleanly
+    mag = np.maximum(np.abs(x), np.float32(1.0))
+    m = np.floor(np.log2(mag)).astype(np.int32)
+    spacing = np.exp2(m - 23).astype(np.float32)   # 1 ulp at each magnitude
+    return np.all(np.abs(x - np.rint(x)) <= ulps * spacing)
+
 class HidePrints:
     def __enter__(self):
         self._original_stdout = sys.stdout

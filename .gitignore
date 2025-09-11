@@ -6,6 +6,7 @@ launch.json
 *.pkl
 *.fits
 *.sh
+!exp_scripts/*
 !setup_pytorch.sh
 simulations/*
 ultranest_logs/*

@@ -119,12 +119,13 @@ class IndependentWrapper:
         self.integer_transform = integer_transform
 
     def log_prob(self, value):
+        # jax.debug.print("value before: {val}", val=value)
         if self.integer_transform is not None:
             value = self.integer_transform(value)
         lp = self.base.log_prob(value)
         lp_sum = lp.sum(axis=tuple(range(-self.ndims, 0)))  # -> (...,)
-        jax.debug.print("lp: {l}", l=lp_sum)
-        jax.debug.print("value: {val}", val=value)
+        # jax.debug.print("lp: {l}", l=lp_sum)
+        # jax.debug.print("value after: {val}", val=value)
         return lp_sum
 
     def sample(self, seed, sample_shape=()):

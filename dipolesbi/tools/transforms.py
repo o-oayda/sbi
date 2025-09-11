@@ -301,8 +301,8 @@ class HaarWaveletTransform(InvertibleDataTransform):
         # 3 detail coefficients; ell levels per coefficient
         # at every level ell, we have nside(ell) total pixels
         # 3/4 are details, the other 1/4 coarse
-        self.mu_at_level_post = self._make_mu_post_dict()
-        self.std_at_level_post = self._make_std_post_dict()
+        self.mu_at_level_post = self._make_post_dict()
+        self.std_at_level_post = self._make_post_dict()
 
         self.empty_norm_stats_flag: bool = True
         self.post_normalise: bool = post_normalise
@@ -310,7 +310,7 @@ class HaarWaveletTransform(InvertibleDataTransform):
         self.n_chunks = n_chunks
         self.blocks = self._build_surjective_blocks()
 
-    def _make_mu_post_dict(self) -> dict:
+    def _make_post_dict(self) -> dict:
         return {
             'coarse': np.nan * np.empty(self.npix_per_level[-1] // 4),
             'detail': {i:
@@ -322,17 +322,31 @@ class HaarWaveletTransform(InvertibleDataTransform):
             }
         }
 
-    def _make_std_post_dict(self) -> dict:
-        return {
-            'coarse': np.nan * np.empty(self.npix_per_level[-1] // 4),
-            'detail': {i:
-                {
-                    j: np.nan * np.empty(self.npix_per_level[::-1][j] // 4)
-                    for j in range(self.n_levels)
-                }
-            for i in range(3)
-            }
-        }
+    def _post_dict_is_empty(self, check_detail: bool = True, check_coarse: bool = True) -> bool:
+        """
+        Checks that all arrays in the mu_post_dict contain only np.nan values.
+        """
+        # Check 'coarse' array
+        if check_coarse:
+            if not np.isnan(self.mu_at_level_post['coarse']).all():
+                return False
+
+            if not np.isnan(self.std_at_level_post['coarse']).all():
+                return False
+
+        if check_detail:
+            for i in self.mu_at_level_post['detail']:
+                for j in self.mu_at_level_post['detail'][i]:
+                    arr = self.mu_at_level_post['detail'][i][j]
+                    if not np.isnan(arr).all():
+                        return False
+
+            for i in self.std_at_level_post['detail']:
+                for j in self.std_at_level_post['detail'][i]:
+                    arr = self.std_at_level_post['detail'][i][j]
+                    if not np.isnan(arr).all():
+                        return False
+        return True
 
     def __repr__(self) -> str:
         return (
@@ -360,65 +374,94 @@ class HaarWaveletTransform(InvertibleDataTransform):
 
     def make_unnormalise_details_func(
             self, 
-            level: int
+            level: int | Literal['all']
     ) -> Callable[[jnp.ndarray], jnp.ndarray]:
         # in mu_at_level_post, level_idx 0 corresponds to the finest level
         # being the first one thrown away in the heirarchical SSNLE
         # note details are interleaved
         # [d1_0, d2_0, d3_0,  d1_1, d2_1, d3_1, ..., d1_{P-1}, d2_{P-1}, d3_{P-1}]
 
-        # get stats for the three detail coefficients
-        mu1, mu2, mu3 = (self.mu_at_level_post['detail'][i][level] for i in range(3))
-        std1, std2, std3 = (self.std_at_level_post['detail'][i][level] for i in range(3))
-        n_detail1s = mu1.shape[0]
+        if level == 'all':
+            L = self.n_levels  # = log2(first_nside) - log2(last_nside)
+            sizes = []
+            mu_levels = []
+            std_levels = []
+            for lvl_coarse_to_fine in range(L):
+                idx = L - 1 - lvl_coarse_to_fine
 
-        # take in a block of 3 detail coefficients; unnormalise
-        def _unnormalise(z: jnp.ndarray):
-            assert z.ndim == 2
-            assert 3 * n_detail1s == z.shape[-1]
+                mu1 = jnp.asarray(self.mu_at_level_post['detail'][0][idx])
+                mu2 = jnp.asarray(self.mu_at_level_post['detail'][1][idx])
+                mu3 = jnp.asarray(self.mu_at_level_post['detail'][2][idx])
 
-            B, threeP = z.shape
-            P = threeP // 3
+                sd1 = jnp.asarray(self.std_at_level_post['detail'][0][idx])
+                sd2 = jnp.asarray(self.std_at_level_post['detail'][1][idx])
+                sd3 = jnp.asarray(self.std_at_level_post['detail'][2][idx])
 
-            # reshape to (B, P, 3): channels last
-            z3 = z.reshape(B, P, 3)
+                P = int(mu1.shape[0])
+                sizes.append(P)
 
-            mu  = jnp.stack([mu1,  mu2,  mu3],  axis=-1)  # (P, 3)
-            std = jnp.stack([std1, std2, std3], axis=-1)  # (P, 3)
+                mu_levels.append(jnp.stack([mu1, mu2, mu3], axis=-1))   # (P, 3)
+                std_levels.append(jnp.stack([sd1, sd2, sd3], axis=-1))  # (P, 3)
 
-            x3 = z3 * std[None, :, :] + mu[None, :, :]
-            x_final = x3.reshape(B, threeP)
+            def _unnormalise_all(z):
+                # z: (B, sum_l 3*P_l), concatenated coarse→fine, interleaved within each level
+                assert z.ndim == 2, f"Expected (B, N), got {z.shape}"
+                B, N = z.shape
 
-            # x_list = []
-            # start = 0
-            # end = n_detail0s
-            # for mu, sigma in zip([mu1, mu2, mu3], [std1, std2, std3]):
-            #     print(sigma.shape)
-            #     print(mu.shape)
-            #     print(start)
-            #     print(end)
-            #     x = z[:, start:end] * sigma[None, :] + mu[None, :]
-            #     x_list.append(x)
-            #
-            #     start += n_detail1s
-            #     end += n_detail1s
-            #
-            # # z shape is (batch, npix=3*detail_npix)
-            # x_final = jnp.concatenate(x_list, axis=1)
+                out_parts = []
+                offset = 0
+                for P, mu, sd in zip(sizes, mu_levels, std_levels):
+                    span = 3 * P
+                    block = z[:, offset:offset + span]
+                    assert block.shape[1] == span, "Details length mismatch vs stored stats"
 
-            assert x_final.shape == z.shape, (
-                f'Shapes do not match, ({x_final.shape} vs. {z.shape}).'
-            )
+                    # Interleaved → (B, P, 3)
+                    blk3 = block.reshape(B, P, 3)
+                    # Unnormalise per-pixel, per-channel
+                    x3 = blk3 * sd[None, :, :] + mu[None, :, :]
 
-            return x_final
+                    out_parts.append(x3.reshape(B, span))
+                    offset += span
+
+                assert offset == N, f"Consumed {offset} coeffs but z had {N}"
+                return jnp.concatenate(out_parts, axis=1)
+
+            return _unnormalise_all
+
+        else:
+            mu1, mu2, mu3 = (self.mu_at_level_post['detail'][i][level] for i in range(3))
+            std1, std2, std3 = (self.std_at_level_post['detail'][i][level] for i in range(3))
+            n_detail1s = mu1.shape[0]
+
+            def _unnormalise(z: jnp.ndarray):
+                assert z.ndim == 2
+                assert 3 * n_detail1s == z.shape[-1]
+
+                B, threeP = z.shape
+                P = threeP // 3
+
+                # reshape to (B, P, 3): channels last
+                z3 = z.reshape(B, P, 3)
+
+                mu  = jnp.stack([mu1,  mu2,  mu3],  axis=-1)  # (P, 3)
+                std = jnp.stack([std1, std2, std3], axis=-1)  # (P, 3)
+
+                x3 = z3 * std[None, :, :] + mu[None, :, :]
+                x_final = x3.reshape(B, threeP)
+
+                assert x_final.shape == z.shape, (
+                    f'Shapes do not match, ({x_final.shape} vs. {z.shape}).'
+                )
+
+                return x_final
             
-        return _unnormalise
-
+            return _unnormalise
+            
     def clear(self) -> None:
         self.mu_at_level = []
         self.std_at_level = []
-        self.mu_at_level_post = self._make_mu_post_dict()
-        self.std_at_level_post = self._make_std_post_dict()
+        self.mu_at_level_post = self._make_post_dict()
+        self.std_at_level_post = self._make_post_dict()
         self.empty_norm_stats_flag = True
 
     def forward(self, data: NDArray) -> tuple[NDArray, NDArray]:
@@ -524,6 +567,8 @@ class HaarWaveletTransform(InvertibleDataTransform):
             post_norm_logdet += -np.log(std_coarse).sum(axis=-1) # sum over pixels
 
             if self.empty_norm_stats_flag:
+                assert self._post_dict_is_empty()
+
                 self.mu_at_level_post['coarse'] = mean_coarse
                 self.std_at_level_post['coarse'] = std_coarse
 
@@ -531,6 +576,10 @@ class HaarWaveletTransform(InvertibleDataTransform):
         # (drop the a's there)
         z_parts = [a_coarse.reshape(batches, -1)]  # list[ (B, out_npix) ]
         lvl_idx = self.n_levels - 1
+
+        if self.empty_norm_stats_flag:
+            assert self._post_dict_is_empty(check_coarse=False)
+
         for lvl, y in enumerate(reversed(coefficients_fine2coarse)): # now coarse->fine
             
             if self.post_normalise:
