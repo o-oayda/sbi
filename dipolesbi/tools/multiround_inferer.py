@@ -145,8 +145,6 @@ class MultiRoundInferer:
             self.ui.begin_global_progress(total=self.mr_config.simulation_budget)
             self.ui.set_stats_columns(columns=['Round', 'Evidence'])
 
-            self._dump_configs()
-
             for round_idx in range(self.mr_config.n_rounds):
                 self.ui.reset()
                 self.ui.set_round(round_idx, self.mr_config.n_rounds)
@@ -178,6 +176,9 @@ class MultiRoundInferer:
                 self.nle = self._instantiate_nle()
                 self._train_nle(train_key)
                 self.ui.finish_step('trained')
+
+                if round_idx == 0:
+                    self._dump_configs() # dump after training
 
                 n_samps = self.mr_config.n_likelihood_samples
                 self.ui.start_step(3, 'inspecting', total=n_samps)

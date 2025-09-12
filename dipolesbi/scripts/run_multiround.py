@@ -13,7 +13,7 @@ import glob
 import argparse
 
 
-def lnZ_plot(inferer: MultiRoundInferer) -> None:
+def lnZ_plot(inferer: MultiRoundInferer, out_dir: str) -> None:
     true_lnZ = inferer.true_lnZ
     true_lnZ_err = inferer.true_lnZerr
     lnZ_estimates = inferer.lnZ_per_round
@@ -38,8 +38,11 @@ def lnZ_plot(inferer: MultiRoundInferer) -> None:
     ax.legend()
     plt.tight_layout()
 
-    output_dir = 'nle_out'
-    folders = [f for f in glob.glob(os.path.join(output_dir, '*')) if os.path.isdir(f)]
+    output_dir = out_dir
+    folders = [
+        f for f in glob.glob(os.path.join(output_dir, '*'))
+        if os.path.isdir(f)
+    ]
     if not folders:
         raise RuntimeError(f"No folders found in {output_dir}")
     latest_folder = max(folders, key=os.path.getctime)
@@ -47,7 +50,7 @@ def lnZ_plot(inferer: MultiRoundInferer) -> None:
     # Save the plot to the latest folder
     save_path = os.path.join(latest_folder, 'lnZ_evolution.png')
     plt.savefig(save_path, bbox_inches='tight')
-    plt.show()
+    # plt.show()
 
     # save epoch vs lnz
     array_save_path = os.path.join(latest_folder, 'epoch_lnZ.npy')
@@ -67,7 +70,7 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--out_dir',
-        tyoe=str,
+        type=str,
         help='Diretory for simulation outputs.'
     )
     args = parser.parse_args()
@@ -114,8 +117,8 @@ if __name__ == '__main__':
         flow_type_override=None,
         multiround_overrides={
             'prng_integer_seed': args.ssnle_seed,
-            'dequantise_data': False,
-            # 'n_requantisations': 32,
+            'dequantise_data': True,
+            'n_requantisations': 32,
             'plot_save_dir': args.out_dir
         }
     )
@@ -148,4 +151,4 @@ if __name__ == '__main__':
     )
     inferer.run()
 
-    lnZ_plot(inferer)
+    lnZ_plot(inferer, out_dir=args.out_dir)
