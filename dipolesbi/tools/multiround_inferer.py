@@ -59,7 +59,8 @@ class MultiRoundInferer:
         if not os.path.exists(self.mr_config.plot_save_dir):
             os.makedirs(self.mr_config.plot_save_dir)
         timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        new_plot_dir = os.path.join(self.mr_config.plot_save_dir, timestamp)
+        timestamp_and_seed = f'{timestamp}_SEED{self.mr_config.prng_integer_seed}'
+        new_plot_dir = os.path.join(self.mr_config.plot_save_dir, timestamp_and_seed)
         os.makedirs(new_plot_dir, exist_ok=True)
         self.mr_config.plot_save_dir = new_plot_dir
 
