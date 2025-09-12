@@ -123,7 +123,6 @@ class MultiRoundInfererConfig:
     dequantise_data: bool = False
     n_requantisations: Optional[int] = None
     initial_fraction: float = 0.3
-    learned_fraction: float = 0.7
     n_likelihood_samples: int = 50_000
 
     def __post_init__(self) -> None:
@@ -251,7 +250,6 @@ class ConfigOfConfigs:
             'reference_theta': reference_theta,
             'dequantise_data': False,
             'initial_fraction': 0.5,
-            'learned_fraction': 0.5,
             'n_likelihood_samples': 25_000,
             **multiround_overrides
         }
@@ -309,7 +307,6 @@ class ConfigOfConfigs:
             'reference_theta': reference_theta,
             'dequantise_data': False,
             'initial_fraction': 0.5,
-            'learned_fraction': 0.5,
             'n_likelihood_samples': 25_000,
             **multiround_overrides
         }

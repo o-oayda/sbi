@@ -621,26 +621,44 @@ class MultiRoundInferer:
             self.ui.log('Sampling from initial proposal...')
             prior_samples = self.initial_proposal.sample(key, n_samples)
         else:
-            n_prior = int(0.3 * n_samples)
-            n_posterior = self.mr_config.simulations_per_round - n_prior
+            n_prior = int(self.mr_config.initial_fraction * n_samples)
+            n_posterior = n_samples - n_prior
+            assert n_prior + n_posterior == n_samples
             self.ui.log(
-                f'Sampling from learned posterior {self.mr_config.learned_fraction} '
+                f'Sampling from learned posterior {1 - self.mr_config.initial_fraction} '
                 f'and initial proposal {self.mr_config.initial_fraction}...'
             )
-            posterior_samples = self.nested_samples.sample(
-                n=n_posterior,
-                random_state=self.sample_posterior_seed
-            )
-            self.sample_posterior_seed += 1
-            posterior_samples = self._reformat_samples(posterior_samples)
 
-            _, init_key = key.split()
-            initial_samples = self.initial_proposal.sample(init_key, n_prior)
+            if n_posterior > 0:
+                self.sample_posterior_seed += 1
+                posterior_samples = self.nested_samples.sample(
+                    n=n_posterior,
+                    random_state=self.sample_posterior_seed
+                )
+                posterior_samples = self._reformat_samples(posterior_samples)
+            else:
+                posterior_samples = None
 
-            prior_samples = {
-                k: np.concatenate([posterior_samples[k], initial_samples[k]], axis=0)
-                for k in posterior_samples.keys()
-            }
+            if n_prior > 0:
+                _, init_key = key.split()
+                initial_samples = self.initial_proposal.sample(init_key, n_prior)
+            else:
+                initial_samples = None
+
+            if initial_samples and posterior_samples:
+                prior_samples = {
+                    k: np.concatenate([posterior_samples[k], initial_samples[k]], axis=0)
+                    for k in posterior_samples.keys()
+                }
+            else:
+                if initial_samples and not posterior_samples:
+                    prior_samples = initial_samples
+                elif posterior_samples and not initial_samples:
+                    prior_samples = posterior_samples
+                else:
+                    raise Exception(
+                        'Somehow no posterior or initial samples were generated.'
+                    )
             
         return prior_samples
 
