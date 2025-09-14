@@ -6,7 +6,7 @@ from matplotlib.ticker import ScalarFormatter
 import matplotlib.gridspec as gridspec
 
 
-save_dir = 'exp_out/nside_16_dequantise32'
+save_dir = 'exp_out/nside_16_cold_start'
 
 def main():
     parser = argparse.ArgumentParser(description="Accumulate evidence from subdirectories.")
@@ -16,8 +16,8 @@ def main():
     lnZ = []
     lnZ_err = []
 
-    for subdir in os.listdir(args.save_dir):
-        subdir_path = os.path.join(args.save_dir, subdir)
+    for subdir in os.listdir('exp_out/' + args.save_dir):
+        subdir_path = os.path.join('exp_out/' + args.save_dir, subdir)
         file_path = os.path.join(subdir_path, 'epoch_lnZ.npy')
         if os.path.isdir(subdir_path) and os.path.isfile(file_path):
             data = np.load(file_path, allow_pickle=True)

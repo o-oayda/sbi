@@ -1,4 +1,4 @@
-from typing import Callable, Optional
+from typing import Callable, Literal, Optional
 import distrax
 import haiku as hk
 from haiku._src.transform import Transformed
@@ -9,6 +9,7 @@ from numpy.typing import NDArray
 from surjectors import (
     Chain,
     MaskedAutoregressive,
+    MaskedAutoregressiveInferenceFunnel,
     Permutation,
     RationalQuadraticSplineMaskedAutoregressiveInferenceFunnel,
     TransformedDistribution,
@@ -374,7 +375,7 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         self.nle_config = config
         self.data_transform = data_transform
 
-        if self.nle_config.flow_type in ['heirarchical', 'one_and_done']:
+        if self.nle_config.flow_type in ['heirarchical', 'one_and_done', 'general']:
             assert isinstance(self.data_transform, HaarWaveletTransform)
             self.blocks = self.data_transform.blocks
 
@@ -518,7 +519,8 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
             'heirarchical': self._heirarchical_flow,
             'standard': self._standard_flow,
             'coarse': self._coarse_flow,
-            'one_and_done': self._one_and_done_flow
+            'one_and_done': self._one_and_done_flow,
+            'general': self._general_flow
         }
         try:
             flow_method = flow_type_to_method[self.nle_config.flow_type]
@@ -529,7 +531,10 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
 
         return flow_method(method, **kwargs)
 
-    def _get_surjective_layer(self, name: str):
+    def _get_surjective_layer(
+            self, 
+            name: str
+    ) -> AffineMaskedAutoregressiveInferenceFunnel | RationalQuadraticSplineMaskedAutoregressiveInferenceFunnel:
         name_to_class = {
             'affine_MAF': AffineMaskedAutoregressiveInferenceFunnel,
             'rational_quadratic_MAF': RationalQuadraticSplineMaskedAutoregressiveInferenceFunnel
@@ -585,40 +590,42 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         td = TransformedDistribution(self._base_distribution_fn(dim), chain)
         return td(method, **kwargs)
 
-    def _heirarchical_flow(self, method: str, **kwargs):
-        # coarse_block = self.blocks[0]
-        # detail_blocks = self.blocks[1:]
-        assert self.data_transform is not None
-        assert len(self.blocks) > 0
-        assert self.nle_config.maf_stack_size is not None
+    def _healpix_funnel(
+            self, 
+            surjective_layer_type: (
+                AffineMaskedAutoregressiveInferenceFunnel
+              | RationalQuadraticSplineMaskedAutoregressiveInferenceFunnel
+            ), 
+            layers: list, 
+            blocks: list[tuple[int, int]],
+            in_dim: int,
+            integer_transform: Optional[
+                Callable[
+                    [int | Literal['all']],
+                    Callable[[jnp.ndarray], jnp.ndarray]
+                ]
+            ],
+            one_and_done: bool = False,
+            maf_extension: Optional[int] = None
+    ) -> tuple[list, int]:
+        dim = in_dim
 
-        self.layers = []
-        dim0 = self.data_ndim
-        surjective_layer_type = self._get_surjective_layer(
-            self.nle_config.surjective_layer_type
-        )
+        if one_and_done:
+            assert maf_extension is None
+            n_kp = blocks[-1][0]
+            n_drp = dim - n_kp
+            assert n_kp + n_drp == dim
+            blocks = [(n_kp, n_drp)]
 
-        dim = dim0
-        self.drop_idxs = []
-        self.keep_idxs = []
-        dropped_total = 0
-
-        if self.nle_config.decoder_distribution == 'poisson':
-            assert isinstance(self.data_transform, HaarWaveletTransform)
-            integer_transform = self.data_transform.make_unnormalise_details_func
+        if maf_extension:
+            assert maf_extension % 2 == 0
         else:
-            integer_transform = None
+            maf_extension = 0
 
-        for lvl, (nk, nd) in enumerate(self.blocks):
-            n_drop = nd
-            n_keep = nk
-            # perm = per
-
-            # self.layers.append(Permutation(perm, 1))
-
+        for lvl, (n_keep, n_drop) in enumerate(blocks):
             # n_keep and n_dropped split data into y_minus and y_plus, as in
             # y_plus, y_minus = y[..., : self.n_keep], y[..., self.n_keep :]
-            surjective_layer = surjective_layer_type(
+            surjective_layer = surjective_layer_type( # type: ignore
                 n_keep=n_keep,
                 decoder=self._decoder_fn(
                     n_dimension=n_drop,
@@ -633,31 +640,160 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
                 )
             )
             setattr(surjective_layer, 'n_drop', n_drop) # for __repr__
-            self.layers.append(surjective_layer)
-
+            layers.append(surjective_layer)
             dim = n_keep
-            dropped_total += n_drop
 
-        # add a MAF bijective stack at the end
-        for _ in range(self.nle_config.maf_stack_size):
-            self.layers.append(
-                MaskedAutoregressive(
-                    bijector_fn=self._bijector_fn,
-                    conditioner=self._conditioner_fn(
-                        input_dim=dim,
-                        output_dim=2 * dim
+            # bijective extension
+            for _ in range(maf_extension):
+                layers.append(
+                    MaskedAutoregressive(
+                        bijector_fn=self._bijector_fn,
+                        conditioner=self._conditioner_fn(
+                            input_dim=dim,
+                            output_dim=2 * dim
+                        )
                     )
                 )
-            )
-            order = jnp.arange(dim)
-            order = order[::-1]
-            self.layers.append(Permutation(order, 1))
+                layers = self._reverse_perm(layers, dim)
+                
+        out_dim = dim
+        return layers, out_dim
 
-        if self.nle_config.maf_stack_size > 0:
-            self.layers = self.layers[:-1]
+    def _reverse_perm(self, layers: list, dim: int) -> list:
+        order = jnp.arange(dim)
+        order = order[::-1]
+        layers.append(Permutation(order, 1))
+        return layers
+
+    def _general_flow(self, method: str, **kwargs):
+        assert self.nle_config.architecture is not None
+
+        cur_dim = self.data_ndim
+        self.layers = []
+
+        for layer in self.nle_config.architecture:
+            if layer == 'MAF':
+                self.layers.append(
+                    MaskedAutoregressive(
+                        bijector_fn=self._bijector_fn,
+                        conditioner=self._conditioner_fn(
+                            input_dim=cur_dim,
+                            output_dim=2 * cur_dim
+                        )
+                    )
+                )
+                self.layers = self._reverse_perm(self.layers, cur_dim)
+            elif layer == 'healpix_funnel':
+                assert self.nle_config.surjective_layer_type is not None
+                assert self.nle_config.funnel_one_and_done is not None
+                assert self.nle_config.maf_extension is not None
+
+                surjective_layer_type = self._get_surjective_layer(
+                    self.nle_config.surjective_layer_type
+                )
+                # add surjective healpix funnel
+                self.layers, cur_dim = self._healpix_funnel(
+                    surjective_layer_type, 
+                    self.layers, 
+                    self.blocks, 
+                    cur_dim, 
+                    integer_transform=None,
+                    one_and_done=self.nle_config.funnel_one_and_done,
+                    maf_extension=self.nle_config.maf_extension
+                )
+                # don't add an extra perm --- added by the maf extension
+                if self.nle_config.maf_extension == 0:
+                    self.layers = self._reverse_perm(self.layers, cur_dim)
+            elif layer == 'surjective_MAF':
+                assert self.nle_config.data_reduction_factor is not None
+                n_keep = int(self.nle_config.data_reduction_factor * cur_dim)
+                n_drop = cur_dim - n_keep
+                assert n_keep + n_drop == cur_dim
+
+                surjective_layer_type = self._get_surjective_layer(
+                    self.nle_config.surjective_layer_type
+                )
+                surjective_layer = surjective_layer_type( # type: ignore
+                    n_keep=n_keep,
+                    decoder=self._decoder_fn(
+                        n_dimension=n_drop,
+                        decoder_distribution=self.nle_config.decoder_distribution,
+                        integer_transform=None
+                    ),
+                    conditioner=self._conditioner_fn(
+                        input_dim=n_keep,
+                        output_dim=2 * n_keep
+                    )
+                )
+                setattr(surjective_layer, 'n_drop', n_drop) # for __repr__
+                self.layers.append(surjective_layer)
+                cur_dim = n_keep
+                self.layers = self._reverse_perm(self.layers, cur_dim)
+            else:
+                raise Exception(f'Layer {layer} not recognised.')
+
+        # remove redundant perm at end of stack
+        self.layers = self.layers[:-1]
 
         chain = Chain(self.layers)
-        td = TransformedDistribution(self._base_distribution_fn(dim), chain)
+        td = TransformedDistribution(self._base_distribution_fn(cur_dim), chain)
+        return td(method, **kwargs)
+
+    def _heirarchical_flow(self, method: str, **kwargs):
+        # coarse_block = self.blocks[0]
+        # detail_blocks = self.blocks[1:]
+        assert self.data_transform is not None
+        assert len(self.blocks) > 0
+        assert self.nle_config.architecture is not None
+        assert self.nle_config.funnel_one_and_done is not None
+
+        self.layers = []
+        dim0 = self.data_ndim
+        surjective_layer_type = self._get_surjective_layer(
+            self.nle_config.surjective_layer_type
+        )
+
+        cur_dim = dim0
+        self.drop_idxs = []
+        self.keep_idxs = []
+
+        if self.nle_config.decoder_distribution == 'poisson':
+            assert isinstance(self.data_transform, HaarWaveletTransform)
+            integer_transform = self.data_transform.make_unnormalise_details_func
+        else:
+            integer_transform = None
+
+        for layer in self.nle_config.architecture:
+            if layer == 'MAF':
+                self.layers.append(
+                    MaskedAutoregressive(
+                        bijector_fn=self._bijector_fn,
+                        conditioner=self._conditioner_fn(
+                            input_dim=cur_dim,
+                            output_dim=2 * cur_dim
+                        )
+                    )
+                )
+                self.layers = self._reverse_perm(self.layers, cur_dim)
+            elif layer == 'healpix_funnel':
+                # add surjective healpix funnel
+                self.layers, cur_dim = self._healpix_funnel(
+                    surjective_layer_type, 
+                    self.layers, 
+                    self.blocks, 
+                    cur_dim, 
+                    integer_transform,
+                    one_and_done=self.nle_config.funnel_one_and_done
+                )
+                self.layers = self._reverse_perm(self.layers, cur_dim)
+            else:
+                raise Exception(f'Layer {layer} not recognised.')
+
+        # remove redundant perm at end of stack
+        self.layers = self.layers[:-1]
+
+        chain = Chain(self.layers)
+        td = TransformedDistribution(self._base_distribution_fn(cur_dim), chain)
         return td(method, **kwargs)
 
     def _one_and_done_flow(self, method: str, **kwargs):
@@ -699,7 +835,7 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
 
             # n_keep and n_dropped split data into y_minus and y_plus, as in
             # y_plus, y_minus = y[..., : self.n_keep], y[..., self.n_keep :]
-            surjective_layer = surjective_layer_type(
+            surjective_layer = surjective_layer_type( # type: ignore
                 n_keep=n_keep,
                 decoder=self._decoder_fn(
                     n_dimension=n_drop,

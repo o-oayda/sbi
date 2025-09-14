@@ -1,0 +1,23 @@
+MultiRoundInfererConfig:
+MultiRoundInfererConfig(simulation_budget=50000, n_rounds=15, prng_integer_seed=0, load_simulations=None, reference_theta={'mean_density': array([625.]), 'observer_speed': array([2.]), 'dipole_longitude': array([215.]), 'dipole_latitude': array([40.])}, plot_save_dir='nice_rig/20250914_174458_SEED0', simulations_per_round=3333, simulation_path=None, dequantise_data=False, n_requantisations=None, initial_fraction=0.0, n_likelihood_samples=25000)
+
+SurjectiveNLEConfig:
+SurjectiveNLEConfig(surjective_layer_type='affine_MAF', decoder_distribution='gaussian', decoder_n_neurons=64, decoder_n_layers=3, conditioner='made', conditioner_n_neurons=256, conditioner_n_layers=4, n_layers=None, permute_data=False, architecture=['healpix_funnel', 'MAF', 'MAF'], funnel_one_and_done=False, maf_stack_size=None, n_coarse=0, data_reduction_factor=None, maf_extension=2, conditioner_kwargs={}, flow_type='general')
+
+NLE Instance:
+MAFSurjectiveNeuralLikelihood(
+  [00] AffineMaskedAutoregressiveInferenceFunnel n_keep=768 n_drop: 2304
+  [01] AffineMaskedAutoregressiveInferenceFunnel n_keep=192 n_drop: 576
+  [02] AffineMaskedAutoregressiveInferenceFunnel n_keep=48 n_drop: 144
+  [03] AffineMaskedAutoregressiveInferenceFunnel n_keep=12 n_drop: 36
+  [04] Permutation 
+  [05] MaskedAutoregressive 
+  [06] Permutation 
+  [07] MaskedAutoregressive 
+)
+
+TrainingConfig:
+TrainingConfig(learning_rate=5e-05, max_n_iter=1000, min_n_iter=2, batch_size=100, patience=20, restore_from_previous=False, warmup_epochs=0.3, min_lr_ratio=0.1, clip_norm=1.0, weight_decay=1e-05, shuffle_train=True, shuffle_val=False, validation_fraction=0.1, weight_by_round=False, alpha_weight=1.0)
+
+TransformConfig:
+TransformConfig(transform=HaarWaveletTransform(first_nside=16, last_nside=1, first_npix=3072, last_npix=12, n_levels=4, downscale_factors=[4, 4, 4, 4], mu_at_level=[[1249.9861686197917, 0.015175130208333333, 0.014725477430555555, -0.003376519097222222], [2499.9723372395833, 0.05971310763888889, 0.02246484375, 0.03723828125], [4999.944674479167, 0.10159809027777778, 0.0399140625, 0.10679947916666667], [9999.889348958333, 0.473828125, 0.2330121527777778, 0.0062274305555555555]], std_at_level=[[45.011101885639455, 25.002250230103726, 25.002897654566443, 25.01435118887424], [78.91180514868886, 25.04295258917843, 25.01580388054713, 24.97956774696405], [151.56288270270392, 25.577328743340107, 25.592972758794, 25.055163787822618], [298.5627530293637, 32.53412007089325, 32.53247824520945, 25.067951652316815]], post_normalise=True), first_nside=16, last_nside=1, post_normalise=True, matrix_type='hadamard', normalise_details=True, n_chunks=1)

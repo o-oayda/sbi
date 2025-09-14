@@ -110,16 +110,23 @@ if __name__ == '__main__':
         transform_overrides={
             'post_normalise': True, 
             'matrix_type': 'hadamard',
-            'normalise_details': True
+            'normalise_details': True,
+            'last_nside': 2
         },
-        training_overrides={'restore_from_previous': True},
-        ssnle_overrides={'decoder_distribution': 'gaussian'},
-        flow_type_override=None,
+        training_overrides={'restore_from_previous': False},
+        ssnle_overrides={
+            'decoder_distribution': 'gaussian',
+            'architecture': ['healpix_funnel'], # + 2 * ['MAF'],# + 14 * ['MAF'],
+            'funnel_one_and_done': False,
+            'maf_extension': 4
+        },
         multiround_overrides={
             'prng_integer_seed': args.ssnle_seed,
-            'dequantise_data': True,
-            'n_requantisations': 32,
-            'plot_save_dir': args.out_dir
+            'dequantise_data': False,
+            'n_requantisations': None,
+            'plot_save_dir': args.out_dir,
+            'initial_fraction': 0.,
+            'simulation_budget': 50_000
         }
     )
     nside32_config = ConfigOfConfigs.nside32(
