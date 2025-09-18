@@ -13,6 +13,7 @@ ultranest_logs/*
 results/*
 nle_out/*
 exp_out/*
+nice_rig/*
 
 !dipolesbi/catwise/0p5_17p0/data/**
 !dipolesbi/catwise/0p7_16p8/data/**

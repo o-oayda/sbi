@@ -1,7 +1,7 @@
 from dataclasses import asdict, dataclass, field
 from typing import Optional, Literal
 from numpy.typing import NDArray
-from dipolesbi.tools.transforms import BlankTransform, HaarWaveletTransform, InvertibleDataTransform, ZScore
+from dipolesbi.tools.transforms import BlankTransform, HaarWaveletTransform, InvertibleDataTransform
 
 
 @dataclass
@@ -32,126 +32,51 @@ class SurjectiveNLEConfig:
     '''
     Configuration for the NLE.
     '''
+    # layer types
+    architecture: list[
+        Literal['MAF'] 
+      | Literal['healpix_funnel'] 
+      | Literal['surjective_MAF']
+    ]
     surjective_layer_type: Literal[
         'affine_MAF', 'rational_quadratic_MAF'
     ] = 'affine_MAF'
+    conditioner: Literal['made', 'mlp', 'transformer'] = 'made'
+
+    # layer hyperparams
     decoder_distribution: Literal['gaussian', 'poisson', 'nb', 'students_t'] = 'gaussian'
     decoder_n_neurons: int = 64
     decoder_n_layers: int = 3
-    conditioner: Literal['made', 'mlp', 'transformer'] = 'made'
     conditioner_n_neurons: int = 128
     conditioner_n_layers: int = 3
 
-    n_layers: Optional[int] = None # won't apply to heirarchical
-    permute_data: bool = False # only for coarse
-    architecture: Optional[list[
-        Literal['MAF'] 
-      | Literal['healpix_funnel'] 
-      | Literal['surjective_MAF']]
-    ] = None
+    # healfunnel options
     funnel_one_and_done: Optional[bool] = None
-    maf_stack_size: Optional[int] = None
-    n_coarse: Optional[int] = 0 # only for coarse
-    data_reduction_factor: Optional[float] = None # only for standard/coarse
-    maf_extension: Optional[int] = None
+    funnel_maf_extension: Optional[int] = None
+
+    # generic surjective MAF options
+    data_reduction_factor: Optional[float] = None
 
     conditioner_kwargs: dict = field(default_factory=dict)
-    flow_type: str = field(default='custom', init=False)
 
     def __post_init__(self):
         if self.surjective_layer_type in ['affine_MAF', 'rational_quadratic_MAF']:
             assert self.conditioner == 'made', (
                 f'Conditioner must be MADE when using {self.surjective_layer_type}.'
             )
-        if self.architecture is not None:
-            if 'healpix_funnel' in self.architecture:
-                assert self.funnel_one_and_done is not None
-                idx = self.architecture.index('healpix_funnel')
-                maf_count = sum(1 for x in self.architecture[:idx] if x == 'MAF')
-                assert maf_count % 2 == 0, (
-                    "Number of 'MAF' before 'healpix_funnel' must be even"
-                )
 
-    # TODO: refactor later, remove other flows and only have init/post_init method
-    @classmethod
-    def general(
-        cls,
-        architecture: list[Literal['MAF'] | Literal['healpix_funnel'] | Literal['surjective_MAF']],
-        funnel_one_and_done: Optional[bool] = None,
-        data_reduction_factor: Optional[float] = None,
-        maf_extension: Optional[int] = None,
-        **overrides
-    ) -> 'SurjectiveNLEConfig':
-        if 'healpix_funnel' in architecture:
-            assert funnel_one_and_done is not None
-            assert maf_extension is not None
-            assert maf_extension % 2 == 0
+        if 'healpix_funnel' in self.architecture:
+            assert self.funnel_one_and_done is not None
+            assert self.funnel_maf_extension is not None
+            assert self.funnel_maf_extension % 2 == 0
 
-        if 'surjective_MAF' in architecture:
-            assert data_reduction_factor is not None
-
-        config = cls(
-            architecture=architecture,
-            funnel_one_and_done=funnel_one_and_done,
-            data_reduction_factor=data_reduction_factor,
-            maf_extension=maf_extension,
-            **overrides
-        )
-        config.flow_type = 'general'
-        return config
-
-    @classmethod
-    def heirarchical(
-        cls,
-        architecture: list[Literal['MAF'] | Literal['healpix_funnel']],
-        funnel_one_and_done: bool = False,
-        **overrides
-    ) -> 'SurjectiveNLEConfig':
-        """Coarse-grained flow configuration for faster training."""
-        config = cls(
-            architecture=architecture,
-            funnel_one_and_done=funnel_one_and_done,
-            **overrides
-        )
-        config.flow_type = 'heirarchical'
-        return config
-
-    @classmethod
-    def one_and_done(
-        cls,
-        maf_stack_size: int = 8,
-        **overrides
-    ) -> 'SurjectiveNLEConfig':
-        """Coarse-grained flow configuration for faster training."""
-        config = cls(
-            maf_stack_size=maf_stack_size,
-            **overrides
-        )
-        config.flow_type = 'one_and_done'
-        return config
-
-    @classmethod
-    def standard(
-        cls,
-        n_layers: int = 3,
-        data_reduction_factor = 0.5,
-        **overrides
-    ) -> 'SurjectiveNLEConfig':
-        """Coarse-grained flow configuration for faster training."""
-        config = cls(
-            n_layers=n_layers,
-            data_reduction_factor=data_reduction_factor,
-            **overrides
-        )
-        config.flow_type = 'standard'
-        return config
-
-    @classmethod
-    def coarse(
-        cls
-    ) -> 'SurjectiveNLEConfig':
-        """Coarse-grained flow configuration for faster training."""
-        raise NotImplementedError
+            # assert even number of mafs before healpix funnel
+            # each maf has a inverse order perm, so we need the data in the OG order
+            idx = self.architecture.index('healpix_funnel')
+            maf_count = sum(1 for x in self.architecture[:idx] if x == 'MAF')
+            assert maf_count % 2 == 0, (
+                "Number of 'MAF' before 'healpix_funnel' must be even"
+            )
 
 @dataclass
 class MultiRoundInfererConfig:
@@ -243,18 +168,22 @@ class ConfigOfConfigs:
             multiround_overrides: dict = {},
             ssnle_overrides: dict = {}
     ) -> 'ConfigOfConfigs':
-        transform_config = TransformConfig.blank_transform()
-        train_config = TrainingConfig(**training_overrides)
         mr_config_dict = {
             'simulation_budget': 10_000,
             'n_rounds': 15,
+            'reference_theta': reference_theta,
             **multiround_overrides
         }
-        mr_config = MultiRoundInfererConfig(
-            reference_theta=reference_theta, 
-            **mr_config_dict
-        )
-        nle_config = SurjectiveNLEConfig.standard(**ssnle_overrides)
+        nle_config_dict = {
+            'architecture': 3 * ['MAF'],
+            **ssnle_overrides
+        }
+
+        transform_config = TransformConfig.blank_transform()
+        train_config = TrainingConfig(**training_overrides)
+        mr_config = MultiRoundInfererConfig(**mr_config_dict)
+        nle_config = SurjectiveNLEConfig(**nle_config_dict)
+
         return cls(
             training_config=train_config,
             multiround_config=mr_config,
@@ -301,7 +230,7 @@ class ConfigOfConfigs:
         nle_dict = {
             'architecture': ['healpix_funnel'] + 15 * ['MAF'],
             'funnel_one_and_done': False,
-            'maf_extension': 0,
+            'funnel_maf_extension': 0,
             'conditioner_n_layers': 4,
             'conditioner_n_neurons': 256,
             'decoder_n_layers': 3,
@@ -309,18 +238,12 @@ class ConfigOfConfigs:
             'decoder_distribution': 'gaussian',
             **ssnle_overrides
         }
+
         train_config = TrainingConfig(**train_dict)
         mr_config = MultiRoundInfererConfig(**mr_dict)
-
-        nle_config = SurjectiveNLEConfig.general(**nle_dict)
-
-        # if flow_type_override:
-        #     type_to_method = {'one_and_done': SurjectiveNLEConfig.one_and_done}
-        #     nle_config = type_to_method[flow_type_override](**nle_dict)
-        # else:
-        #     nle_config = SurjectiveNLEConfig.heirarchical(**nle_dict)
-
+        nle_config = SurjectiveNLEConfig(**nle_dict)
         transform_config = TransformConfig.haar_wavelet(**transform_dict)
+
         return cls(
             training_config=train_config,
             multiround_config=mr_config,
@@ -361,6 +284,8 @@ class ConfigOfConfigs:
         }
         nle_dict = {
             'architecture': ['healpix_funnel'] + 15 * ['MAF'],
+            'funnel_one_and_done': False,
+            'funnel_maf_extension': 0,
             'conditioner_n_layers': 4,
             'conditioner_n_neurons': 256, # don't drop these, hinders inference, 20250905_094425
             'decoder_n_layers': 3,
@@ -368,10 +293,12 @@ class ConfigOfConfigs:
             'decoder_distribution': 'gaussian',
             **ssnle_overrides
         }
+
         train_config = TrainingConfig(**train_dict)
         mr_config = MultiRoundInfererConfig(**mr_dict)
-        nle_config = SurjectiveNLEConfig.heirarchical(**nle_dict)
+        nle_config = SurjectiveNLEConfig(**nle_dict)
         transform_config = TransformConfig.haar_wavelet(**transform_dict)
+
         return cls(
             training_config=train_config,
             multiround_config=mr_config,

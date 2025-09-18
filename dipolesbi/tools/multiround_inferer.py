@@ -37,8 +37,8 @@ class MultiRoundInferer:
             ],
             reference_observation: NDArray,
             multi_round_config: MultiRoundInfererConfig,
+            nle_config: SurjectiveNLEConfig,
             transform_config: Optional[TransformConfig] = None,
-            nle_config: SurjectiveNLEConfig = SurjectiveNLEConfig.standard(),
             train_config: TrainingConfig = TrainingConfig(),
     ) -> None:
         self.mr_config = multi_round_config
@@ -461,10 +461,10 @@ class MultiRoundInferer:
             theta = self._transform_theta_jax(params, in_ns=True)
 
             if not self.mr_config.dequantise_data:
-                log_like = self.nle.evaluate_lnlike(theta[None, :], z0)
+                log_like = self.nle.evaluate_lnlike(theta[None, :], z0) # type: ignore
             else:
                 log_like_by_permbatch = jax.vmap(
-                    lambda zi: self.nle.evaluate_lnlike(theta[None, :], zi[None, :])
+                    lambda zi: self.nle.evaluate_lnlike(theta[None, :], zi[None, :]) # type: ignore
                 )(z0)
                 log_like = (
                     jax.scipy.special.logsumexp(log_like_by_permbatch, axis=0)

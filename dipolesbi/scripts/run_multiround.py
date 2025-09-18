@@ -118,7 +118,7 @@ if __name__ == '__main__':
             'decoder_distribution': 'gaussian',
             'architecture': ['healpix_funnel'], # + 2 * ['MAF'],# + 14 * ['MAF'],
             'funnel_one_and_done': False,
-            'maf_extension': 4
+            'funnel_maf_extension': 4
         },
         multiround_overrides={
             'prng_integer_seed': args.ssnle_seed,
