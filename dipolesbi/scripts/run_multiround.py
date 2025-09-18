@@ -153,7 +153,7 @@ if __name__ == '__main__':
         prior, model.generate_dipole, x0,
         multi_round_config=cur_cfg.multiround_config,
         transform_config=cur_cfg.transform_config,
-        nle_config=cur_cfg.ssnle_config,
+        nflow_config=cur_cfg.ssnle_config,
         train_config=cur_cfg.training_config
     )
     inferer.run()

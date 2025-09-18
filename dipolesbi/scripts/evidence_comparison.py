@@ -12,7 +12,7 @@ from jax import random
 from matplotlib import pyplot as plt
 import healpy as hp
 from scipy.stats import norm
-from dipolesbi.tools.configs import MultiRoundInfererConfig, SurjectiveNLEConfig, TrainingConfig
+from dipolesbi.tools.configs import MultiRoundInfererConfig, NeuralFlowConfig, TrainingConfig
 from dipolesbi.tools.dataloader import split_train_val, split_train_val_dict
 from dipolesbi.tools.healpix_helpers import build_funnel_steps
 from dipolesbi.tools.inference import JaxNestedSampler, LikelihoodBasedInferer
@@ -20,7 +20,7 @@ from dipolesbi.tools.maps import SimpleDipoleMap, SimpleDipoleMapJax
 from surjectors.util import named_dataset
 from dipolesbi.tools.dataloader import named_dataset_idx
 from dipolesbi.tools.models import DipolePoisson
-from dipolesbi.tools.neural_flows import MAFSurjectiveNeuralLikelihood
+from dipolesbi.tools.neural_flows import NeuralFlow
 from dipolesbi.tools.np_rngkey import NPKey, NPKeySequence, npkey_from_jax
 from dipolesbi.tools.priors import DipolePrior
 from dipolesbi.tools.priors_jax import DipolePriorJax
@@ -206,7 +206,7 @@ if __name__ == '__main__':
 # nuking the nle with large n_layers and reduction_factor close to 1
 # reduces evidence tension
 # not sure, the accuracy of the evidence is quite noisy at nside=8
-    nle = MAFSurjectiveNeuralLikelihood(
+    nle = NeuralFlow(
         ndim, 
         # n_layers=8, 
         # # data_reduction_factor=0.6, # lower implies larger reduction

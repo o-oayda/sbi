@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Callable, Optional
+from typing import Callable, Literal, Optional
 from anesthetic import NestedSamples
 from blackjax.types import PRNGKey
 from getdist import MCSamples, plots
@@ -11,13 +11,13 @@ from numpy.typing import NDArray
 from jax import numpy as jnp
 from matplotlib import pyplot as plt
 import healpy as hp
-from dipolesbi.tools.configs import MultiRoundInfererConfig, SurjectiveNLEConfig, TrainingConfig, TransformConfig
+from dipolesbi.tools.configs import MultiRoundInfererConfig, NeuralFlowConfig, TrainingConfig, TransformConfig
 from dipolesbi.tools.dataloader import split_train_val_dict
 from dipolesbi.tools.inference import JaxNestedSampler
 from dipolesbi.tools.maps import SimpleDipoleMapJax
 from surjectors.util import named_dataset
 from dipolesbi.tools.dataloader import named_dataset_idx
-from dipolesbi.tools.neural_flows import MAFSurjectiveNeuralLikelihood
+from dipolesbi.tools.neural_flows import NeuralFlow
 from dipolesbi.tools.np_rngkey import NPKey, npkey_from_jax
 from dipolesbi.tools.priors_np import DipolePriorNP
 from dipolesbi.tools.transforms import BlankTransform
@@ -30,6 +30,7 @@ import datetime
 class MultiRoundInferer:
     def __init__(
             self, 
+            mode: Literal['NLE'] | Literal['NPE'],
             initial_proposal: DipolePriorNP,
             simulator_function: Callable[
                 [NPKey, dict[str, NDArray[np.float32]], bool],
@@ -37,10 +38,11 @@ class MultiRoundInferer:
             ],
             reference_observation: NDArray,
             multi_round_config: MultiRoundInfererConfig,
-            nle_config: SurjectiveNLEConfig,
+            nflow_config: NeuralFlowConfig,
             transform_config: Optional[TransformConfig] = None,
             train_config: TrainingConfig = TrainingConfig(),
     ) -> None:
+        self.mode = mode
         self.mr_config = multi_round_config
 
         self.rng_key = jax.random.PRNGKey(self.mr_config.prng_integer_seed)
@@ -52,6 +54,7 @@ class MultiRoundInferer:
 
         self.simulator_function = simulator_function
         self.data_ndim = reference_observation.shape[-1]
+        self.theta_ndim = initial_proposal.ndim
         self.nside = hp.npix2nside(self.data_ndim)
         self.reference_observation = reference_observation
         self.sample_posterior_seed = 0
@@ -64,9 +67,9 @@ class MultiRoundInferer:
         os.makedirs(new_plot_dir, exist_ok=True)
         self.mr_config.plot_save_dir = new_plot_dir
 
-        self.nle_config = nle_config
+        self.nflow_config = nflow_config
         self.train_config = train_config
-        self.nle = None
+        self.nflow = None
 
         self.theta_mean = None
         self.theta_std = None
@@ -96,6 +99,15 @@ class MultiRoundInferer:
         self.lnZ_per_round = []
         self.lnZerr_per_round = []
         self.final_nested_samples = None
+
+    @property
+    def target_ndim(self) -> int:
+        if self.mode == 'NLE':
+            return self.data_ndim
+        elif self.mode == 'NPE':
+            return self.theta_ndim
+        else:
+            raise Exception(f'Mode {self.mode} not recognised.')
 
     # def run_preloaded(self) -> None:
     #     print(f'Loading simulations from {self.mr_config.simulation_path}...')
@@ -131,7 +143,13 @@ class MultiRoundInferer:
     #
     #     self._benchmark_classic(current_key)
 
-    def run(self):
+    def run(self) -> None:
+        if self.mode == 'NLE':
+            self._nle_pipeline()
+        elif self.mode == 'NPE':
+            self._npe_pipeline()
+
+    def _nle_pipeline(self):
         current_key = self.rng_key
         tasks = [
             'Sample proposal', 'Generate simulations',
@@ -174,8 +192,8 @@ class MultiRoundInferer:
                 self.ui.finish_step('simulated')
 
                 self.ui.start_step(2, subtitle='training')
-                self.nle = self._instantiate_nle()
-                self._train_nle(train_key)
+                self.nflow = self._instantiate_nflow()
+                self._train_nflow(train_key)
                 self.ui.finish_step('trained')
 
                 if round_idx == 0:
@@ -197,21 +215,81 @@ class MultiRoundInferer:
 
         self.ui.start_step(5, 'benchmarking')
         self._benchmark_classic(current_key)
-        self.final_nle_samples = self.nested_samples
+        self.final_posterior_samples = self.nested_samples
         self.final_classic_samples = self.classic_nested_samples
         self.ui.finish_step('benchmarked')
 
-    def _train_nle(self, train_key: PRNGKey) -> None:
-        assert self.nle is not None
+    def _npe_pipeline(self):
+        current_key = self.rng_key
+        tasks = [
+            'Sample proposal', 'Generate simulations',
+            'Train NPE', 'Sample posterior'
+        ]
+        self.ui = MultiRoundInfererUI(tasks)
 
-        self.nle.train(
+        with self.ui.session(refresh_per_second=20):
+
+            time.sleep(1) # avoid spam
+            self.ui.begin_global_progress(total=self.mr_config.simulation_budget)
+
+            for round_idx in range(self.mr_config.n_rounds):
+                self.ui.reset()
+                self.ui.set_round(round_idx, self.mr_config.n_rounds)
+                self.current_round = round_idx
+
+                npkey = npkey_from_jax(current_key)
+                proposal_key, sim_key, split_key = npkey.split(3)
+                current_key, train_key, posterior_key = jax.random.split(
+                    current_key, 3
+                )
+
+                self.ui.start_step(0, subtitle='sampling')
+                theta = self._sample_proposal(
+                    key=proposal_key,
+                    n_samples=self.mr_config.simulations_per_round,
+                    use_initial=True if round_idx == 0 else False
+                )
+                self.ui.finish_step('sampled')
+
+                self.ui.start_step(1, subtitle='simulating')
+                data = self._generate_simulations(sim_key, theta)
+                self._add_to_simulation_pool(sim_key, data, theta)
+                self.trn_set, self.val_set = self._make_train_val_set(split_key)
+                del data; del theta
+                self.ui.finish_step('simulated')
+
+                self.ui.start_step(2, subtitle='training')
+                self.nflow = self._instantiate_nflow()
+                self._train_nflow(train_key)
+                self.ui.finish_step('trained')
+
+                if round_idx == 0:
+                    self._dump_configs() # dump after training
+
+                self.ui.start_step(3, 'computing')
+                self._sample_posterior(posterior_key)
+                self.ui.finish_step('computed')
+
+                self._clear_data_summary_stats()
+                plt.close('all')
+                self.ui.advance_global(n=self.mr_config.simulations_per_round)
+
+        self.ui.start_step(5, 'benchmarking')
+        self.final_posterior_samples = self.nested_samples
+        self.final_classic_samples = self.classic_nested_samples
+        self.ui.finish_step('benchmarked')
+
+    def _train_nflow(self, train_key: PRNGKey) -> None:
+        assert self.nflow is not None
+
+        self.nflow.train(
             hk.PRNGSequence(train_key),
             self.trn_set, 
             self.val_set,
             config=self.train_config,
             ui=self.ui
         )
-        self.nle.plot_loss_curve(
+        self.nflow.plot_loss_curve(
             show=False, 
             save_path=(
                 self.mr_config.plot_save_dir
@@ -235,9 +313,9 @@ class MultiRoundInferer:
             f.write("MultiRoundInfererConfig:\n")
             f.write(str(self.mr_config) + "\n\n")
             f.write("SurjectiveNLEConfig:\n")
-            f.write(str(self.nle_config) + "\n\n")
+            f.write(str(self.nflow_config) + "\n\n")
             f.write("NLE Instance:\n")
-            f.write(str(self.nle) + "\n\n")
+            f.write(str(self.nflow) + "\n\n")
             f.write("TrainingConfig:\n")
             f.write(str(self.train_config) + "\n\n")
             f.write("TransformConfig:\n")
@@ -250,7 +328,7 @@ class MultiRoundInferer:
             chunk_bytes_gb: float = 0.25
     ) -> NDArray[np.float32]:
         assert self.mr_config.reference_theta is not None
-        assert self.nle is not None
+        assert self.nflow is not None
 
         ndim = self.data_ndim
         bytes_per_elem = 4  # float32
@@ -277,7 +355,7 @@ class MultiRoundInferer:
 
             rng_key, subkey = jax.random.split(rng_key)
 
-            samples = self.nle.sample_likelihood_func(
+            samples = self.nflow.sample_likelihood_func(
                 subkey,
                 theta0=theta_chunk,
                 sample_shape=(batch_size,)
@@ -297,7 +375,7 @@ class MultiRoundInferer:
         _, simulate_key = jax.random.split(rng_key)
 
         assert self.mr_config.reference_theta is not None
-        assert self.nle is not None
+        assert self.nflow is not None
 
         samples = self._sample_likelihood_stream(rng_key, n_repeats)
         true_mean_likelihood = self.simulator_function(
@@ -325,7 +403,10 @@ class MultiRoundInferer:
             bbox_inches='tight'
         )
 
-    def _benchmark_classic(self, rng_key: PRNGKey) -> None:
+    def _get_true_posterior_and_evidence(
+            self, 
+            rng_key: PRNGKey
+    ) -> tuple[float, float, NestedSamples]:
         classic_model = SimpleDipoleMapJax(
             self.nside,
             reference_data=jnp.asarray(self.reference_observation)
@@ -340,10 +421,10 @@ class MultiRoundInferer:
             ui=self.ui
         )
         self.classic_jax_ns.setup(rng_key, n_live=1000, n_delete=200)
-        self.classic_nested_samples = self.classic_jax_ns.run()
+        classic_nested_samples = self.classic_jax_ns.run()
 
-        self.true_lnZ = self.classic_nested_samples.logZ()
-        self.true_lnZerr = self.classic_nested_samples.logZ(100).std() # type: ignore
+        true_lnZ = classic_nested_samples.logZ()
+        true_lnZerr = classic_nested_samples.logZ(100).std() # type: ignore
         self.ui.log(
             f"NLE Log Evidence: {self.nested_samples.logZ():.2f} "
             f"± {self.nested_samples.logZ(100).std():.2f}" # type: ignore
@@ -352,6 +433,13 @@ class MultiRoundInferer:
             f"Classic Log Evidence: {self.true_lnZ:.2f} "
             f"± {self.true_lnZerr:.2f}" # type: ignore
         )
+        return true_lnZ, true_lnZerr, classic_nested_samples
+
+    def _benchmark_classic(self, rng_key: PRNGKey) -> None:
+        self.true_lnZ, self.true_lnZerr, self.classic_nested_samples = (
+            self._get_true_posterior_and_evidence(rng_key)
+        )
+
         diff = self.nested_samples.logZ() - self.true_lnZ # type: ignore
         sigma = (
             np.abs(diff) # type: ignore
@@ -426,6 +514,9 @@ class MultiRoundInferer:
             return lax.dynamic_update_slice(dst, src, idx)
         return jax.tree.map(put, storage, batch)
 
+    def _sample_posterior(self, posterior_key: PRNGKey) -> None:
+        raise NotImplementedError
+
     def _compute_posterior(self, posterior_key: PRNGKey) -> None:
         ns_key, dequantise_key = jax.random.split(posterior_key)
 
@@ -461,10 +552,10 @@ class MultiRoundInferer:
             theta = self._transform_theta_jax(params, in_ns=True)
 
             if not self.mr_config.dequantise_data:
-                log_like = self.nle.evaluate_lnlike(theta[None, :], z0) # type: ignore
+                log_like = self.nflow.evaluate_lnlike(theta[None, :], z0) # type: ignore
             else:
                 log_like_by_permbatch = jax.vmap(
-                    lambda zi: self.nle.evaluate_lnlike(theta[None, :], zi[None, :]) # type: ignore
+                    lambda zi: self.nflow.evaluate_lnlike(theta[None, :], zi[None, :]) # type: ignore
                 )(z0)
                 log_like = (
                     jax.scipy.special.logsumexp(log_like_by_permbatch, axis=0)
@@ -684,13 +775,13 @@ class MultiRoundInferer:
     ) -> NDArray:
         return self.simulator_function(key, theta, True)
 
-    def _instantiate_nle(self) -> MAFSurjectiveNeuralLikelihood:
-        if (not self.train_config.restore_from_previous) or (self.nle is None):
-            nle = MAFSurjectiveNeuralLikelihood(
-                self.data_ndim,
-                config=self.nle_config,
+    def _instantiate_nflow(self) -> NeuralFlow:
+        if (not self.train_config.restore_from_previous) or (self.nflow is None):
+            nflow = NeuralFlow(
+                self.target_ndim,
+                config=self.nflow_config,
                 data_transform=self.data_transform
             )
         else:
-            nle = self.nle
-        return nle
+            nflow = self.nflow
+        return nflow

@@ -28,10 +28,11 @@ class TrainingConfig:
 
 # TODO: refactor needed
 @dataclass
-class SurjectiveNLEConfig:
+class NeuralFlowConfig:
     '''
     Configuration for the NLE.
     '''
+    mode: Literal['NLE'] | Literal['NPE']
     # layer types
     architecture: list[
         Literal['MAF'] 
@@ -157,7 +158,7 @@ class ConfigOfConfigs:
     '''
     training_config: TrainingConfig
     multiround_config: MultiRoundInfererConfig
-    ssnle_config: SurjectiveNLEConfig
+    ssnle_config: NeuralFlowConfig
     transform_config: TransformConfig
 
     @classmethod
@@ -182,7 +183,7 @@ class ConfigOfConfigs:
         transform_config = TransformConfig.blank_transform()
         train_config = TrainingConfig(**training_overrides)
         mr_config = MultiRoundInfererConfig(**mr_config_dict)
-        nle_config = SurjectiveNLEConfig(**nle_config_dict)
+        nle_config = NeuralFlowConfig(**nle_config_dict)
 
         return cls(
             training_config=train_config,
@@ -241,7 +242,7 @@ class ConfigOfConfigs:
 
         train_config = TrainingConfig(**train_dict)
         mr_config = MultiRoundInfererConfig(**mr_dict)
-        nle_config = SurjectiveNLEConfig(**nle_dict)
+        nle_config = NeuralFlowConfig(**nle_dict)
         transform_config = TransformConfig.haar_wavelet(**transform_dict)
 
         return cls(
@@ -296,7 +297,7 @@ class ConfigOfConfigs:
 
         train_config = TrainingConfig(**train_dict)
         mr_config = MultiRoundInfererConfig(**mr_dict)
-        nle_config = SurjectiveNLEConfig(**nle_dict)
+        nle_config = NeuralFlowConfig(**nle_dict)
         transform_config = TransformConfig.haar_wavelet(**transform_dict)
 
         return cls(

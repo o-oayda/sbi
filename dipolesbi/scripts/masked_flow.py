@@ -28,7 +28,7 @@ from surjectors.util import (
     unstack,
 )
 from dipolesbi.tools.models import CustomModelJax, DipolePoisson
-from dipolesbi.tools.neural_flows import MAFNeuralLikelihood, MAFSurjectiveNeuralLikelihood
+from dipolesbi.tools.neural_flows import MAFNeuralLikelihood, NeuralFlow
 from dipolesbi.tools.priors import DipolePrior
 from dipolesbi.tools.priors_jax import DipolePriorJax
 from dipolesbi.tools.simulator import Simulator
@@ -237,7 +237,7 @@ if __name__ == "__main__":
     val_data = named_dataset(normalise_y(y_val), transform_t(t_val))
 
     # nle = MAFNeuralLikelihood(ndim, n_layers=5)
-    nle = MAFSurjectiveNeuralLikelihood(
+    nle = NeuralFlow(
         ndim, 
         n_layers=5, 
         data_reduction_factor=0.5, # lower implies larger reduction

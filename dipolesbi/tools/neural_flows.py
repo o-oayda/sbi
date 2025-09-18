@@ -22,7 +22,7 @@ import sys
 import matplotlib.pyplot as plt
 import logging
 from abc import ABC, abstractmethod
-from dipolesbi.tools.configs import SurjectiveNLEConfig, TrainingConfig
+from dipolesbi.tools.configs import NeuralFlowConfig, TrainingConfig
 from dipolesbi.tools.distributions import IndependentWrapper, NegBinomDist, PoissonDist, StudentT
 from dipolesbi.tools.dataloader import as_batch_iterator_cpu2gpu, named_dataset_idx
 from dipolesbi.tools.np_rngkey import npkey_sequence_from_hk
@@ -40,7 +40,7 @@ def make_mlp_with_dropout(sizes, activation=jax.nn.silu, dropout_rate=0.0):
         return hk.Linear(sizes[-1])(x)
     return net  # callable: net(x, training=bool)
 
-class NeuralLikelihood(ABC):
+class AbstractNeuralFlow(ABC):
     def __init__(self) -> None:
         super().__init__()
         self.losses = []
@@ -86,7 +86,6 @@ class NeuralLikelihood(ABC):
             optax.adamw(learning_rate=lr_schedule, weight_decay=weight_decay)
         )
 
-
     def plot_loss_curve(self, show: bool = True, save_path: Optional[str] = None) -> None:
         _, ax1 = plt.subplots()
         color = 'tab:blue'
@@ -107,18 +106,31 @@ class NeuralLikelihood(ABC):
         if show:
             plt.show()
 
-    def _make_loss_fn(self, round_weights: Optional[jnp.ndarray] = None):
-        def _loss_fn(params, **batch):
-            nlp = self._nll_apply(params, **batch)
+    def _make_loss_fn(
+            self, 
+            mode: Literal['NPE'] | Literal['NLE'],
+            round_weights: Optional[jnp.ndarray] = None,
+    ):
+        def _nle_loss_fn(params, **batch):
+            nlp = self._get_nlp(params, **batch)
             if round_weights is not None:
                 w = round_weights[batch['round_id']]
                 w = w * (w.size / (jnp.sum(w) + 1e-12))
                 return jnp.mean(w * nlp)
             else:
                 return jnp.mean(nlp)
-        return _loss_fn
 
-    def _nll_apply(self, params, **batch):
+        def _npe_loss_fn(params, **batch):
+            pass
+
+        if mode == 'NPE':
+            return _npe_loss_fn
+        elif mode == 'NLE':
+            return _nle_loss_fn
+        else:
+            raise Exception(f'Mode {mode} not recognised.')
+
+    def _get_nlp(self, params, **batch):
         lp = self.model.apply(
             params, None, method='log_prob', **self._model_kwargs(**batch)
         )
@@ -166,8 +178,12 @@ class NeuralLikelihood(ABC):
         # assert n_batches == val_iter.num_batches
         steps_per_epoch = n_batches
 
-        warmup_steps = max(10, int(self.trn_config.warmup_epochs * steps_per_epoch))
-        total_steps = max(steps_per_epoch * self.trn_config.max_n_iter, warmup_steps + 1)
+        warmup_steps = max(
+            10, int(self.trn_config.warmup_epochs * steps_per_epoch)
+        )
+        total_steps = max(
+            steps_per_epoch * self.trn_config.max_n_iter, warmup_steps + 1
+        )
         
         cur_sim_round = max(training_data.round_id) + 1
         if self.trn_config.weight_by_round:
@@ -217,7 +233,7 @@ class NeuralLikelihood(ABC):
         
         @jax.jit
         def val_step(params, **batch):
-            return jnp.mean(self._nll_apply(params, **batch))
+            return jnp.mean(self._get_nlp(params, **batch))
 
         losses = np.nan * np.zeros(self.trn_config.max_n_iter)
         val_losses = np.nan * np.zeros(self.trn_config.max_n_iter)
@@ -306,7 +322,7 @@ class NeuralLikelihood(ABC):
         )
         return logprob
 
-class MAFNeuralLikelihood(NeuralLikelihood):
+class MAFNeuralLikelihood(AbstractNeuralFlow):
     def __init__(
             self, 
             data_ndim: int, 
@@ -356,11 +372,11 @@ class MAFNeuralLikelihood(NeuralLikelihood):
         return td(method, **kwargs)
 
 
-class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
+class NeuralFlow(AbstractNeuralFlow):
     def __init__(
             self,
-            data_ndim: int, 
-            config: SurjectiveNLEConfig,
+            target_ndim: int, 
+            config: NeuralFlowConfig,
             data_transform: Optional[InvertibleDataTransform] = None,
     ) -> None:
         '''
@@ -368,9 +384,10 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         the detail blocks can be accessed.
         '''
         super().__init__()
-        self.data_ndim = data_ndim
-        self.nle_config = config
+        self.target_ndim = target_ndim
+        self.nflow_config = config
         self.data_transform = data_transform
+        self.mode = self.nflow_config.mode # NLE or NPE
         
         if isinstance(self.data_transform, HaarWaveletTransform):
             self.blocks = self.data_transform.blocks
@@ -405,13 +422,13 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         return base_distribution
 
     def _conditioner_fn(self, input_dim, output_dim, **kwargs):
-        if self.nle_config.conditioner == "mlp":
+        if self.nflow_config.conditioner == "mlp":
             return make_mlp(
-                [self.nle_config.conditioner_n_neurons]
-              * self.nle_config.conditioner_n_layers
+                [self.nflow_config.conditioner_n_neurons]
+              * self.nflow_config.conditioner_n_layers
               + [output_dim],
             )
-        elif self.nle_config.conditioner == "transformer":
+        elif self.nflow_config.conditioner == "transformer":
             return make_transformer(
                 {
                     'output_dim': output_dim,
@@ -423,11 +440,11 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
                     **kwargs
                 }
             )
-        elif self.nle_config.conditioner == 'made':
+        elif self.nflow_config.conditioner == 'made':
             return MADE(
                 input_size=input_dim,
-                hidden_layer_sizes=[self.nle_config.conditioner_n_neurons]
-                    * self.nle_config.conditioner_n_layers,
+                hidden_layer_sizes=[self.nflow_config.conditioner_n_neurons]
+                    * self.nflow_config.conditioner_n_layers,
                 n_params=2,
                 w_init=hk.initializers.TruncatedNormal(stddev=0.01),
                 b_init=jnp.zeros,
@@ -451,26 +468,9 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
             'students_t': 3
         }
         self.n_decoder_params = decoder_params_lookup[decoder_distribution]
-        if decoder_distribution == 'poisson':
-            # raise NotImplementedError('See comments below.') 
-            # I think the idea to untransform is going to be impossible here
-            # for any surjective flow with n_layers > 1 -> the flow transforms
-            # y to z, so at the next layer I can't recover the original integers
-            # unless I do the chain of inverse transforms and then use the
-            # integer inverse transform.
-
-            # if integer_transform is None:
-            #     integer_transform = lambda x: x
-            assert integer_transform is not None
-
-        # decoder_net = make_mlp_with_dropout(
-        #     [self.decoder_n_neurons] * self.decoder_n_layers
-        #   + [n_dimension * self.n_decoder_params],
-        #     dropout_rate=0.1
-        # )
 
         decoder_net = make_mlp(
-            [self.nle_config.decoder_n_neurons] * self.nle_config.decoder_n_layers
+            [self.nflow_config.decoder_n_neurons] * self.nflow_config.decoder_n_layers
           + [n_dimension * self.n_decoder_params],
             activation=jax.nn.tanh,
         )
@@ -513,7 +513,7 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         return _fn
 
     def _flow(self, method: str, **kwargs):
-        return self._general_flow(method, **kwargs)
+        return self._make_flow(method, **kwargs)
 
     def _get_surjective_layer(
             self, 
@@ -569,7 +569,7 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
                 n_keep=n_keep,
                 decoder=self._decoder_fn(
                     n_dimension=n_drop,
-                    decoder_distribution=self.nle_config.decoder_distribution,
+                    decoder_distribution=self.nflow_config.decoder_distribution,
                     integer_transform=(
                         integer_transform(lvl) if integer_transform else None
                     )
@@ -605,13 +605,13 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
         layers.append(Permutation(order, 1))
         return layers
 
-    def _general_flow(self, method: str, **kwargs):
-        assert self.nle_config.architecture is not None
+    def _make_flow(self, method: str, **kwargs):
+        assert self.nflow_config.architecture is not None
 
-        cur_dim = self.data_ndim
+        cur_dim = self.target_ndim
         self.layers = []
 
-        for layer in self.nle_config.architecture:
+        for layer in self.nflow_config.architecture:
             if layer == 'MAF':
                 self.layers.append(
                     MaskedAutoregressive(
@@ -623,14 +623,15 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
                     )
                 )
                 self.layers = self._reverse_perm(self.layers, cur_dim)
+
             elif layer == 'healpix_funnel':
-                assert self.nle_config.surjective_layer_type is not None
-                assert self.nle_config.funnel_one_and_done is not None
-                assert self.nle_config.funnel_maf_extension is not None
+                assert self.nflow_config.surjective_layer_type is not None
+                assert self.nflow_config.funnel_one_and_done is not None
+                assert self.nflow_config.funnel_maf_extension is not None
                 assert self.blocks is not None
 
                 surjective_layer_type = self._get_surjective_layer(
-                    self.nle_config.surjective_layer_type
+                    self.nflow_config.surjective_layer_type
                 )
                 # add surjective healpix funnel
                 self.layers, cur_dim = self._healpix_funnel(
@@ -639,26 +640,27 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
                     self.blocks, 
                     cur_dim, 
                     integer_transform=None,
-                    one_and_done=self.nle_config.funnel_one_and_done,
-                    maf_extension=self.nle_config.funnel_maf_extension
+                    one_and_done=self.nflow_config.funnel_one_and_done,
+                    maf_extension=self.nflow_config.funnel_maf_extension
                 )
                 # don't add an extra perm --- added by the maf extension
-                if self.nle_config.funnel_maf_extension == 0:
+                if self.nflow_config.funnel_maf_extension == 0:
                     self.layers = self._reverse_perm(self.layers, cur_dim)
+
             elif layer == 'surjective_MAF':
-                assert self.nle_config.data_reduction_factor is not None
-                n_keep = int(self.nle_config.data_reduction_factor * cur_dim)
+                assert self.nflow_config.data_reduction_factor is not None
+                n_keep = int(self.nflow_config.data_reduction_factor * cur_dim)
                 n_drop = cur_dim - n_keep
                 assert n_keep + n_drop == cur_dim
 
                 surjective_layer_type = self._get_surjective_layer(
-                    self.nle_config.surjective_layer_type
+                    self.nflow_config.surjective_layer_type
                 )
                 surjective_layer = surjective_layer_type( # type: ignore
                     n_keep=n_keep,
                     decoder=self._decoder_fn(
                         n_dimension=n_drop,
-                        decoder_distribution=self.nle_config.decoder_distribution,
+                        decoder_distribution=self.nflow_config.decoder_distribution,
                         integer_transform=None
                     ),
                     conditioner=self._conditioner_fn(
@@ -670,6 +672,7 @@ class MAFSurjectiveNeuralLikelihood(NeuralLikelihood):
                 self.layers.append(surjective_layer)
                 cur_dim = n_keep
                 self.layers = self._reverse_perm(self.layers, cur_dim)
+
             else:
                 raise Exception(f'Layer {layer} not recognised.')
 
