@@ -1,6 +1,7 @@
 from typing import Callable, Optional, Tuple, cast, Literal
 from blackjax.types import Array
 from healpy import isnsideok, nside2npix
+from numpy.core.multiarray import ndarray
 from numpy.typing import NDArray
 import torch
 from torch import Tensor, device
@@ -9,7 +10,7 @@ from torch.utils.data import Dataset, DataLoader, random_split
 import math
 import numpy as np
 from dipolesbi.tools.healpix_helpers import build_funnel_steps, split_off_details
-from dipolesbi.tools.utils import softplus_pos
+from dipolesbi.tools.utils import jax_sph2cart, np_sph2cart_unitsphere, softplus_pos
 import torch.nn.functional as F
 from abc import ABC, abstractmethod
 import healpy as hp
@@ -21,22 +22,74 @@ class InvertibleDataTransform(ABC):
         pass
     
     def __call__(self, data: NDArray) -> tuple[NDArray, NDArray]:
-        return self.forward(data)
+        return self.forward_and_log_det(data)
 
     @abstractmethod
     def __repr__(self) -> str:
         pass
 
     @abstractmethod
-    def forward(self, data: NDArray) -> tuple[NDArray, NDArray]:
+    def forward_and_log_det(self, data: NDArray) -> tuple[NDArray, NDArray]:
         pass
 
     @abstractmethod
-    def inverse(self, transformed_data: NDArray) -> NDArray:
+    def inverse_and_log_det(self, transformed_data: NDArray) -> tuple[NDArray, NDArray]:
         pass
 
     @abstractmethod
     def clear(self) -> None:
+        pass
+
+class InvertibleThetaTransformJax(ABC):
+    def __init__(self) -> None:
+        self._theta_mean = None
+        self._theta_std = None
+    
+    def __call__(
+            self, 
+            theta: dict[str, jnp.ndarray],
+            **kwargs
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+        return self.forward_and_log_det(theta, **kwargs)
+
+    @property
+    def theta_mean(self) -> jnp.ndarray | None:
+        return self._theta_mean
+
+    @property
+    def theta_std(self) -> jnp.ndarray | None:
+        return self._theta_std
+
+    def stats_are_none(self) -> bool:
+        if (self.theta_mean is None) and (self.theta_std is None):
+            return True
+        else:
+            return False
+
+    def clear(self) -> None:
+        self._theta_mean = None
+        self._theta_std = None
+
+    @abstractmethod
+    def __repr__(self) -> str:
+        pass
+
+    @abstractmethod
+    def forward_and_log_det(
+            self, 
+            theta: dict[str, jnp.ndarray]
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+        pass
+
+    @abstractmethod
+    def inverse_and_log_det(
+            self, 
+            transformed_theta: jnp.ndarray
+    ) -> tuple[dict[str, jnp.ndarray], jnp.ndarray]:
+        pass
+
+    @abstractmethod
+    def compute_mean_and_std(self, theta: dict[str, jnp.ndarray]) -> None:
         pass
 
 class BlankTransform(InvertibleDataTransform):
@@ -46,12 +99,13 @@ class BlankTransform(InvertibleDataTransform):
     def __repr__(self) -> str:
         return 'BlankTransform(No transform to the data.)'
 
-    def forward(self, data: NDArray) -> tuple[NDArray, NDArray]:
+    def forward_and_log_det(self, data: NDArray) -> tuple[NDArray, NDArray]:
         n_batches = data.shape[0]
         return data, np.zeros_like(n_batches)
 
-    def inverse(self, transformed_data: NDArray) -> NDArray:
-        return transformed_data
+    def inverse_and_log_det(self, transformed_data: NDArray) -> tuple[NDArray, NDArray]:
+        n_batches = transformed_data.shape[0]
+        return transformed_data, np.zeros_like(n_batches)
 
     def clear(self) -> None:
         pass
@@ -69,7 +123,7 @@ class ZScore(InvertibleDataTransform):
             f")"
         )
 
-    def forward(self, data: NDArray) -> tuple[NDArray, NDArray]:
+    def forward_and_log_det(self, data: NDArray) -> tuple[NDArray, NDArray]:
         '''
         Do a batchwise mean per data dimension.
         '''
@@ -82,13 +136,140 @@ class ZScore(InvertibleDataTransform):
         z = (data - self.mu) / self.sigma
         return z, log_det_jac
 
-    def inverse(self, transformed_data: NDArray) -> NDArray:
+    def inverse_and_log_det(self, transformed_data: NDArray) -> tuple[NDArray, NDArray]:
         data = transformed_data * self.sigma + self.mu
-        return data
+        n_batches = data.shape[0]
+        log_det_jac = np.log(self.sigma).sum() * np.ones(n_batches) # type: ignore
+        return data, log_det_jac
 
     def clear(self) -> None:
         self.mu = None
         self.sigma = None
+
+class DipoleThetaTransform(InvertibleThetaTransformJax):
+    def __init__(self, method: Literal['cartesian']):
+        super().__init__()
+
+        if method == 'cartesian':
+            self._forward_and_log_det = self._forward_and_log_det_cartesian
+            self._inverse_and_log_det = self._inverse_and_log_det_cartesian
+        else:
+            raise NotImplementedError(f'{method}')
+
+        self.method = method
+
+    def __repr__(self) -> str:
+        return (
+            'DipoleThetaTransform('
+            f'method={self.method}, '
+            f'theta_mean={self.theta_mean}, '
+            f'theta_std={self.theta_std}, '
+            ')'
+        )
+
+    def _compute_mean_and_std(self, theta: dict[str, jnp.ndarray]) -> None:
+        assert len(theta.keys()) == 4
+
+        if not self.stats_are_none():
+            raise Exception('Stats should be empty before making new ones.')
+
+        mean_nbar = jnp.nanmean(theta['mean_density'])
+        std_nbar = np.nanstd(theta['mean_density'])
+        mean_v = np.nanmean(theta['observer_speed'])
+        std_v = np.nanstd(theta['obaserver_speed'])
+
+        self._theta_mean = jnp.asarray([mean_nbar, mean_v, 0, 0])
+        self._theta_std = jnp.asarray([std_nbar, std_v, 1, 1])
+
+    def forward_and_log_det(
+            self, 
+            theta: dict[str, jnp.ndarray]
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+        return self._forward_and_log_det(theta)
+
+    def inverse_and_log_det(
+            self,
+            transformed_theta: jnp.ndarray
+    ) -> tuple[dict[str, jnp.ndarray], jnp.ndarray]:
+        return self._inverse_and_log_det(transformed_theta)
+
+    @property
+    def theta_mean(self) -> jnp.ndarray | None:
+        return self._theta_mean
+
+    @property
+    def theta_std(self) -> jnp.ndarray | None:
+        return self._theta_std
+
+    def _forward_and_log_det_cartesian(
+        self,
+        theta: dict[str, jnp.ndarray],
+        in_ns: bool = False
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+        assert self.theta_mean is not None
+        assert self.theta_std is not None
+
+        n_batches = theta['dipole_latitude'].shape[0]
+        abslogdet = jnp.zeros(n_batches)
+
+        lon = jnp.deg2rad(theta['dipole_longitude'])
+        abslogdet += np.log(np.pi) - np.log(180)
+
+        colat = jnp.pi / 2 - jnp.deg2rad(theta['dipole_latitude'])
+        abslogdet += np.log(np.pi) - np.log(180)
+
+        x, y, z = jax_sph2cart(lon, colat)
+        abslogdet += np.sin(colat)
+
+        t_transformed = jnp.stack(
+            [
+                (theta['mean_density'] - self.theta_mean[0]) / self.theta_std[0],
+                (theta['observer_speed'] - self.theta_mean[1]) / self.theta_std[1],
+                x, y, z
+            ],
+            axis=1 if not in_ns else 0
+        )
+        return t_transformed, abslogdet
+
+    def _inverse_and_log_det_cartesian(
+        self,
+        transformed_theta: jnp.ndarray
+    ) -> tuple[dict[str, jnp.ndarray], jnp.ndarray]:
+        assert self.theta_mean is not None
+        assert self.theta_std is not None
+
+        mean_density_norm = transformed_theta[:, 0]
+        observer_speed_norm = transformed_theta[:, 1]
+        x = transformed_theta[:, 2]
+        y = transformed_theta[:, 3]
+        z = transformed_theta[:, 4]
+
+        # Denormalize
+        mean_density = mean_density_norm * self.theta_std[0] + self.theta_mean[0]
+        observer_speed = observer_speed_norm * self.theta_std[1] + self.theta_mean[1]
+
+        # Cartesian to spherical
+        colat = jnp.arccos(jnp.clip(z, -1.0, 1.0))
+        lon = jnp.arctan2(y, x)
+
+        # Convert to degrees
+        dipole_longitude = jnp.rad2deg(lon)
+        dipole_latitude = jnp.rad2deg(jnp.pi / 2 - colat)
+
+        # Compute abslogdet (inverse of forward)
+        n_batches = transformed_theta.shape[0]
+        abslogdet = jnp.zeros(n_batches)
+        abslogdet -= np.log(np.pi) - np.log(180)
+        abslogdet -= np.log(np.pi) - np.log(180)
+        abslogdet -= jnp.sin(colat)
+
+        theta = {
+            'mean_density': mean_density,
+            'observer_speed': observer_speed,
+            'dipole_longitude': dipole_longitude,
+            'dipole_latitude': dipole_latitude,
+        }
+        return theta, abslogdet
 
 class LogAffineTransform(Transform):
     def __init__(self, mu: Tensor, sigma: Tensor):
@@ -464,28 +645,14 @@ class HaarWaveletTransform(InvertibleDataTransform):
         self.std_at_level_post = self._make_post_dict()
         self.empty_norm_stats_flag = True
 
-    def forward(self, data: NDArray) -> tuple[NDArray, NDArray]:
+    def forward_and_log_det(self, data: NDArray) -> tuple[NDArray, NDArray]:
         return self._cycle_healpix_tree(data)
 
-    def inverse(self, transformed_data: NDArray) -> NDArray:
+    def inverse_and_log_det(self, transformed_data: NDArray) -> tuple[NDArray, NDArray]:
         return self._reverse_cycle_healpix_tree(transformed_data)
 
     def _build_surjective_blocks(self) -> list[tuple[int, int]]:
         steps = split_off_details(self.first_nside, self.last_nside)
-        # detail_sizes = []
-        # ns = self.first_nside
-        # while ns > self.last_nside:
-        #     ns //= 2
-        #     npi = 12 * ns**2
-        #     detail_sizes.append(3*npi)
-        # block_lengths = [self.last_npix] + detail_sizes # a coeffs + 3 details per level
-        # assert 12 * self.first_nside**2 == sum(block_lengths)
-        #
-        # steps = build_funnel_steps(
-        #     n_coarse=self.last_npix, 
-        #     detail_lengths=block_lengths[1:],
-        #     n_chunks=self.n_chunks
-        # )
         return steps
 
     def _cycle_healpix_tree(
@@ -622,13 +789,15 @@ class HaarWaveletTransform(InvertibleDataTransform):
 
         self.empty_norm_stats_flag = False
         if self.post_normalise:
+            self.logdet = post_norm_logdet
             return z, post_norm_logdet
         else:
+            self.logdet = logdet
             return z, logdet
 
     def _reverse_cycle_healpix_tree(self,
         transformed_data: np.ndarray
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, np.ndarray]:
         batches, npix = transformed_data.shape
         P_levels = self.parents_at_levels
 
@@ -681,41 +850,14 @@ class HaarWaveletTransform(InvertibleDataTransform):
             upstream_data = data.reshape(batches, -1)
 
         x_rec = upstream_data
-        return x_rec
+        inverse_logdet = -self.logdet # hack slightly and assume forward has been called
+        return x_rec, inverse_logdet
 
     def _forward_matrix_product(self, v: NDArray) -> NDArray:
         return v @ self.Q
 
     def _inverse_matrix_product(self, z: NDArray) -> NDArray:
         return z @ self.Q_inv
-
-    def int_haar4_forward(self, x):  # x: (..., 4) integer tensor
-        x0, x1, x2, x3 = x[...,0], x[...,1], x[...,2], x[...,3]
-
-        d1 = x1 - x0
-        s1 = x0 + (d1 // 2)            # floor division
-
-        d2 = x3 - x2
-        s2 = x2 + (d2 // 2)
-
-        D  = s2 - s1
-        A  = s1 + (D // 2)
-
-        # output order: [coarse≈average, three details]
-        return torch.stack([A, d1, d2, D], dim=-1)
-
-    def int_haar4_inverse(self, y):  # y: (..., 4) with [A, d1, d2, D]
-        A, d1, d2, D = y[...,0], y[...,1], y[...,2], y[...,3]
-
-        s1 = A - (D // 2)
-        s2 = D + s1
-
-        x0 = s1 - (d1 // 2)
-        x1 = d1 + x0
-        x2 = s2 - (d2 // 2)
-        x3 = d2 + x2
-
-        return torch.stack([x0, x1, x2, x3], dim=-1)
 
 class HealpixSOPyramid(torch.nn.Module):
     def __init__(
