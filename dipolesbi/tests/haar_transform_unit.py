@@ -2,8 +2,11 @@ import unittest
 import numpy as np
 from dipolesbi.tools.healpix_helpers import split_off_details
 from dipolesbi.tools.np_rngkey import prng_key
-from dipolesbi.tools.transforms import HaarWaveletTransform
+from dipolesbi.tools.transforms import HaarWaveletTransform, HaarWaveletTransformJax
 from jax import numpy as jnp
+import jax
+jax.config.update('jax_enable_x64', True)
+
 
 from dipolesbi.tools.utils import is_integerish_f32
 
@@ -85,7 +88,7 @@ class TestHaarTransform(unittest.TestCase):
         )
 
         zmap, logdet = transform(dmap)
-        dmap_rec = transform.inverse(zmap)
+        dmap_rec, _ = transform.inverse_and_log_det(zmap)
 
         np.testing.assert_almost_equal(dmap, dmap_rec, err_msg='Recovered != original.')
 
@@ -145,7 +148,7 @@ class TestHaarTransform(unittest.TestCase):
         transform = HaarWaveletTransform(first_nside=nside, last_nside=1)
 
         dmap_transformed, _ = transform(dmap)
-        dmap_recovered = transform.inverse(dmap_transformed)
+        dmap_recovered, _ = transform.inverse_and_log_det(dmap_transformed)
 
         np.testing.assert_almost_equal(dmap, dmap_recovered, err_msg='Recovered != original.')
 
@@ -159,7 +162,7 @@ class TestHaarTransform(unittest.TestCase):
         transform = HaarWaveletTransform(first_nside=nside, last_nside=1, post_normalise=True)
 
         dmap_transformed, _ = transform(dmap)
-        dmap_recovered = transform.inverse(dmap_transformed)
+        dmap_recovered, _ = transform.inverse_and_log_det(dmap_transformed)
 
         np.testing.assert_almost_equal(dmap, dmap_recovered, err_msg='Recovered != original.')
 
@@ -173,7 +176,7 @@ class TestHaarTransform(unittest.TestCase):
         transform = HaarWaveletTransform(first_nside=nside, last_nside=1)
 
         dmap_transformed, _ = transform(dmap)
-        dmap_recovered = transform.inverse(dmap_transformed)
+        dmap_recovered, _ = transform.inverse_and_log_det(dmap_transformed)
 
         np.testing.assert_almost_equal(dmap, dmap_recovered, err_msg='Recovered != original.')
 
@@ -187,7 +190,21 @@ class TestHaarTransform(unittest.TestCase):
         transform = HaarWaveletTransform(first_nside=nside, last_nside=1)
 
         dmap_transformed, _ = transform(dmap)
-        dmap_recovered = transform.inverse(dmap_transformed)
+        dmap_recovered, _ = transform.inverse_and_log_det(dmap_transformed)
+
+        np.testing.assert_almost_equal(dmap, dmap_recovered, err_msg='Recovered != original.')
+
+    def test_inverse_high_lambda_jax(self):
+        nside = 32
+        key = prng_key(123)
+        npix = 12 * nside**2
+        lam = 5000
+
+        dmap = key.poisson(lam, shape=(1, npix)).astype('float32') # ensure batchwise dim exists
+        transform = HaarWaveletTransformJax(first_nside=nside, last_nside=1)
+
+        dmap_transformed, _ = transform(dmap)
+        dmap_recovered, _ = transform.inverse_and_log_det(dmap_transformed)
 
         np.testing.assert_almost_equal(dmap, dmap_recovered, err_msg='Recovered != original.')
 
@@ -208,7 +225,7 @@ class TestHaarTransform(unittest.TestCase):
         )
 
         dmap_transformed, _ = transform(dmap)
-        dmap_recovered = transform.inverse(dmap_transformed)
+        dmap_recovered, _ = transform.inverse_and_log_det(dmap_transformed)
 
         np.testing.assert_almost_equal(dmap, dmap_recovered, err_msg='Recovered != original.')
 
@@ -269,7 +286,6 @@ class TestHaarTransform(unittest.TestCase):
             y_plus, y_minus = zmap[..., :n_keep], zmap[..., n_keep:]
             y_minus = jnp.asarray(y_minus)
             reconstructed_ints = transform.make_unnormalise_details_func(lvl)(y_minus)
-            print(reconstructed_ints)
             assert is_integerish_f32(np.asarray(reconstructed_ints))
             zmap = zmap[..., :n_keep]
 

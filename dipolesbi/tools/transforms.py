@@ -167,7 +167,7 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
             ')'
         )
 
-    def _compute_mean_and_std(self, theta: dict[str, jnp.ndarray]) -> None:
+    def compute_mean_and_std(self, theta: dict[str, jnp.ndarray]) -> None:
         assert len(theta.keys()) == 4
 
         if not self.stats_are_none():
@@ -176,7 +176,7 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
         mean_nbar = jnp.nanmean(theta['mean_density'])
         std_nbar = np.nanstd(theta['mean_density'])
         mean_v = np.nanmean(theta['observer_speed'])
-        std_v = np.nanstd(theta['obaserver_speed'])
+        std_v = np.nanstd(theta['observer_speed'])
 
         self._theta_mean = jnp.asarray([mean_nbar, mean_v, 0, 0])
         self._theta_std = jnp.asarray([std_nbar, std_v, 1, 1])
@@ -430,24 +430,61 @@ class HaarWaveletTransform(InvertibleDataTransform):
             post_normalise: bool = False,
             matrix_type: Literal['hadamard', 'sparse_average'] = 'hadamard',
             normalise_details: bool = True,
-            n_chunks: int = 1
+            n_chunks: int = 1,
+            xp=np,
+            dtype=None
     ) -> None:
+        # Array backend (NumPy by default; can be jax.numpy)
+        self.xp = xp
+        # Promote to consistent precision (float64) unless explicitly provided
+        # this is ESSENTIAL for the high_lambda unit test to pass in the jax
+        # backend version of this class
+        self.dtype = dtype if dtype is not None else getattr(self.xp, 'float64', float)
+
+        # Hard guardrail: if using JAX backend, ensure x64 is enabled and effective
+        try:
+            is_jax_backend = (self.xp is jnp)
+        except Exception:
+            is_jax_backend = False
+
+        if is_jax_backend:
+            try:
+                from jax import config as jax_config  # type: ignore
+                x64_flag = False
+                try:
+                    x64_flag = bool(jax_config.read("jax_enable_x64"))
+                except Exception:
+                    # Fallback: probe dtype behavior directly
+                    pass
+
+                probe = jnp.asarray(0.0, dtype=jnp.float64)
+                effective_float64 = (probe.dtype == jnp.float64)
+                if not (x64_flag and effective_float64):
+                    raise RuntimeError(
+                        "HaarWaveletTransformJax requires JAX 64-bit. "
+                        "Enable it via env var JAX_ENABLE_X64=true before importing jax, "
+                        "or call jax.config.update('jax_enable_x64', True) at process start."
+                    )
+            except Exception:
+                # If the check itself fails, raise with context
+                raise
+
         self.matrix_type = matrix_type
-        self.H = 0.5 * np.asarray(
+        self.H = 0.5 * self.xp.asarray(
             [[1., 1. , 1. ,  1.],
              [1., 1. , -1., -1.],
              [1., -1., 1. , -1.],
              [1., -1., -1.,  1.]]
-        )
-        self.H_inv = np.linalg.inv(self.H)
+        , dtype=self.dtype)
+        self.H_inv = self.xp.linalg.inv(self.H)
 
-        self.A = np.asarray(
+        self.A = self.xp.asarray(
             [[1., 1., 1., 1.],
              [0., 1., 0., 0.],
              [0., 0., 1., 0.],
              [0., 0., 0., 1.]]
-        )
-        self.A_inv = np.linalg.inv(self.A)
+        , dtype=self.dtype)
+        self.A_inv = self.xp.linalg.inv(self.A)
 
         if matrix_type == 'hadamard':
             self.Q = self.H
@@ -476,7 +513,8 @@ class HaarWaveletTransform(InvertibleDataTransform):
         self.first_npix = self.npix_per_level[0]
         self.last_npix = 12 * last_nside ** 2
 
-        self.n_levels = int(np.log2(first_nside) - np.log2(last_nside))
+        # Use math for integer-safe levels computation (backend-agnostic)
+        self.n_levels = int(math.log2(first_nside) - math.log2(last_nside))
         self.downscale_factors = self.n_levels * [4]
 
         # 3 detail coefficients; ell levels per coefficient
@@ -492,11 +530,12 @@ class HaarWaveletTransform(InvertibleDataTransform):
         self.blocks = self._build_surjective_blocks()
 
     def _make_post_dict(self) -> dict:
+        xp = self.xp
         return {
-            'coarse': np.nan * np.empty(self.npix_per_level[-1] // 4),
+            'coarse': xp.nan * xp.empty(self.npix_per_level[-1] // 4, dtype=self.dtype),
             'detail': {i:
                 {
-                    j: np.nan * np.empty(self.npix_per_level[::-1][j] // 4)
+                    j: xp.nan * xp.empty(self.npix_per_level[::-1][j] // 4, dtype=self.dtype)
                     for j in range(self.n_levels)
                 }
             for i in range(3)
@@ -509,27 +548,28 @@ class HaarWaveletTransform(InvertibleDataTransform):
         """
         # Check 'coarse' array
         if check_coarse:
-            if not np.isnan(self.mu_at_level_post['coarse']).all():
+            if not self.xp.isnan(self.mu_at_level_post['coarse']).all():
                 return False
 
-            if not np.isnan(self.std_at_level_post['coarse']).all():
+            if not self.xp.isnan(self.std_at_level_post['coarse']).all():
                 return False
 
         if check_detail:
             for i in self.mu_at_level_post['detail']:
                 for j in self.mu_at_level_post['detail'][i]:
                     arr = self.mu_at_level_post['detail'][i][j]
-                    if not np.isnan(arr).all():
+                    if not self.xp.isnan(arr).all():
                         return False
 
             for i in self.std_at_level_post['detail']:
                 for j in self.std_at_level_post['detail'][i]:
                     arr = self.std_at_level_post['detail'][i][j]
-                    if not np.isnan(arr).all():
+                    if not self.xp.isnan(arr).all():
                         return False
         return True
 
     def __repr__(self) -> str:
+        backend_name = getattr(self.xp, '__name__', str(self.xp))
         return (
             f"HaarWaveletTransform("
             f"first_nside={self.first_nside}, "
@@ -540,7 +580,8 @@ class HaarWaveletTransform(InvertibleDataTransform):
             f"downscale_factors={self.downscale_factors}, "
             f"mu_at_level={self.mu_at_level}, "
             f"std_at_level={self.std_at_level}, "
-            f"post_normalise={self.post_normalise}"
+            f"post_normalise={self.post_normalise}, "
+            f"backend={backend_name}"
             f")"
         )
 
@@ -562,6 +603,7 @@ class HaarWaveletTransform(InvertibleDataTransform):
         # note details are interleaved
         # [d1_0, d2_0, d3_0,  d1_1, d2_1, d3_1, ..., d1_{P-1}, d2_{P-1}, d3_{P-1}]
 
+        xp = self.xp
         if level == 'all':
             L = self.n_levels  # = log2(first_nside) - log2(last_nside)
             sizes = []
@@ -570,19 +612,19 @@ class HaarWaveletTransform(InvertibleDataTransform):
             for lvl_coarse_to_fine in range(L):
                 idx = L - 1 - lvl_coarse_to_fine
 
-                mu1 = jnp.asarray(self.mu_at_level_post['detail'][0][idx])
-                mu2 = jnp.asarray(self.mu_at_level_post['detail'][1][idx])
-                mu3 = jnp.asarray(self.mu_at_level_post['detail'][2][idx])
+                mu1 = xp.asarray(self.mu_at_level_post['detail'][0][idx])
+                mu2 = xp.asarray(self.mu_at_level_post['detail'][1][idx])
+                mu3 = xp.asarray(self.mu_at_level_post['detail'][2][idx])
 
-                sd1 = jnp.asarray(self.std_at_level_post['detail'][0][idx])
-                sd2 = jnp.asarray(self.std_at_level_post['detail'][1][idx])
-                sd3 = jnp.asarray(self.std_at_level_post['detail'][2][idx])
+                sd1 = xp.asarray(self.std_at_level_post['detail'][0][idx])
+                sd2 = xp.asarray(self.std_at_level_post['detail'][1][idx])
+                sd3 = xp.asarray(self.std_at_level_post['detail'][2][idx])
 
                 P = int(mu1.shape[0])
                 sizes.append(P)
 
-                mu_levels.append(jnp.stack([mu1, mu2, mu3], axis=-1))   # (P, 3)
-                std_levels.append(jnp.stack([sd1, sd2, sd3], axis=-1))  # (P, 3)
+                mu_levels.append(xp.stack([mu1, mu2, mu3], axis=-1))   # (P, 3)
+                std_levels.append(xp.stack([sd1, sd2, sd3], axis=-1))  # (P, 3)
 
             def _unnormalise_all(z):
                 # z: (B, sum_l 3*P_l), concatenated coarse→fine, interleaved within each level
@@ -601,11 +643,11 @@ class HaarWaveletTransform(InvertibleDataTransform):
                     # Unnormalise per-pixel, per-channel
                     x3 = blk3 * sd[None, :, :] + mu[None, :, :]
 
-                    out_parts.append(x3.reshape(B, span))
+                    out_parts.append(xp.reshape(x3, (B, span)))
                     offset += span
 
                 assert offset == N, f"Consumed {offset} coeffs but z had {N}"
-                return jnp.concatenate(out_parts, axis=1)
+                return xp.concatenate(out_parts, axis=1)
 
             return _unnormalise_all
 
@@ -624,8 +666,8 @@ class HaarWaveletTransform(InvertibleDataTransform):
                 # reshape to (B, P, 3): channels last
                 z3 = z.reshape(B, P, 3)
 
-                mu  = jnp.stack([mu1,  mu2,  mu3],  axis=-1)  # (P, 3)
-                std = jnp.stack([std1, std2, std3], axis=-1)  # (P, 3)
+                mu  = xp.stack([mu1,  mu2,  mu3],  axis=-1)  # (P, 3)
+                std = xp.stack([std1, std2, std3], axis=-1)  # (P, 3)
 
                 x3 = z3 * std[None, :, :] + mu[None, :, :]
                 x_final = x3.reshape(B, threeP)
@@ -646,15 +688,35 @@ class HaarWaveletTransform(InvertibleDataTransform):
         self.empty_norm_stats_flag = True
 
     def forward_and_log_det(self, data: NDArray) -> tuple[NDArray, NDArray]:
-        return self._cycle_healpix_tree(data)
+        # Ensure backend array; remember original dtype for optional cast-back
+        orig_dtype = getattr(data, 'dtype', None)
+        data = self.xp.asarray(data, dtype=self.dtype)
+        z, logdet = self._cycle_healpix_tree(data)
+        try:
+            if orig_dtype == getattr(self.xp, 'float32'):
+                z = z.astype(self.xp.float32)
+                logdet = logdet.astype(self.xp.float32)
+        except Exception:
+            pass
+        return z, logdet
 
     def inverse_and_log_det(self, transformed_data: NDArray) -> tuple[NDArray, NDArray]:
-        return self._reverse_cycle_healpix_tree(transformed_data)
+        orig_dtype = getattr(transformed_data, 'dtype', None)
+        transformed_data = self.xp.asarray(transformed_data, dtype=self.dtype)
+        x, logdet = self._reverse_cycle_healpix_tree(transformed_data)
+        try:
+            if orig_dtype == getattr(self.xp, 'float32'):
+                x = x.astype(self.xp.float32)
+                logdet = logdet.astype(self.xp.float32)
+        except Exception:
+            pass
+        return x, logdet
 
     def _build_surjective_blocks(self) -> list[tuple[int, int]]:
         steps = split_off_details(self.first_nside, self.last_nside)
         return steps
 
+    # TODO: ok you need to verify this function
     def _cycle_healpix_tree(
             self, 
             y: NDArray
@@ -664,27 +726,23 @@ class HaarWaveletTransform(InvertibleDataTransform):
         coefficients_fine2coarse: list[NDArray] = [] 
         a_list: list[NDArray] = []
         logdets_at_each_level: list[NDArray] = []
-        post_norm_logdet: NDArray = np.zeros(batches)
+        post_norm_logdet: NDArray = self.xp.zeros(batches)
         
         if self.post_normalise and self.empty_norm_stats_flag:
             assert batches > 1, 'More than 1 batch needed to define std.'
         
-        logdet = np.zeros(batches)
+        logdet = self.xp.zeros(batches)
         downstream_coefficients = y
 
         for lvl, factor in enumerate(self.downscale_factors):
-            per_level_logdet = np.zeros(())
+            per_level_logdet = self.xp.zeros(())
 
             P = cur_npix // factor
             child_pixels = downstream_coefficients.reshape(batches, P, factor)
 
             z = self._forward_matrix_product(child_pixels) # (n_batches, n_pix // 4, 4)
-            # outs = []
-            # batchsize = 128
-            # for i in range(0, batches, batchsize):
-            #     outs.append(self.forward_in_batch(child_pixels[i:i+batchsize]))
-            # z = jnp.concatenate(outs, axis=0)
 
+            # Compute stats per channel
             coarse_coeffs = z[..., 0]
             d1 = z[..., 1]
             d2 = z[..., 2]
@@ -692,20 +750,23 @@ class HaarWaveletTransform(InvertibleDataTransform):
 
             cur_mus = []
             cur_stds = []
-            for i, coef in enumerate([coarse_coeffs, d1, d2, d3]):
-                if self.empty_norm_stats_flag:
-                    mu = coef.mean()
-                    sigma = coef.std()
-                    cur_mus.append(mu)
-                    cur_stds.append(sigma)
-                else:
-                    mu = self.mu_at_level[lvl][i]
-                    sigma = self.std_at_level[lvl][i]
+            chans = [coarse_coeffs, d1, d2, d3]
+            if self.empty_norm_stats_flag:
+                for coef in chans:
+                    cur_mus.append(coef.mean())
+                    cur_stds.append(coef.std())
+                mu_vec = self.xp.stack(cur_mus, axis=-1)      # (4,)
+                sigma_vec = self.xp.stack(cur_stds, axis=-1)  # (4,)
+            else:
+                mu_vec = self.xp.stack([self.mu_at_level[lvl][i] for i in range(4)], axis=-1)
+                sigma_vec = self.xp.stack([self.std_at_level[lvl][i] for i in range(4)], axis=-1)
 
-                if not self.post_normalise:
-                    z[..., i] = (z[..., i] - mu) / sigma
+            # Normalise all channels if required, without in-place writes
+            if not self.post_normalise:
+                z = (z - mu_vec) / sigma_vec
 
-                per_level_logdet += - P * np.log(sigma)
+            # Log-det accumulates over channels
+            per_level_logdet += - P * self.xp.log(sigma_vec).sum()
 
             if self.empty_norm_stats_flag:
                 self.mu_at_level.append(cur_mus)
@@ -715,7 +776,7 @@ class HaarWaveletTransform(InvertibleDataTransform):
             logdet += per_level_logdet
 
             coefficients_fine2coarse.append(z)
-            a_list.append(coarse_coeffs)
+            a_list.append(z[..., 0])
             downstream_coefficients = z[..., 0]
             cur_npix = P
 
@@ -731,7 +792,7 @@ class HaarWaveletTransform(InvertibleDataTransform):
 
             a_coarse = ( a_coarse - mean_coarse ) / std_coarse
 
-            post_norm_logdet += -np.log(std_coarse).sum(axis=-1) # sum over pixels
+            post_norm_logdet += -self.xp.log(std_coarse).sum(axis=-1) # sum over pixels
 
             if self.empty_norm_stats_flag:
                 assert self._post_dict_is_empty()
@@ -767,13 +828,14 @@ class HaarWaveletTransform(InvertibleDataTransform):
                     std_d3 = self.std_at_level_post['detail'][2][lvl_idx - lvl]
                 
                 if self.normalise_details:
-                    y[..., 1] = ( y[..., 1] - mean_d1 ) / std_d1
-                    y[..., 2] = ( y[..., 2] - mean_d2 ) / std_d2
-                    y[..., 3] = ( y[..., 3] - mean_d3 ) / std_d3
+                    means = self.xp.stack([mean_d1, mean_d2, mean_d3], axis=-1)  # (P,3)
+                    stds  = self.xp.stack([std_d1,  std_d2,  std_d3],  axis=-1)  # (P,3)
+                    y_details = (y[..., 1:] - means[None, :, :]) / stds[None, :, :]
+                    y = self.xp.concatenate([y[..., :1], y_details], axis=-1)
 
-                    post_norm_logdet += - np.log(std_d1).sum(axis=-1)
-                    post_norm_logdet += - np.log(std_d2).sum(axis=-1)
-                    post_norm_logdet += - np.log(std_d3).sum(axis=-1)
+                    post_norm_logdet += - self.xp.log(std_d1).sum(axis=-1)
+                    post_norm_logdet += - self.xp.log(std_d2).sum(axis=-1)
+                    post_norm_logdet += - self.xp.log(std_d3).sum(axis=-1)
 
                 if self.empty_norm_stats_flag:
                     self.mu_at_level_post['detail'][0][lvl_idx - lvl] = mean_d1
@@ -785,7 +847,7 @@ class HaarWaveletTransform(InvertibleDataTransform):
                     self.std_at_level_post['detail'][2][lvl_idx - lvl] = std_d3
 
             z_parts.append(y[..., 1:].reshape(batches, -1))
-        z = np.concatenate(z_parts, axis=1)
+        z = self.xp.concatenate(z_parts, axis=1)
 
         self.empty_norm_stats_flag = False
         if self.post_normalise:
@@ -795,6 +857,7 @@ class HaarWaveletTransform(InvertibleDataTransform):
             self.logdet = logdet
             return z, logdet
 
+    # TODO: this one too
     def _reverse_cycle_healpix_tree(self,
         transformed_data: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -826,23 +889,31 @@ class HaarWaveletTransform(InvertibleDataTransform):
             # y_out is what forward produced after coupling: [a | d_out]
             a_here = upstream_data[..., None]
             a_here = cast(Array, a_here)
-            y_pre = np.concatenate([a_here, d_out], axis=-1) # (B, P_l, n_coefficients)
+            y_pre = self.xp.concatenate([a_here, d_out], axis=-1) # (B, P_l, n_coefficients)
 
             lvl_idx = self.n_levels - 1
-            for i in range(4):
-                if not self.post_normalise:
-                    mu = self.mu_at_level[-1 - lvl][i]
-                    sigma = self.std_at_level[-1 - lvl][i]
-                    y_pre[..., i] = y_pre[..., i] * sigma + mu
-                else:
-                    if i == 0:
-                        pass
-                    else:
-                        if self.normalise_details:
-                            mean_di = self.mu_at_level_post['detail'][i-1][lvl_idx - lvl]
-                            std_di = self.std_at_level_post['detail'][i-1][lvl_idx - lvl]
-
-                            y_pre[..., i] = y_pre[..., i] * std_di + mean_di
+            if not self.post_normalise:
+                mu_vec = self.xp.stack([
+                    self.mu_at_level[-1 - lvl][i] for i in range(4)
+                ], axis=-1)
+                sigma_vec = self.xp.stack([
+                    self.std_at_level[-1 - lvl][i] for i in range(4)
+                ], axis=-1)
+                y_pre = y_pre * sigma_vec + mu_vec
+            else:
+                if self.normalise_details:
+                    means = self.xp.stack([
+                        self.mu_at_level_post['detail'][0][lvl_idx - lvl],
+                        self.mu_at_level_post['detail'][1][lvl_idx - lvl],
+                        self.mu_at_level_post['detail'][2][lvl_idx - lvl],
+                    ], axis=-1)  # (P,3)
+                    stds = self.xp.stack([
+                        self.std_at_level_post['detail'][0][lvl_idx - lvl],
+                        self.std_at_level_post['detail'][1][lvl_idx - lvl],
+                        self.std_at_level_post['detail'][2][lvl_idx - lvl],
+                    ], axis=-1)  # (P,3)
+                    y_details = y_pre[..., 1:] * stds[None, :, :] + means[None, :, :]
+                    y_pre = self.xp.concatenate([y_pre[..., :1], y_details], axis=-1)
 
             data = self._inverse_matrix_product(y_pre)
 
@@ -858,6 +929,25 @@ class HaarWaveletTransform(InvertibleDataTransform):
 
     def _inverse_matrix_product(self, z: NDArray) -> NDArray:
         return z @ self.Q_inv
+
+# Convenience subclass that uses JAX as the backend
+class HaarWaveletTransformJax(HaarWaveletTransform):
+    def __init__(self,
+                 first_nside: int,
+                 last_nside: int = 1,
+                 post_normalise: bool = False,
+                 matrix_type: Literal['hadamard', 'sparse_average'] = 'hadamard',
+                 normalise_details: bool = True,
+                 n_chunks: int = 1):
+        super().__init__(
+            first_nside=first_nside,
+            last_nside=last_nside,
+            post_normalise=post_normalise,
+            matrix_type=matrix_type,
+            normalise_details=normalise_details,
+            n_chunks=n_chunks,
+            xp=jnp
+        )
 
 class HealpixSOPyramid(torch.nn.Module):
     def __init__(
