@@ -26,7 +26,9 @@ from dipolesbi.tools.configs import NeuralFlowConfig, TrainingConfig
 from dipolesbi.tools.distributions import IndependentWrapper, NegBinomDist, PoissonDist, StudentT
 from dipolesbi.tools.dataloader import as_batch_iterator_cpu2gpu, named_dataset_idx
 from dipolesbi.tools.np_rngkey import npkey_sequence_from_hk
-from dipolesbi.tools.transforms import HaarWaveletTransform, InvertibleDataTransform
+from dipolesbi.tools.priors_jax import JaxPrior
+from dipolesbi.tools.transforms import InvertibleDataTransform, InvertibleThetaTransformJax
+from dipolesbi.tools.hadamard_transform import HadamardTransform
 from dipolesbi.tools.ui import MultiRoundInfererUI
 
 

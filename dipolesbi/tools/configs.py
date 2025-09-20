@@ -1,7 +1,8 @@
 from dataclasses import asdict, dataclass, field
 from typing import Optional, Literal
 from numpy.typing import NDArray
-from dipolesbi.tools.transforms import BlankTransform, HaarWaveletTransform, InvertibleDataTransform
+from dipolesbi.tools.transforms import BlankTransform, DipoleThetaTransform,  InvertibleDataTransform, InvertibleThetaTransformJax
+from dipolesbi.tools.hadamard_transform import HadamardTransformJax
 
 
 @dataclass

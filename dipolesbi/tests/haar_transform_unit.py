@@ -2,7 +2,7 @@ import unittest
 import numpy as np
 from dipolesbi.tools.healpix_helpers import split_off_details
 from dipolesbi.tools.np_rngkey import prng_key
-from dipolesbi.tools.transforms import HaarWaveletTransform, HaarWaveletTransformJax
+from dipolesbi.tools.hadamard_transform import HadamardTransform, HadamardTransformJax
 from jax import numpy as jnp
 import jax
 jax.config.update('jax_enable_x64', True)
@@ -19,7 +19,7 @@ class TestHaarTransform(unittest.TestCase):
         lam = 50
 
         dmap = key.poisson(lam, shape=(n_batches, npix)) # ensure batchwise dim exists
-        transform = HaarWaveletTransform(
+        transform = HadamardTransform(
             first_nside=nside, 
             last_nside=1, 
         )
@@ -39,7 +39,7 @@ class TestHaarTransform(unittest.TestCase):
         lam = 50
 
         dmap = key.poisson(lam, shape=(n_batches, npix)) # ensure batchwise dim exists
-        transform = HaarWaveletTransform(
+        transform = HadamardTransform(
             first_nside=nside, 
             last_nside=1, 
             matrix_type='sparse_average',
@@ -59,7 +59,7 @@ class TestHaarTransform(unittest.TestCase):
         lam = 50
 
         dmap = key.poisson(lam, shape=(n_batches, npix)) # ensure batchwise dim exists
-        transform = HaarWaveletTransform(
+        transform = HadamardTransform(
             first_nside=nside, 
             last_nside=1, 
         )
@@ -81,7 +81,7 @@ class TestHaarTransform(unittest.TestCase):
         n_batches = 1000
 
         dmap = key.poisson(lam, shape=(n_batches, npix)) # ensure batchwise dim exists
-        transform = HaarWaveletTransform(first_nside=nside, last_nside=1)
+        transform = HadamardTransform(first_nside=nside, last_nside=1)
 
         dmap_transformed, _ = transform(dmap)
         dmap_recovered, _ = transform.inverse_and_log_det(dmap_transformed)
@@ -96,7 +96,7 @@ class TestHaarTransform(unittest.TestCase):
         n_batches = 1000
 
         dmap = key.poisson(lam, shape=(n_batches, npix)) # ensure batchwise dim exists
-        transform = HaarWaveletTransform(first_nside=nside, last_nside=1)
+        transform = HadamardTransform(first_nside=nside, last_nside=1)
 
         dmap_transformed, _ = transform(dmap)
         dmap_recovered, _ = transform.inverse_and_log_det(dmap_transformed)
@@ -111,7 +111,7 @@ class TestHaarTransform(unittest.TestCase):
         n_batches = 1000
 
         dmap = key.poisson(lam, shape=(n_batches, npix)) # ensure batchwise dim exists
-        transform = HaarWaveletTransform(first_nside=nside, last_nside=1)
+        transform = HadamardTransform(first_nside=nside, last_nside=1)
 
         dmap_transformed, _ = transform(dmap)
         dmap_recovered, _ = transform.inverse_and_log_det(dmap_transformed)
@@ -128,7 +128,7 @@ class TestHaarTransform(unittest.TestCase):
         n_batches = 1000
 
         dmap = key.poisson(lam, shape=(n_batches, npix)).astype('float32') # ensure batchwise dim exists
-        transform = HaarWaveletTransformJax(first_nside=nside, last_nside=1)
+        transform = HadamardTransformJax(first_nside=nside, last_nside=1)
 
         dmap_transformed, _ = transform(dmap)
         dmap_recovered, _ = transform.inverse_and_log_det(dmap_transformed)
@@ -143,7 +143,7 @@ class TestHaarTransform(unittest.TestCase):
         lam = 5000
 
         dmap = key.poisson(lam, shape=(batches, npix)) # ensure batchwise dim exists
-        transform = HaarWaveletTransform(
+        transform = HadamardTransform(
             first_nside=nside, 
             last_nside=1,
             matrix_type='sparse_average',
@@ -163,7 +163,7 @@ class TestHaarTransform(unittest.TestCase):
         lam = 5000
 
         dmap = key.poisson(lam, shape=(batches, npix)) # ensure batchwise dim exists
-        transform = HaarWaveletTransform(
+        transform = HadamardTransform(
             first_nside=nside, 
             last_nside=1,
             matrix_type='sparse_average',
@@ -195,7 +195,7 @@ class TestHaarTransform(unittest.TestCase):
         lam = 5000
 
         dmap = key.poisson(lam, shape=(batches, npix)) # ensure batchwise dim exists
-        transform = HaarWaveletTransform(
+        transform = HadamardTransform(
             first_nside=nside, 
             last_nside=1,
             matrix_type='sparse_average',
