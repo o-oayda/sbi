@@ -427,7 +427,6 @@ class HaarWaveletTransform(InvertibleDataTransform):
             self, 
             first_nside: int, 
             last_nside: int = 1,
-            post_normalise: bool = False,
             matrix_type: Literal['hadamard', 'sparse_average'] = 'hadamard',
             normalise_details: bool = True,
             n_chunks: int = 1,
@@ -495,9 +494,6 @@ class HaarWaveletTransform(InvertibleDataTransform):
         else:
             raise Exception(f'Unrecognised matrix type {self.matrix_type}.')
 
-        self.mu_at_level: list[list[NDArray]] = []
-        self.std_at_level: list[list[NDArray]] = []
-
         self.first_nside = first_nside
         self.last_nside = last_nside
 
@@ -524,7 +520,6 @@ class HaarWaveletTransform(InvertibleDataTransform):
         self.std_at_level_post = self._make_post_dict()
 
         self.empty_norm_stats_flag: bool = True
-        self.post_normalise: bool = post_normalise
         self.normalise_details: bool = normalise_details
         self.n_chunks = n_chunks
         self.blocks = self._build_surjective_blocks()
@@ -578,9 +573,6 @@ class HaarWaveletTransform(InvertibleDataTransform):
             f"last_npix={self.last_npix}, "
             f"n_levels={self.n_levels}, "
             f"downscale_factors={self.downscale_factors}, "
-            f"mu_at_level={self.mu_at_level}, "
-            f"std_at_level={self.std_at_level}, "
-            f"post_normalise={self.post_normalise}, "
             f"backend={backend_name}"
             f")"
         )
@@ -681,8 +673,6 @@ class HaarWaveletTransform(InvertibleDataTransform):
             return _unnormalise
             
     def clear(self) -> None:
-        self.mu_at_level = []
-        self.std_at_level = []
         self.mu_at_level_post = self._make_post_dict()
         self.std_at_level_post = self._make_post_dict()
         self.empty_norm_stats_flag = True
@@ -726,9 +716,9 @@ class HaarWaveletTransform(InvertibleDataTransform):
         coefficients_fine2coarse: list[NDArray] = [] 
         a_list: list[NDArray] = []
         logdets_at_each_level: list[NDArray] = []
-        post_norm_logdet: NDArray = self.xp.zeros(batches)
+        abslogdet: NDArray = self.xp.zeros(batches)
         
-        if self.post_normalise and self.empty_norm_stats_flag:
+        if self.empty_norm_stats_flag:
             assert batches > 1, 'More than 1 batch needed to define std.'
         
         logdet = self.xp.zeros(batches)
@@ -740,37 +730,8 @@ class HaarWaveletTransform(InvertibleDataTransform):
             P = cur_npix // factor
             child_pixels = downstream_coefficients.reshape(batches, P, factor)
 
+            # by construction, coarse coeffs lives in [..., 0] and the detail [..., 1:]
             z = self._forward_matrix_product(child_pixels) # (n_batches, n_pix // 4, 4)
-
-            # Compute stats per channel
-            coarse_coeffs = z[..., 0]
-            d1 = z[..., 1]
-            d2 = z[..., 2]
-            d3 = z[..., 3]
-
-            cur_mus = []
-            cur_stds = []
-            chans = [coarse_coeffs, d1, d2, d3]
-            if self.empty_norm_stats_flag:
-                for coef in chans:
-                    cur_mus.append(coef.mean())
-                    cur_stds.append(coef.std())
-                mu_vec = self.xp.stack(cur_mus, axis=-1)      # (4,)
-                sigma_vec = self.xp.stack(cur_stds, axis=-1)  # (4,)
-            else:
-                mu_vec = self.xp.stack([self.mu_at_level[lvl][i] for i in range(4)], axis=-1)
-                sigma_vec = self.xp.stack([self.std_at_level[lvl][i] for i in range(4)], axis=-1)
-
-            # Normalise all channels if required, without in-place writes
-            if not self.post_normalise:
-                z = (z - mu_vec) / sigma_vec
-
-            # Log-det accumulates over channels
-            per_level_logdet += - P * self.xp.log(sigma_vec).sum()
-
-            if self.empty_norm_stats_flag:
-                self.mu_at_level.append(cur_mus)
-                self.std_at_level.append(cur_stds)
 
             logdets_at_each_level.append(per_level_logdet)
             logdet += per_level_logdet
@@ -782,23 +743,22 @@ class HaarWaveletTransform(InvertibleDataTransform):
 
         a_coarse = downstream_coefficients # (batches, out_npix)
 
-        if self.post_normalise:
-            if self.empty_norm_stats_flag:
-                mean_coarse = a_coarse.mean(axis=0) # across the batch axis
-                std_coarse = a_coarse.std(axis=0)
-            else:
-                mean_coarse = self.mu_at_level_post['coarse']
-                std_coarse = self.std_at_level_post['coarse']
+        if self.empty_norm_stats_flag:
+            mean_coarse = a_coarse.mean(axis=0) # across the batch axis
+            std_coarse = a_coarse.std(axis=0)
+        else:
+            mean_coarse = self.mu_at_level_post['coarse']
+            std_coarse = self.std_at_level_post['coarse']
 
-            a_coarse = ( a_coarse - mean_coarse ) / std_coarse
+        a_coarse = ( a_coarse - mean_coarse ) / std_coarse
 
-            post_norm_logdet += -self.xp.log(std_coarse).sum(axis=-1) # sum over pixels
+        abslogdet += -self.xp.log(std_coarse).sum(axis=-1) # sum over pixels
 
-            if self.empty_norm_stats_flag:
-                assert self._post_dict_is_empty()
+        if self.empty_norm_stats_flag:
+            assert self._post_dict_is_empty()
 
-                self.mu_at_level_post['coarse'] = mean_coarse
-                self.std_at_level_post['coarse'] = std_coarse
+            self.mu_at_level_post['coarse'] = mean_coarse
+            self.std_at_level_post['coarse'] = std_coarse
 
         # Build z: keep a_coarse, then details from coarse->fine
         # (drop the a's there)
@@ -810,52 +770,47 @@ class HaarWaveletTransform(InvertibleDataTransform):
 
         for lvl, y in enumerate(reversed(coefficients_fine2coarse)): # now coarse->fine
             
-            if self.post_normalise:
-                if self.empty_norm_stats_flag:
-                    mean_d1 = y[..., 1].mean(axis=0)
-                    mean_d2 = y[..., 2].mean(axis=0)
-                    mean_d3 = y[..., 3].mean(axis=0)
-                    std_d1 = y[..., 1].std(axis=0)
-                    std_d2 = y[..., 2].std(axis=0)
-                    std_d3 = y[..., 3].std(axis=0)
-                else:
-                    mean_d1 = self.mu_at_level_post['detail'][0][lvl_idx - lvl]
-                    mean_d2 = self.mu_at_level_post['detail'][1][lvl_idx - lvl]
-                    mean_d3 = self.mu_at_level_post['detail'][2][lvl_idx - lvl]
+            if self.empty_norm_stats_flag:
+                mean_d1 = y[..., 1].mean(axis=0)
+                mean_d2 = y[..., 2].mean(axis=0)
+                mean_d3 = y[..., 3].mean(axis=0)
+                std_d1 = y[..., 1].std(axis=0)
+                std_d2 = y[..., 2].std(axis=0)
+                std_d3 = y[..., 3].std(axis=0)
+            else:
+                mean_d1 = self.mu_at_level_post['detail'][0][lvl_idx - lvl]
+                mean_d2 = self.mu_at_level_post['detail'][1][lvl_idx - lvl]
+                mean_d3 = self.mu_at_level_post['detail'][2][lvl_idx - lvl]
 
-                    std_d1 = self.std_at_level_post['detail'][0][lvl_idx - lvl]
-                    std_d2 = self.std_at_level_post['detail'][1][lvl_idx - lvl]
-                    std_d3 = self.std_at_level_post['detail'][2][lvl_idx - lvl]
-                
-                if self.normalise_details:
-                    means = self.xp.stack([mean_d1, mean_d2, mean_d3], axis=-1)  # (P,3)
-                    stds  = self.xp.stack([std_d1,  std_d2,  std_d3],  axis=-1)  # (P,3)
-                    y_details = (y[..., 1:] - means[None, :, :]) / stds[None, :, :]
-                    y = self.xp.concatenate([y[..., :1], y_details], axis=-1)
+                std_d1 = self.std_at_level_post['detail'][0][lvl_idx - lvl]
+                std_d2 = self.std_at_level_post['detail'][1][lvl_idx - lvl]
+                std_d3 = self.std_at_level_post['detail'][2][lvl_idx - lvl]
+            
+            if self.normalise_details:
+                means = self.xp.stack([mean_d1, mean_d2, mean_d3], axis=-1)  # (P,3)
+                stds  = self.xp.stack([std_d1,  std_d2,  std_d3],  axis=-1)  # (P,3)
+                y_details = (y[..., 1:] - means[None, :, :]) / stds[None, :, :]
+                y = self.xp.concatenate([y[..., :1], y_details], axis=-1)
 
-                    post_norm_logdet += - self.xp.log(std_d1).sum(axis=-1)
-                    post_norm_logdet += - self.xp.log(std_d2).sum(axis=-1)
-                    post_norm_logdet += - self.xp.log(std_d3).sum(axis=-1)
+                abslogdet += - self.xp.log(std_d1).sum(axis=-1)
+                abslogdet += - self.xp.log(std_d2).sum(axis=-1)
+                abslogdet += - self.xp.log(std_d3).sum(axis=-1)
 
-                if self.empty_norm_stats_flag:
-                    self.mu_at_level_post['detail'][0][lvl_idx - lvl] = mean_d1
-                    self.mu_at_level_post['detail'][1][lvl_idx - lvl] = mean_d2
-                    self.mu_at_level_post['detail'][2][lvl_idx - lvl] = mean_d3
+            if self.empty_norm_stats_flag:
+                self.mu_at_level_post['detail'][0][lvl_idx - lvl] = mean_d1
+                self.mu_at_level_post['detail'][1][lvl_idx - lvl] = mean_d2
+                self.mu_at_level_post['detail'][2][lvl_idx - lvl] = mean_d3
 
-                    self.std_at_level_post['detail'][0][lvl_idx - lvl] = std_d1
-                    self.std_at_level_post['detail'][1][lvl_idx - lvl] = std_d2
-                    self.std_at_level_post['detail'][2][lvl_idx - lvl] = std_d3
+                self.std_at_level_post['detail'][0][lvl_idx - lvl] = std_d1
+                self.std_at_level_post['detail'][1][lvl_idx - lvl] = std_d2
+                self.std_at_level_post['detail'][2][lvl_idx - lvl] = std_d3
 
             z_parts.append(y[..., 1:].reshape(batches, -1))
         z = self.xp.concatenate(z_parts, axis=1)
 
         self.empty_norm_stats_flag = False
-        if self.post_normalise:
-            self.logdet = post_norm_logdet
-            return z, post_norm_logdet
-        else:
-            self.logdet = logdet
-            return z, logdet
+        self.logdet = abslogdet
+        return z, abslogdet
 
     # TODO: this one too
     def _reverse_cycle_healpix_tree(self,
@@ -868,8 +823,7 @@ class HaarWaveletTransform(InvertibleDataTransform):
         offset = self.last_npix
         a = transformed_data[:, :offset] # (B, out_npix)
 
-        if self.post_normalise:
-            a = a * self.std_at_level_post['coarse'] + self.mu_at_level_post['coarse']
+        a = a * self.std_at_level_post['coarse'] + self.mu_at_level_post['coarse']
 
         # iterate from high resolution to low resolution
         details_coarse2fine = []
@@ -892,28 +846,19 @@ class HaarWaveletTransform(InvertibleDataTransform):
             y_pre = self.xp.concatenate([a_here, d_out], axis=-1) # (B, P_l, n_coefficients)
 
             lvl_idx = self.n_levels - 1
-            if not self.post_normalise:
-                mu_vec = self.xp.stack([
-                    self.mu_at_level[-1 - lvl][i] for i in range(4)
-                ], axis=-1)
-                sigma_vec = self.xp.stack([
-                    self.std_at_level[-1 - lvl][i] for i in range(4)
-                ], axis=-1)
-                y_pre = y_pre * sigma_vec + mu_vec
-            else:
-                if self.normalise_details:
-                    means = self.xp.stack([
-                        self.mu_at_level_post['detail'][0][lvl_idx - lvl],
-                        self.mu_at_level_post['detail'][1][lvl_idx - lvl],
-                        self.mu_at_level_post['detail'][2][lvl_idx - lvl],
-                    ], axis=-1)  # (P,3)
-                    stds = self.xp.stack([
-                        self.std_at_level_post['detail'][0][lvl_idx - lvl],
-                        self.std_at_level_post['detail'][1][lvl_idx - lvl],
-                        self.std_at_level_post['detail'][2][lvl_idx - lvl],
-                    ], axis=-1)  # (P,3)
-                    y_details = y_pre[..., 1:] * stds[None, :, :] + means[None, :, :]
-                    y_pre = self.xp.concatenate([y_pre[..., :1], y_details], axis=-1)
+            if self.normalise_details:
+                means = self.xp.stack([
+                    self.mu_at_level_post['detail'][0][lvl_idx - lvl],
+                    self.mu_at_level_post['detail'][1][lvl_idx - lvl],
+                    self.mu_at_level_post['detail'][2][lvl_idx - lvl],
+                ], axis=-1)  # (P,3)
+                stds = self.xp.stack([
+                    self.std_at_level_post['detail'][0][lvl_idx - lvl],
+                    self.std_at_level_post['detail'][1][lvl_idx - lvl],
+                    self.std_at_level_post['detail'][2][lvl_idx - lvl],
+                ], axis=-1)  # (P,3)
+                y_details = y_pre[..., 1:] * stds[None, :, :] + means[None, :, :]
+                y_pre = self.xp.concatenate([y_pre[..., :1], y_details], axis=-1)
 
             data = self._inverse_matrix_product(y_pre)
 
@@ -935,14 +880,12 @@ class HaarWaveletTransformJax(HaarWaveletTransform):
     def __init__(self,
                  first_nside: int,
                  last_nside: int = 1,
-                 post_normalise: bool = False,
                  matrix_type: Literal['hadamard', 'sparse_average'] = 'hadamard',
                  normalise_details: bool = True,
                  n_chunks: int = 1):
         super().__init__(
             first_nside=first_nside,
             last_nside=last_nside,
-            post_normalise=post_normalise,
             matrix_type=matrix_type,
             normalise_details=normalise_details,
             n_chunks=n_chunks,
