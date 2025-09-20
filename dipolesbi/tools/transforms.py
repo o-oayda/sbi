@@ -40,6 +40,10 @@ class InvertibleDataTransform(ABC):
     def clear(self) -> None:
         pass
 
+    @abstractmethod
+    def compute_mean_and_std(self, data: NDArray) -> None:
+        pass
+
 class InvertibleThetaTransformJax(ABC):
     def __init__(self) -> None:
         self._theta_mean = None
@@ -109,6 +113,9 @@ class BlankTransform(InvertibleDataTransform):
 
     def clear(self) -> None:
         pass
+
+    def compute_mean_and_std(self, data: NDArray) -> None:
+        return 
 
 class ZScore(InvertibleDataTransform):
     def __init__(self) -> None:
@@ -677,6 +684,11 @@ class HaarWaveletTransform(InvertibleDataTransform):
         self.std_at_level_post = self._make_post_dict()
         self.empty_norm_stats_flag = True
 
+    def compute_mean_and_std(self, data: NDArray) -> None:
+        # do a forward cycle to compute stats but don't use outputs
+        self._cycle_healpix_tree(data)
+        return
+
     def forward_and_log_det(self, data: NDArray) -> tuple[NDArray, NDArray]:
         # Ensure backend array; remember original dtype for optional cast-back
         orig_dtype = getattr(data, 'dtype', None)
@@ -809,7 +821,11 @@ class HaarWaveletTransform(InvertibleDataTransform):
         z = self.xp.concatenate(z_parts, axis=1)
 
         self.empty_norm_stats_flag = False
-        self.logdet = abslogdet
+        
+        # since for each batch the transform jacobian is identical,
+        # we only need to extract one scalar (first element) from this 1D array
+        self.logdet = abslogdet[0]
+
         return z, abslogdet
 
     # TODO: this one too
@@ -866,7 +882,10 @@ class HaarWaveletTransform(InvertibleDataTransform):
             upstream_data = data.reshape(batches, -1)
 
         x_rec = upstream_data
-        inverse_logdet = -self.logdet # hack slightly and assume forward has been called
+
+        # hack slightly and assume forward has been called
+        inverse_logdet = -self.logdet * self.xp.ones(batches)
+
         return x_rec, inverse_logdet
 
     def _forward_matrix_product(self, v: NDArray) -> NDArray:
