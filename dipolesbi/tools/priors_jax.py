@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Callable
 import jax
 from blackjax.types import PRNGKey
-from dipolesbi.tools.utils import polar_logpdf_jax, sample_polar_jax
+from dipolesbi.tools.utils import PytreeAdapter, polar_logpdf_jax, sample_polar_jax
 from jax import numpy as jnp
 
 
@@ -110,6 +110,20 @@ class JaxPrior(ABC):
             b = self.prior_dict[name]['high_range']
             log_prior += self.prior_dict[name]['logpdf_func'](x, a, b)
         return log_prior
+
+    def log_prob_pray_its_ordered_correctly(self, params: jnp.ndarray) -> jnp.ndarray:
+        log_prior = jnp.zeros(())
+        for i, name in enumerate(self.prior_names): 
+            x = params[..., i]
+            a = self.prior_dict[name]['low_range']
+            b = self.prior_dict[name]['high_range']
+            log_prior += self.prior_dict[name]['logpdf_func'](x, a, b)
+        return log_prior
+
+    def get_adapter(self) -> PytreeAdapter:
+        rng_key = jax.random.PRNGKey(0)
+        example_theta = self.sample(rng_key)
+        return PytreeAdapter(example_theta)
     
     # def add_prior(self,
     #         prior: 'UniformWrapper',
