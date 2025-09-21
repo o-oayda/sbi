@@ -17,7 +17,30 @@ import torch.nn.functional as F
 from jax import numpy as jnp
 import jax
 from dipolesbi.tools.np_rngkey import NPKey
+from jax.flatten_util import ravel_pytree
 
+
+class PytreeAdapter:
+    """Converts between a batch of pytrees and a 2-D (B, D) array."""
+    def __init__(self, example_theta: dict[str, jnp.ndarray]):
+        self.ravel, self.unravel = ravel_pytree(example_theta)
+
+    def to_array(self, theta_batch_tree: dict[str, jnp.ndarray]) -> jnp.ndarray:
+        return jax.vmap(self.ravel)(theta_batch_tree)
+
+    def to_pytree(self, X: jnp.ndarray):
+        return jax.vmap(self.unravel)(X)
+
+def convert_x_in_named_dataset(dataset):
+    fields = dataset._asdict()
+    x = fields['x']
+    if isinstance(x, dict):
+        keys = x.keys()
+        arrays = [np.asarray(x[k]).reshape(-1, 1) for k in keys]
+        fields['x'] = np.concatenate(arrays, axis=1)
+    else:
+        fields['x'] = np.asarray(x)
+    return type(dataset)(**fields)
 
 def is_integerish_f32(x, ulps=1):
     x = np.asarray(x, dtype=np.float32)
@@ -57,7 +80,7 @@ def spherical_to_cartesian(theta_phi: tuple[NDArray, NDArray]) -> NDArray:
     xyz = np.stack([x, y, z])
     return xyz
 
-def np_sph2cart(
+def np_sph2cart_unitsphere(
         phi: NDArray, 
         theta: NDArray
 ) -> tuple[NDArray, NDArray, NDArray]:
