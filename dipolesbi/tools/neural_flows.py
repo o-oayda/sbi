@@ -48,7 +48,26 @@ def make_mlp_with_dropout(sizes, activation=jax.nn.silu, dropout_rate=0.0):
     return net  # callable: net(x, training=bool)
 
 class AbstractNeuralFlow(ABC):
-    def __init__(self, config: NeuralFlowConfig, transform_config: TransformConfig) -> None:
+    class _ThetaTransformWrapper:
+        """
+        Because I mixed up the nomenclature in normalising flows, 
+        I need a wrapper to reverse the transform functions.
+        In normalising flows: forward means latent data -> x, inverse is x -> latent data.
+        But this is the other way around in the transform,
+        so this adapter makes theta transforms integrate cleanly into Surjectors chains.
+
+        TODO: Later on, we'll rafactor to use the correct normalising flows names.
+        """
+        def __init__(self, base_transform: InvertibleThetaTransformJax):
+            self._base = base_transform
+
+        def forward_and_log_det(self, z, **kwargs):
+            return self._base.inverse_and_log_det(z, **kwargs)
+
+        def inverse_and_log_det(self, x, **kwargs):
+            return self._base.forward_and_log_det(x, **kwargs)
+
+    def __init__(self, config: NeuralFlowConfig) -> None:
         super().__init__()
         self.losses = []
         self.val_losses = []
@@ -90,7 +109,7 @@ class AbstractNeuralFlow(ABC):
             self.theta_transform.clear()
             self.theta_transform.compute_mean_and_std(training_data.x)
 
-    def _transform_conditioning_variable(
+    def _maybe_transform_conditioning_variable(
             self,
             training_data: named_dataset_idx, 
             validation_data: named_dataset
@@ -344,7 +363,7 @@ class AbstractNeuralFlow(ABC):
         np_sequence = npkey_sequence_from_hk(rng_seq)
 
         self._clear_and_replace_stats(training_data)
-        training_data, validation_data = self._transform_conditioning_variable(
+        training_data, validation_data = self._maybe_transform_conditioning_variable(
             training_data, validation_data
         )
         self.training_data, self.validation_data = self._maybe_pretransform_target(
@@ -876,7 +895,7 @@ class NeuralFlow(AbstractNeuralFlow):
 
             elif self.mode == 'NPE':
                 if self.theta_transform is not None:
-                    layers.append(self.theta_transform)
+                    layers.append(self._ThetaTransformWrapper(self.theta_transform))
 
             else:
                 raise Exception(f'Mode {self.mode} not recognised.')
@@ -961,4 +980,3 @@ class NeuralFlow(AbstractNeuralFlow):
         chain = Chain(self.layers)
         td = TransformedDistribution(self._base_distribution_fn(cur_dim), chain)
         return td(method, **kwargs)
-
