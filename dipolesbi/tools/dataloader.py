@@ -73,6 +73,7 @@ def split_train_val_dict(
     training_set_round_idxs = round_idx[train_idx]
     return y_tuple, x_tuple, training_set_round_idxs
 
+
 def as_batch_iterator_cpu2gpu(
     rng_key: NPKey, data: named_dataset_idx | named_dataset, batch_size: int, shuffle=True
 ):
@@ -102,12 +103,16 @@ def as_batch_iterator_cpu2gpu(
         ret_idx = idxs[start_idx:start_idx + step_size]
 
         # NumPy advanced indexing per field (CPU)
-        batch = {
-            name: array[ret_idx]
-            for name, array in zip(data._fields, data)
-        }
+        batch = {}
+        for name, array in zip(data._fields, data):
+            if name == "x" and isinstance(array, dict):
+                # Handle the case where 'x' is a dict of arrays (tree)
+                batch["x"] = {k: v[ret_idx] for k, v in array.items()}
+            else:
+                batch[name] = array[ret_idx]
 
         # Move JUST this batch to GPU
         return jax.device_put(batch)
 
     return _DataLoader(num_batches, idxs, get_batch)
+
