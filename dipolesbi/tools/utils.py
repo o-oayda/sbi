@@ -259,10 +259,12 @@ def polar_logpdf_jax(
     maxval_rad = jnp.pi / 2 - jnp.deg2rad(minval)
     minval_rad = jnp.pi / 2 - jnp.deg2rad(maxval)
 
-    return (
-        jnp.log(-jnp.sin(theta) / (jnp.cos(maxval_rad) - jnp.cos(minval_rad)))
-      + jnp.log(jnp.pi / 180) # p(theta_rad) -> p(theta_deg) Jacobian
-    )
+    # restrict to prior range
+    support = jnp.logical_and(latitude >= minval, latitude <= maxval)
+    density = -jnp.sin(theta) / (jnp.cos(maxval_rad) - jnp.cos(minval_rad))
+    log_density = jnp.log(jnp.abs(density)) + jnp.log(jnp.pi / 180)
+
+    return jnp.where(support, log_density, -jnp.inf)
 
 def softplus_pos(x):  # avoids zero scales
     return F.softplus(x) + 1e-8
