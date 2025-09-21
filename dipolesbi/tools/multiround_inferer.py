@@ -82,8 +82,8 @@ class MultiRoundInferer:
         self.theta_mean = None
         self.theta_std = None
 
-        self.data_transform = transform_config.data_transform
-        self.theta_transform = transform_config.theta_transform
+        self.data_transform = transform_config.data_transform_config.data_transform
+        self.theta_transform = transform_config.theta_transform_config.theta_transform
         self.transform_config = transform_config
 
         self.all_data = np.full(
@@ -531,13 +531,19 @@ class MultiRoundInferer:
             return lax.dynamic_update_slice(dst, src, idx)
         return jax.tree.map(put, storage, batch)
 
-    def _sample_posterior(self, posterior_key: PRNGKey, n_samples: int) -> None:
+    def _sample_posterior(
+            self, 
+            posterior_key: PRNGKey, 
+            n_samples: int
+    ) -> dict[str, jnp.ndarray]:
         assert self.nflow is not None
 
-        self.nflow.sample_posterior(
+        return self.nflow.sample_posterior(
             rng_key=posterior_key, 
             n_samples=n_samples,
-            x0=jax.device_put(self.reference_observation)
+            x0=jax.device_put(self.reference_observation),
+            check_proposal_probs=False,
+            ui=self.ui
         )
 
     def _compute_posterior(self, posterior_key: PRNGKey) -> None:
@@ -753,7 +759,6 @@ class MultiRoundInferer:
             nflow = NeuralFlow(
                 self.target_ndim,
                 config=self.nflow_config,
-                transform_config=self.transform_config,
                 data_transform=self.data_transform,
                 theta_transform=self.theta_transform
             )

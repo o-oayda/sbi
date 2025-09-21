@@ -105,17 +105,14 @@ if __name__ == '__main__':
     # corner(lb_inferer._samples)
     # plt.show()
 
-    blank_config = ConfigOfConfigs.blank(
-        theta0, 
-        ssnle_overrides={'decoder_distribution': 'poisson'}
-    )
     nside16_config = ConfigOfConfigs.nside16_npe(
         theta0, 
-        transform_overrides={
-            'matrix_type': 'hadamard',
-            'normalise_details': True,
-            'last_nside': 1, # broken now?
-            'pytree_adapter': adapter
+        theta_adapter=adapter,
+        data_transform_overrides={'method': 'global'},
+        nflow_overrides={
+            'conditioner_n_neurons': 64,
+            'conditioner_n_layers': 2,
+            'architecture': 5 * ['MAF']
         },
         training_overrides={'restore_from_previous': False},
         multiround_overrides={
@@ -124,18 +121,20 @@ if __name__ == '__main__':
             'n_requantisations': None,
             'plot_save_dir': args.out_dir,
             'initial_fraction': 0.,
-            'simulation_budget': 50_000
+            'simulation_budget': 50_000,
+            # 'n_rounds': 5
         }
     )
     # nside16_config = ConfigOfConfigs.nside16_nle(
     #     theta0, 
-    #     transform_overrides={
+    #     theta_adapter=adapter,
+    #     data_transform_overrides={
     #         'matrix_type': 'hadamard',
     #         'normalise_details': True,
     #         'last_nside': 1 # broken now?
     #     },
     #     training_overrides={'restore_from_previous': False},
-    #     ssnle_overrides={
+    #     nflow_overrides={
     #         'decoder_distribution': 'gaussian',
     #         'architecture': ['healpix_funnel'], # + 2 * ['MAF'],# + 14 * ['MAF'],
     #         'funnel_one_and_done': False,
@@ -152,7 +151,7 @@ if __name__ == '__main__':
     # )
     nside32_config = ConfigOfConfigs.nside32(
         theta0, 
-        transform_overrides={'pytree_adapter': adapter},
+        theta_adapter=adapter,
         multiround_overrides={
             'simulation_budget': 100_000, 
             'dequantise_data': True,
@@ -165,6 +164,7 @@ if __name__ == '__main__':
         }
     )
     meta_cfg = {
+        4: nside16_config,
         16: nside16_config,
         32: nside32_config
     }

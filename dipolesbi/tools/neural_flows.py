@@ -74,7 +74,7 @@ class AbstractNeuralFlow(ABC):
         self.model = self.get_flow()
         self.best_params = None
         self._config = config
-        self._target_is_pretransformed = not transform_config.embed_target_transform_in_flow
+        self._target_is_pretransformed = not self._config.embed_target_transform_in_flow
 
     @property
     def nflow_config(self) -> NeuralFlowConfig:
@@ -533,6 +533,7 @@ class AbstractNeuralFlow(ABC):
             n_samples: int,
             x0: jnp.ndarray,
             check_proposal_probs: bool = True,
+            ui: Optional[MultiRoundInfererUI] = None,
             **kwargs
     ) -> dict[str, jnp.ndarray]:
         assert self.prior is not None
@@ -565,6 +566,9 @@ class AbstractNeuralFlow(ABC):
                 mask = jnp.isfinite(proposal_probs)
                 proposal_tree = jax.tree_map(lambda a: a[mask], proposal_tree)
                 n_accepted = int(mask.sum())
+                if ui is not None:
+                    discarded = n_sim - n_accepted
+                    ui.log(f"Posterior batch: accepted {n_accepted}/{n_sim} (discarded {discarded})")
             else:
                 n_accepted = n_sim
 
@@ -649,7 +653,6 @@ class NeuralFlow(AbstractNeuralFlow):
             self,
             target_ndim: int, 
             config: NeuralFlowConfig,
-            transform_config: TransformConfig,
             data_transform: Optional[InvertibleDataTransform] = None,
             theta_transform: Optional[InvertibleThetaTransformJax] = None
     ) -> None:
@@ -657,7 +660,7 @@ class NeuralFlow(AbstractNeuralFlow):
         If using a heirarchical flow, pass an invertible data transform so
         the detail blocks can be accessed.
         '''
-        super().__init__(config, transform_config)
+        super().__init__(config)
         self.target_ndim = target_ndim
         self._data_transform = data_transform
         self._theta_transform = theta_transform
