@@ -161,13 +161,6 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
             raise Exception(f'{method} not recognised.')
 
         self.method = method
-        # TODO: refactor later to be part of the adapter
-        self.str2idx = {
-            'mean_density': 0,
-            'observer_speed': 1,
-            'dipole_longitude': 2,
-            'dipole_latitude': 3
-        }
 
     def __repr__(self) -> str:
         return (
@@ -236,16 +229,16 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
             theta = theta[None, :] # make sure at least 2D, (ndim,) -> (1, ndim)
             squeezed_input = True
 
-        lon = jnp.deg2rad(theta[..., self.str2idx['dipole_longitude']])
-        colat = jnp.pi / 2 - jnp.deg2rad(theta[..., self.str2idx['dipole_latitude']])
+        lon = jnp.deg2rad(self.adapter.flat_view(theta, 'dipole_longitude'))
+        colat = jnp.pi / 2 - jnp.deg2rad(self.adapter.flat_view(theta, 'dipole_latitude'))
 
         x, y, z = jax_sph2cart(lon, colat)
 
         mean_density_norm = (
-            theta[..., self.str2idx['mean_density']] - self.theta_mean[0]
+            self.adapter.flat_view(theta, 'mean_density') - self.theta_mean[0]
         ) / self.theta_std[0]
         observer_speed_norm = (
-            theta[..., self.str2idx['observer_speed']] - self.theta_mean[1]
+            self.adapter.flat_view(theta, 'observer_speed') - self.theta_mean[1]
         ) / self.theta_std[1]
 
         t_transformed = jnp.stack(
@@ -265,6 +258,7 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
 
         return t_transformed, abslogdet
 
+    # TODO: we probably need to integrate the adapter here; this could be a liability
     def _inverse_and_log_det_cartesian(
         self,
         transformed_theta: jnp.ndarray
@@ -332,14 +326,14 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
             theta = theta[None, :]
             squeezed_input = True
 
-        lon = jnp.deg2rad(theta[..., self.str2idx['dipole_longitude']])
-        colat = jnp.pi / 2 - jnp.deg2rad(theta[..., self.str2idx['dipole_latitude']])
+        lon = jnp.deg2rad(self.adapter.flat_view(theta, 'dipole_longitude'))
+        colat = jnp.pi / 2 - jnp.deg2rad(self.adapter.flat_view(theta, 'dipole_latitude'))
 
         mean_density_norm = (
-            theta[..., self.str2idx['mean_density']] - self.theta_mean[0]
+            self.adapter.flat_view(theta, 'mean_density') - self.theta_mean[0]
         ) / self.theta_std[0]
         observer_speed_norm = (
-            theta[..., self.str2idx['observer_speed']] - self.theta_mean[1]
+            self.adapter.flat_view(theta, 'observer_speed') - self.theta_mean[1]
         ) / self.theta_std[1]
 
         t_transformed = jnp.stack(

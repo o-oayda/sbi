@@ -27,6 +27,13 @@ class PytreeAdapter:
         self._leaf_shapes = [jnp.asarray(example_theta[k]).shape for k in self._keys]
         self._leaf_sizes = [int(np.prod(shape)) if shape else 1 for shape in self._leaf_shapes]
         self._cumulative_sizes = np.cumsum(self._leaf_sizes)
+        self._key_slices: dict[str, slice] = {}
+
+        start = 0
+        for key, size in zip(self._keys, self._leaf_sizes):
+            end = start + size
+            self._key_slices[key] = slice(start, end)
+            start = end
 
         def _ravel_single(theta_sample: dict[str, jnp.ndarray]) -> jnp.ndarray:
             flat_leaves = [
@@ -52,6 +59,17 @@ class PytreeAdapter:
 
     def to_pytree(self, X: jnp.ndarray):
         return jax.vmap(self.unravel)(X)
+
+    def flat_slice(self, key: str) -> slice:
+        return self._key_slices[key]
+
+    def flat_view(self, theta_array: jnp.ndarray, key: str) -> jnp.ndarray:
+        sl = self.flat_slice(key)
+        view = theta_array[..., sl]
+        shape = self._leaf_shapes[self._keys.index(key)]
+        if len(shape) == 0:
+            return view.reshape(theta_array.shape[:-1])
+        return view.reshape(theta_array.shape[:-1] + shape)
 
 def convert_x_in_named_dataset(dataset):
     fields = dataset._asdict()
