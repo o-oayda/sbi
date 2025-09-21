@@ -153,7 +153,7 @@ class HadamardTransform(InvertibleDataTransform):
     def __repr__(self) -> str:
         backend_name = getattr(self.xp, '__name__', str(self.xp))
         return (
-            f"HaarWaveletTransform("
+            f"HadamardTransform("
             f"first_nside={self.first_nside}, "
             f"last_nside={self.last_nside}, "
             f"first_npix={self.first_npix}, "
