@@ -299,12 +299,20 @@ class AbstractNeuralFlow(ABC):
         # a dict with keys 'x' (theta) and 'y' (data)
         initial_iter = train_iter(0)
 
-        params = self.model.init(
-            next(rng_seq), 
-            method='log_prob', 
-            y=initial_iter['x'],
-            x=initial_iter['y'],
-        )
+        if self.mode == 'NPE':
+            params = self.model.init(
+                next(rng_seq), 
+                method='log_prob', 
+                y=initial_iter['x'],
+                x=initial_iter['y'],
+            )
+        else:
+            params = self.model.init(
+                next(rng_seq), 
+                method='log_prob', 
+                y=initial_iter['y'],
+                x=initial_iter['x'],
+            )
 
         return params
 
