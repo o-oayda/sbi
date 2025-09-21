@@ -112,26 +112,48 @@ class BlankTransform(InvertibleDataTransform):
         return 
 
 class ZScore(InvertibleDataTransform):
-    def __init__(self) -> None:
+    def __init__(self, method: Literal['batchwise', 'global'] = 'batchwise') -> None:
         self.mu = None
         self.sigma = None
+        self.method = method
+
+        if self.method == 'batchwise':
+            self._compute_mean_and_std = self._compute_mean_and_std_batchwise
+        elif self.method == 'global':
+            self._compute_mean_and_std = self._compute_mean_and_std_global
+        else:
+            raise Exception(f'Method {method} not recognised.')
 
     def __repr__(self) -> str:
         return (
             f"Zscore("
             f"mu={self.mu}, "
-            f"sigma={self.sigma}"
+            f"sigma={self.sigma}, "
+            f"method={self.method}"
             f")"
         )
+
+    def compute_mean_and_std(self, data: NDArray) -> None:
+        return self._compute_mean_and_std(data)
+
+    def _compute_mean_and_std_batchwise(self, data: NDArray) -> None:
+        self.mu = np.nanmean(data, axis=0)
+        self.sigma = np.nanstd(data, axis=0)
+
+    def _compute_mean_and_std_global(self, data: NDArray, min_std=1e-14) -> None:
+        self.mu = np.nanmean(data)
+        std = np.nanstd(data, axis=1)
+        std[std < min_std] = min_std
+        std = std.mean()
+        self.sigma = std
 
     def forward_and_log_det(self, data: NDArray) -> tuple[NDArray, NDArray]:
         '''
         Do a batchwise mean per data dimension.
         '''
         n_batches = data.shape[0]
-        if (self.mu is None) or (self.sigma is None):
-            self.mu = np.nanmean(data, axis=0)
-            self.sigma = np.nanstd(data, axis=0)
+        assert self.sigma is not None
+        assert self.mu is not None
 
         log_det_jac = - np.log(self.sigma).sum() * np.ones(n_batches)
         z = (data - self.mu) / self.sigma
