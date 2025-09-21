@@ -40,7 +40,7 @@ class InvertibleThetaTransformJax(ABC):
     def __init__(self, pytree_adapter: PytreeAdapter) -> None:
         self._theta_mean = None
         self._theta_std = None
-        self.adapter = pytree_adapter
+        self._adapter = pytree_adapter
     
     def __call__(
             self, 
@@ -48,6 +48,10 @@ class InvertibleThetaTransformJax(ABC):
             **kwargs
     ) -> tuple[jnp.ndarray, jnp.ndarray]:
         return self.forward_and_log_det(theta, **kwargs)
+
+    @property
+    def adapter(self) -> PytreeAdapter:
+        return self._adapter
 
     @property
     def theta_mean(self) -> jnp.ndarray | None:
