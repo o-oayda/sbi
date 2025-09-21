@@ -17,16 +17,38 @@ import torch.nn.functional as F
 from jax import numpy as jnp
 import jax
 from dipolesbi.tools.np_rngkey import NPKey
-from jax.flatten_util import ravel_pytree
 
 
 class PytreeAdapter:
     """Converts between a batch of pytrees and a 2-D (B, D) array."""
+
     def __init__(self, example_theta: dict[str, jnp.ndarray]):
-        self.ravel, self.unravel = ravel_pytree(example_theta)
+        self._keys = list(example_theta.keys())
+        self._leaf_shapes = [jnp.asarray(example_theta[k]).shape for k in self._keys]
+        self._leaf_sizes = [int(np.prod(shape)) if shape else 1 for shape in self._leaf_shapes]
+        self._cumulative_sizes = np.cumsum(self._leaf_sizes)
+
+        def _ravel_single(theta_sample: dict[str, jnp.ndarray]) -> jnp.ndarray:
+            flat_leaves = [
+                jnp.reshape(jnp.asarray(theta_sample[k]), (size,))
+                for k, size in zip(self._keys, self._leaf_sizes)
+            ]
+            return jnp.concatenate(flat_leaves, axis=0)
+
+        def _unravel_single(flat_vector: jnp.ndarray) -> dict[str, jnp.ndarray]:
+            flat_vector = jnp.asarray(flat_vector)
+            splits = jnp.split(flat_vector, self._cumulative_sizes[:-1])
+            return {
+                key: split.reshape(shape)
+                for key, shape, split in zip(self._keys, self._leaf_shapes, splits)
+            }
+
+        self._ravel_single = _ravel_single
+        self.ravel = _ravel_single
+        self.unravel = _unravel_single
 
     def to_array(self, theta_batch_tree: dict[str, jnp.ndarray]) -> jnp.ndarray:
-        return jax.vmap(self.ravel)(theta_batch_tree)
+        return jax.vmap(self._ravel_single)(theta_batch_tree)
 
     def to_pytree(self, X: jnp.ndarray):
         return jax.vmap(self.unravel)(X)
