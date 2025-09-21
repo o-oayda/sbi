@@ -22,7 +22,7 @@ from dipolesbi.tools.np_rngkey import NPKey, npkey_from_jax
 from dipolesbi.tools.priors_np import DipolePriorNP
 from dipolesbi.tools.transforms import BlankTransform
 from dipolesbi.tools.ui import MultiRoundInfererUI
-from dipolesbi.tools.utils import HidePrints, jax_sph2cart, load_dict_npz, np_sph2cart, save_dict_npz
+from dipolesbi.tools.utils import HidePrints, jax_sph2cart, load_dict_npz, np_sph2cart_unitsphere, save_dict_npz
 from jax import lax
 import datetime
 
@@ -39,7 +39,7 @@ class MultiRoundInferer:
             reference_observation: NDArray,
             multi_round_config: MultiRoundInfererConfig,
             nflow_config: NeuralFlowConfig,
-            transform_config: Optional[TransformConfig] = None,
+            transform_config: TransformConfig,
             train_config: TrainingConfig = TrainingConfig(),
     ) -> None:
         self.mode = mode
@@ -48,7 +48,6 @@ class MultiRoundInferer:
         self.rng_key = jax.random.PRNGKey(self.mr_config.prng_integer_seed)
 
         self.initial_proposal = initial_proposal
-        self.initial_proposal.change_kwarg('N', 'mean_density')
         self.initial_proposal_jax = initial_proposal.to_jax()
         self.initial_proposal_jax.change_kwarg('N', 'mean_density')
 
@@ -56,7 +55,16 @@ class MultiRoundInferer:
         self.data_ndim = reference_observation.shape[-1]
         self.theta_ndim = initial_proposal.ndim
         self.nside = hp.npix2nside(self.data_ndim)
+
         self.reference_observation = reference_observation
+        reference_theta = self.mr_config.reference_theta
+        if reference_theta is not None:
+            self.reference_theta_jax: dict[str, jnp.ndarray] = {
+                k: jnp.array(v) for k, v in reference_theta.items()
+            }
+        else:
+            self.reference_theta_jax: dict[str, jnp.ndarray] = {}
+
         self.sample_posterior_seed = 0
 
         if not os.path.exists(self.mr_config.plot_save_dir):
@@ -74,12 +82,9 @@ class MultiRoundInferer:
         self.theta_mean = None
         self.theta_std = None
 
-        if transform_config is None:
-            self.data_transform = BlankTransform()
-            self.transform_config = None
-        else:
-            self.data_transform = transform_config.transform
-            self.transform_config = transform_config
+        self.data_transform = transform_config.data_transform
+        self.theta_transform = transform_config.theta_transform
+        self.transform_config = transform_config
 
         self.all_data = np.full(
             (self.mr_config.simulation_budget, self.data_ndim), np.nan,
@@ -209,7 +214,8 @@ class MultiRoundInferer:
                 self.ui.update_last_stats_row({'Evidence': self.jax_ns.evidence_str})
                 self.ui.finish_step('computed')
 
-                self._clear_data_summary_stats()
+                # do this inside the train step now
+                # self._clear_data_summary_stats()
                 plt.close('all')
                 self.ui.advance_global(n=self.mr_config.simulations_per_round)
 
@@ -267,10 +273,12 @@ class MultiRoundInferer:
                     self._dump_configs() # dump after training
 
                 self.ui.start_step(3, 'computing')
-                self._sample_posterior(posterior_key)
+                self.posterior_samples = self._sample_posterior(
+                    posterior_key, self.mr_config.n_posterior_samples
+                )
                 self.ui.finish_step('computed')
 
-                self._clear_data_summary_stats()
+                # self._clear_data_summary_stats()
                 plt.close('all')
                 self.ui.advance_global(n=self.mr_config.simulations_per_round)
 
@@ -287,7 +295,8 @@ class MultiRoundInferer:
             self.trn_set, 
             self.val_set,
             config=self.train_config,
-            ui=self.ui
+            ui=self.ui,
+            prior=self.initial_proposal_jax if self.mode == 'NPE' else None,
         )
         self.nflow.plot_loss_curve(
             show=False, 
@@ -321,6 +330,10 @@ class MultiRoundInferer:
             f.write("TransformConfig:\n")
             f.write(str(self.transform_config) + "\n")
 
+    def _to_jnp_array(self, theta: dict[str, jnp.ndarray]) -> jnp.ndarray:
+        arrays = [theta[k] for k in theta.keys()]
+        return jnp.stack(arrays, axis=1)
+
     def _sample_likelihood_stream(
             self,
             rng_key: PRNGKey,
@@ -343,7 +356,11 @@ class MultiRoundInferer:
 
         out = np.empty((n_repeats, ndim), dtype=np.float32)
 
-        theta0 = self._transform_theta(self.mr_config.reference_theta)
+        if self.theta_transform is not None:
+            theta0, _ = self.theta_transform(self.reference_theta_jax)
+        else:
+            theta0 = self._to_jnp_array(self.reference_theta_jax)
+
         theta0_ndim = theta0.shape[-1]
 
         start = 0
@@ -385,7 +402,7 @@ class MultiRoundInferer:
         ).squeeze()
 
         samples = jax.device_get(samples)
-        samples_untransformed = self._untransform_data(samples)
+        samples_untransformed, _ = self._untransform_data_and_logdet(samples)
         self.mean_samples = samples_untransformed.mean(axis=0)
 
         plt.figure()
@@ -421,10 +438,10 @@ class MultiRoundInferer:
             ui=self.ui
         )
         self.classic_jax_ns.setup(rng_key, n_live=1000, n_delete=200)
-        classic_nested_samples = self.classic_jax_ns.run()
+        self.classic_nested_samples = self.classic_jax_ns.run()
 
-        true_lnZ = classic_nested_samples.logZ()
-        true_lnZerr = classic_nested_samples.logZ(100).std() # type: ignore
+        self.true_lnZ = float(classic_nested_samples.logZ()) # type: ignore
+        self.true_lnZerr = float(classic_nested_samples.logZ(100).std()) # type: ignore
         self.ui.log(
             f"NLE Log Evidence: {self.nested_samples.logZ():.2f} "
             f"± {self.nested_samples.logZ(100).std():.2f}" # type: ignore
@@ -433,7 +450,7 @@ class MultiRoundInferer:
             f"Classic Log Evidence: {self.true_lnZ:.2f} "
             f"± {self.true_lnZerr:.2f}" # type: ignore
         )
-        return true_lnZ, true_lnZerr, classic_nested_samples
+        return self.true_lnZ, self.true_lnZerr, self.classic_nested_samples
 
     def _benchmark_classic(self, rng_key: PRNGKey) -> None:
         self.true_lnZ, self.true_lnZerr, self.classic_nested_samples = (
@@ -514,8 +531,14 @@ class MultiRoundInferer:
             return lax.dynamic_update_slice(dst, src, idx)
         return jax.tree.map(put, storage, batch)
 
-    def _sample_posterior(self, posterior_key: PRNGKey) -> None:
-        raise NotImplementedError
+    def _sample_posterior(self, posterior_key: PRNGKey, n_samples: int) -> None:
+        assert self.nflow is not None
+
+        self.nflow.sample_posterior(
+            rng_key=posterior_key, 
+            n_samples=n_samples,
+            x0=jax.device_put(self.reference_observation)
+        )
 
     def _compute_posterior(self, posterior_key: PRNGKey) -> None:
         ns_key, dequantise_key = jax.random.split(posterior_key)
@@ -538,7 +561,7 @@ class MultiRoundInferer:
             if x0.ndim == 1:
                 x0 = x0[None, :]
 
-        z0, log_det_jac = self._transform_data(np.asarray(x0))
+        z0, log_det_jac = self._transform_data_and_logdet(np.asarray(x0))
         z0 = jax.device_put(z0)
         log_det_jac = jax.device_put(log_det_jac)
 
@@ -549,7 +572,8 @@ class MultiRoundInferer:
             log_det_jac = log_det_jac[0]
 
         def lnlike_jax(params: dict[str, jnp.ndarray]) -> jnp.ndarray:
-            theta = self._transform_theta_jax(params, in_ns=True)
+            if self.theta_transform is not None:
+                theta, _ = self.theta_transform(params, in_ns=True)
 
             if not self.mr_config.dequantise_data:
                 log_like = self.nflow.evaluate_lnlike(theta[None, :], z0) # type: ignore
@@ -596,21 +620,21 @@ class MultiRoundInferer:
             split_key=split_key
         )
 
-        self._compute_theta_norm(trn_theta)
+        # self._compute_theta_norm(trn_theta)
+        #
+        # norm_train_data, _ = self._transform_data_and_logdet(trn_data)
+        # norm_val_data, _ = self._transform_data_and_logdet(val_data)
+        # norm_train_theta = self._transform_theta(trn_theta)
+        # norm_val_theta = self._transform_theta(val_theta)
 
-        norm_train_data, _ = self._transform_data(trn_data)
-        norm_val_data, _ = self._transform_data(val_data)
-        norm_train_theta = self._transform_theta(trn_theta)
-        norm_val_theta = self._transform_theta(val_theta)
-
-        assert not jnp.any(jnp.isnan(norm_train_data))
-        assert not jnp.any(jnp.isnan(norm_train_theta))
-        assert not jnp.any(jnp.isnan(norm_val_data))
-        assert not jnp.any(jnp.isnan(norm_train_data))
+        assert not jnp.any(jnp.isnan(trn_data))
+        assert not any(jnp.isnan(arr).any() for arr in trn_theta.values())
+        assert not jnp.any(jnp.isnan(val_data))
+        assert not any(jnp.isnan(arr).any() for arr in val_theta.values())
         assert not jnp.any(rnd_idx == self.round_idx_badval)
 
-        trn_set = named_dataset_idx(norm_train_data, norm_train_theta, rnd_idx)
-        val_set = named_dataset(norm_val_data, norm_val_theta)
+        trn_set = named_dataset_idx(trn_data, trn_theta, rnd_idx)
+        val_set = named_dataset(val_data, val_theta)
 
         return trn_set, val_set
 
@@ -637,71 +661,20 @@ class MultiRoundInferer:
             validation_fraction=self.train_config.validation_fraction
         )
 
-    def _compute_theta_norm(
-            self,
-            train_theta: dict[str, NDArray]
-    ) -> None:
-        mean_nbar = np.nanmean(train_theta['mean_density'])
-        std_nbar = np.nanstd(train_theta['mean_density'])
-        mean_v = np.nanmean(train_theta['observer_speed'])
-        std_v = np.nanstd(train_theta['observer_speed'])
-        self.theta_mean = np.asarray([mean_nbar, mean_v, 0, 0])
-        self.theta_std = np.asarray([std_nbar, std_v, 1, 1])
-
-    def _transform_theta_jax(
-        self,
-        theta: dict[str, jnp.ndarray],
-        in_ns: bool = False
-    ) -> jnp.ndarray:
-        lon = jnp.deg2rad(theta['dipole_longitude'])
-        colat = jnp.pi / 2 - jnp.deg2rad(theta['dipole_latitude'])
-        x, y, z = jax_sph2cart(lon, colat)
-
-        assert self.theta_mean is not None
-        assert self.theta_std is not None
-
-        t_transformed = jnp.stack(
-            [
-                (theta['mean_density'] - self.theta_mean[0]) / self.theta_std[0],
-                (theta['observer_speed'] - self.theta_mean[1]) / self.theta_std[1],
-                x, y, z
-            ],
-            axis=1 if not in_ns else 0
-        )
-        return t_transformed
-
-    def _transform_theta(
-        self,
-        theta: dict[str, NDArray]
-    ) -> NDArray:
-        lon = np.deg2rad(theta['dipole_longitude'])
-        colat = np.pi / 2 - np.deg2rad(theta['dipole_latitude'])
-        x, y, z = np_sph2cart(lon, colat)
-
-        assert self.theta_mean is not None
-        assert self.theta_std is not None
-
-        t_transformed = np.stack(
-            [
-                (theta['mean_density'] - self.theta_mean[0]) / self.theta_std[0],
-                (theta['observer_speed'] - self.theta_mean[1]) / self.theta_std[1],
-                x, y, z
-            ],
-            axis=1
-        )
-        return t_transformed
-
-    def _transform_data(self, data: NDArray) -> tuple[NDArray, NDArray]:
+    def _transform_data_and_logdet(self, data: NDArray) -> tuple[NDArray, NDArray]:
         '''
         Normalise only using stats computed from the training data.
         '''
         return self.data_transform(data) # type: ignore
 
-    def _untransform_data(self, z: np.ndarray) -> np.ndarray:
-        return self.data_transform.inverse(z) # type: ignore
+    def _untransform_data_and_logdet(self, z: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        assert self.data_transform is not None
+        return self.data_transform.inverse_and_log_det(z)
 
     def _clear_data_summary_stats(self) -> None:
-        self.data_transform.clear() # type: ignore
+        if (self.data_transform is not None) and (self.theta_transform is not None):
+            self.data_transform.clear()
+            self.theta_transform.clear()
 
     def _sample_proposal(
             self,
@@ -780,7 +753,9 @@ class MultiRoundInferer:
             nflow = NeuralFlow(
                 self.target_ndim,
                 config=self.nflow_config,
-                data_transform=self.data_transform
+                transform_config=self.transform_config,
+                data_transform=self.data_transform,
+                theta_transform=self.theta_transform
             )
         else:
             nflow = self.nflow

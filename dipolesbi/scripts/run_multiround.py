@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import os
 import glob
 import argparse
+import jax
 
 
 def lnZ_plot(inferer: MultiRoundInferer, out_dir: str) -> None:
@@ -94,6 +95,9 @@ if __name__ == '__main__':
     prior = DipolePriorNP(
         mean_count_range=[float(0.95*MEAN_DENSITY), float(1.05*MEAN_DENSITY)],
     )
+    prior.change_kwarg('N', 'mean_density')
+    prior_jax = prior.to_jax()
+    adapter = prior_jax.get_adapter()
 
     # prior.change_kwarg('N', 'mean_density')
     # lb_inferer = NotShitLikelihoodBasedInferer(model.log_likelihood, prior, x0)
@@ -105,21 +109,15 @@ if __name__ == '__main__':
         theta0, 
         ssnle_overrides={'decoder_distribution': 'poisson'}
     )
-    nside16_config = ConfigOfConfigs.nside16(
+    nside16_config = ConfigOfConfigs.nside16_npe(
         theta0, 
         transform_overrides={
-            'post_normalise': True, 
             'matrix_type': 'hadamard',
             'normalise_details': True,
-            'last_nside': 2
+            'last_nside': 1, # broken now?
+            'pytree_adapter': adapter
         },
         training_overrides={'restore_from_previous': False},
-        ssnle_overrides={
-            'decoder_distribution': 'gaussian',
-            'architecture': ['healpix_funnel'], # + 2 * ['MAF'],# + 14 * ['MAF'],
-            'funnel_one_and_done': False,
-            'funnel_maf_extension': 4
-        },
         multiround_overrides={
             'prng_integer_seed': args.ssnle_seed,
             'dequantise_data': False,
@@ -129,9 +127,32 @@ if __name__ == '__main__':
             'simulation_budget': 50_000
         }
     )
+    # nside16_config = ConfigOfConfigs.nside16_nle(
+    #     theta0, 
+    #     transform_overrides={
+    #         'matrix_type': 'hadamard',
+    #         'normalise_details': True,
+    #         'last_nside': 1 # broken now?
+    #     },
+    #     training_overrides={'restore_from_previous': False},
+    #     ssnle_overrides={
+    #         'decoder_distribution': 'gaussian',
+    #         'architecture': ['healpix_funnel'], # + 2 * ['MAF'],# + 14 * ['MAF'],
+    #         'funnel_one_and_done': False,
+    #         'funnel_maf_extension': 2
+    #     },
+    #     multiround_overrides={
+    #         'prng_integer_seed': args.ssnle_seed,
+    #         'dequantise_data': False,
+    #         'n_requantisations': None,
+    #         'plot_save_dir': args.out_dir,
+    #         'initial_fraction': 0.,
+    #         'simulation_budget': 50_000
+    #     }
+    # )
     nside32_config = ConfigOfConfigs.nside32(
         theta0, 
-        transform_overrides={'post_normalise': True},
+        transform_overrides={'pytree_adapter': adapter},
         multiround_overrides={
             'simulation_budget': 100_000, 
             'dequantise_data': True,
@@ -150,7 +171,7 @@ if __name__ == '__main__':
     cur_cfg = meta_cfg[NSIDE]
 
     inferer = MultiRoundInferer(
-        prior, model.generate_dipole, x0,
+        'NPE', prior, model.generate_dipole, x0,
         multi_round_config=cur_cfg.multiround_config,
         transform_config=cur_cfg.transform_config,
         nflow_config=cur_cfg.ssnle_config,

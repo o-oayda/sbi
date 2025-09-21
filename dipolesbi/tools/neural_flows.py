@@ -1,9 +1,13 @@
+from functools import partial
+from os import name
 from typing import Callable, Literal, Optional
 import distrax
 import haiku as hk
+from haiku._src.base import PRNGSequence
 from haiku._src.transform import Transformed
 from haiku._src.typing import PRNGKey
 from jax import numpy as jnp
+from jax._src.flatten_util import ravel_pytree
 from numpy.typing import NDArray
 from surjectors import (
     Chain,
@@ -22,7 +26,7 @@ import sys
 import matplotlib.pyplot as plt
 import logging
 from abc import ABC, abstractmethod
-from dipolesbi.tools.configs import NeuralFlowConfig, TrainingConfig
+from dipolesbi.tools.configs import NeuralFlowConfig, TrainingConfig, TransformConfig
 from dipolesbi.tools.distributions import IndependentWrapper, NegBinomDist, PoissonDist, StudentT
 from dipolesbi.tools.dataloader import as_batch_iterator_cpu2gpu, named_dataset_idx
 from dipolesbi.tools.np_rngkey import npkey_sequence_from_hk
@@ -30,6 +34,7 @@ from dipolesbi.tools.priors_jax import JaxPrior
 from dipolesbi.tools.transforms import InvertibleDataTransform, InvertibleThetaTransformJax
 from dipolesbi.tools.hadamard_transform import HadamardTransform
 from dipolesbi.tools.ui import MultiRoundInfererUI
+from dipolesbi.tools.utils import convert_x_in_named_dataset
 
 
 def make_mlp_with_dropout(sizes, activation=jax.nn.silu, dropout_rate=0.0):
@@ -43,16 +48,96 @@ def make_mlp_with_dropout(sizes, activation=jax.nn.silu, dropout_rate=0.0):
     return net  # callable: net(x, training=bool)
 
 class AbstractNeuralFlow(ABC):
-    def __init__(self) -> None:
+    def __init__(self, config: NeuralFlowConfig, transform_config: TransformConfig) -> None:
         super().__init__()
         self.losses = []
         self.val_losses = []
         self.model = self.get_flow()
         self.best_params = None
+        self._config = config
+        self._target_is_pretransformed = not transform_config.embed_target_transform_in_flow
+
+    @property
+    def nflow_config(self) -> NeuralFlowConfig:
+        return self._config
 
     @abstractmethod
     def _flow(self, method: str, **kwargs) -> Transformed:
         pass
+
+    @property
+    @abstractmethod
+    def mode(self) -> Literal['NLE'] | Literal['NPE']:
+        pass
+
+    @property
+    @abstractmethod
+    def data_transform(self) -> Optional[InvertibleDataTransform]:
+        pass
+
+    @property
+    @abstractmethod
+    def theta_transform(self) -> Optional[InvertibleThetaTransformJax]:
+        pass
+
+    def _clear_and_replace_stats(self, training_data: named_dataset_idx) -> None:
+        # recompute summary stats for new training data
+        if self.data_transform is not None:
+            self.data_transform.clear()
+            self.data_transform.compute_mean_and_std(training_data.y)
+
+        if self.theta_transform is not None:
+            self.theta_transform.clear()
+            self.theta_transform.compute_mean_and_std(training_data.x)
+
+    def _transform_conditioning_variable(
+            self,
+            training_data: named_dataset_idx, 
+            validation_data: named_dataset
+    ) -> tuple[named_dataset_idx, named_dataset]:
+        all_data = [training_data, validation_data]
+        new_data = []
+
+        for data in all_data:
+            if (self.mode == 'NLE') and (self.theta_transform is not None):
+                transformed_theta, _ = self.theta_transform(data.x)
+                data = data._replace(x=transformed_theta)
+
+            elif (self.mode == 'NPE') and (self.data_transform is not None):
+                transformed_data, _ = self.data_transform(data.y)
+                data = data._replace(y=transformed_data)
+
+            new_data.append(data)
+
+        return tuple(new_data)
+
+    @property
+    def target_is_pretransformed(self) -> bool:
+        return self._target_is_pretransformed
+
+    def _maybe_pretransform_target(
+            self,
+            training_data: named_dataset_idx,
+            validation_data: named_dataset
+    ) -> tuple[named_dataset_idx, named_dataset]:
+        all_data = [training_data, validation_data]
+        new_data = []
+
+        # pretransform if not part of the flow layers
+        if self._target_is_pretransformed:
+            for data in all_data:
+                if (self.mode == 'NLE') and (self.data_transform is not None):
+                    transformed_data, _ = self.data_transform(data.y)
+                    data = data._replace(y=transformed_data)
+
+                elif (self.mode == 'NPE') and (self.theta_transform is not None):
+                    transformed_theta, _ = self.theta_transform(data.x)
+                    data = data._replace(x=transformed_theta)
+
+                new_data.append(data)
+            return tuple(new_data)
+        else:
+            return tuple(all_data)
 
     def get_flow(self) -> Transformed:
         return hk.transform(self._flow)
@@ -114,7 +199,7 @@ class AbstractNeuralFlow(ABC):
             round_weights: Optional[jnp.ndarray] = None,
     ):
         def _nle_loss_fn(params, **batch):
-            nlp = self._get_nlp(params, **batch)
+            nlp = self._get_nlp_for_nle(params, **batch)
             if round_weights is not None:
                 w = round_weights[batch['round_id']]
                 w = w * (w.size / (jnp.sum(w) + 1e-12))
@@ -122,8 +207,10 @@ class AbstractNeuralFlow(ABC):
             else:
                 return jnp.mean(nlp)
 
-        def _npe_loss_fn(params, **batch):
-            pass
+        def _npe_loss_fn(params, rng_key: PRNGKey, **batch):
+            # in the named_dataset, y is data and x is theta (model params)
+            nlp = self._get_nlp_for_npe(params, rng_key, theta=batch['x'], y=batch['y'])
+            return jnp.mean(nlp)
 
         if mode == 'NPE':
             return _npe_loss_fn
@@ -132,20 +219,115 @@ class AbstractNeuralFlow(ABC):
         else:
             raise Exception(f'Mode {mode} not recognised.')
 
-    def _get_nlp(self, params, **batch):
+    def _get_nlp_for_nle(self, params, **batch):
         lp = self.model.apply(
             params, None, method='log_prob', **self._model_kwargs(**batch)
         )
         return -lp
+
+    # props to sbijax _src/npe.py
+    def _get_nlp_for_npe(self, params, rng_key: PRNGKey, theta, y, n_atoms=10):
+        n = theta.shape[0]
+        assert self.prior is not None
+
+        n_atoms = np.maximum(2, np.minimum(n_atoms, n))
+        repeated_y = jnp.repeat(y, n_atoms, axis=0)
+        probs = jnp.ones((n, n)) * (1 - jnp.eye(n)) / (n - 1)
+
+        choice = partial(
+            jax.random.choice, a=jnp.arange(n), replace=False, shape=(n_atoms - 1,)
+        )
+        sample_keys = jax.random.split(rng_key, probs.shape[0])
+        choices = jax.vmap(lambda key, prob: choice(key, p=prob))(
+            sample_keys, probs
+        )
+        contrasting_theta = theta[choices]
+
+        atomic_theta = jnp.concatenate(
+            (theta[:, None, :], contrasting_theta), axis=1
+        )
+        atomic_theta = atomic_theta.reshape(n * n_atoms, -1)
+
+        log_prob_posterior = self.model.apply(
+            params, None, method="log_prob", y=atomic_theta, x=repeated_y
+        )
+        log_prob_posterior = log_prob_posterior.reshape(n, n_atoms)
+        log_prob_prior = self.prior.log_prob_pray_its_ordered_correctly(
+            atomic_theta
+        )
+        log_prob_prior = log_prob_prior.reshape(n, n_atoms)
+
+        unnormalized_log_prob = log_prob_posterior - log_prob_prior
+        log_prob_proposal_posterior = unnormalized_log_prob[
+            :, 0
+        ] - jax.scipy.special.logsumexp(unnormalized_log_prob, axis=-1)
+
+        return -log_prob_proposal_posterior
 
     def _make_round_weights(self, n_rounds: int, alpha: float = 1.):
         t = jnp.arange(n_rounds)
         w = jnp.exp(alpha * (t - (n_rounds - 1)))
         return w / jnp.mean(w)
 
-    def _model_kwargs(self, **batch):
+    def _model_kwargs(self, flip_order: bool = False, **batch):
         allowed = {"y", "x"}
-        return {k: v for k, v in batch.items() if k in allowed}
+        if flip_order:
+            return {k: v for k, v in reversed(batch.items()) if k in allowed}
+        else:
+            return {k: v for k, v in batch.items() if k in allowed}
+
+    def _model_init_params(self, rng_seq: PRNGSequence, train_iter):
+        # a dict with keys 'x' (theta) and 'y' (data)
+        initial_iter = train_iter(0)
+
+        params = self.model.init(
+            next(rng_seq), 
+            method='log_prob', 
+            y=initial_iter['x'],
+            x=initial_iter['y'],
+        )
+
+        return params
+
+    def _get_step_fn(self, loss_fn, optimiser):
+        if self.mode == 'NLE':
+            @jax.jit
+            def step(params, state, **batch):
+                loss, grads = jax.value_and_grad(loss_fn)(params, **batch)
+                updates, new_state = optimiser.update(grads, state, params)
+                new_params = optax.apply_updates(params, updates)
+                return loss, new_params, new_state
+        elif self.mode == 'NPE':
+            @jax.jit
+            def step(params, state, rng_key: PRNGKey, **batch):
+                loss, grads = jax.value_and_grad(loss_fn)(params, rng_key, **batch)
+                updates, new_state = optimiser.update(grads, state, params)
+                new_params = optax.apply_updates(params, updates)
+                return loss, new_params, new_state
+        else:
+            raise Exception(f'{self.mode} not recognised.')
+
+        return step
+
+    def _get_val_step_fn(self):
+        if self.mode == 'NLE':
+            @jax.jit
+            def val_step(params, **batch):
+                return jnp.mean(self._get_nlp_for_nle(params, **batch))
+
+        elif self.mode == 'NPE':
+            @jax.jit
+            def val_step(params, rng_key, **batch):
+                return jnp.mean(
+                    self._get_nlp_for_npe(
+                        params, rng_key, theta=batch['x'], y=batch['y']
+                    )
+                )
+
+        else:
+            raise Exception(f'{self.mode} not recognised.')
+            
+        return val_step
 
     def train(
             self,
@@ -153,11 +335,21 @@ class AbstractNeuralFlow(ABC):
             training_data: named_dataset_idx, 
             validation_data: named_dataset,
             config: TrainingConfig = TrainingConfig(),
-            ui: Optional[MultiRoundInfererUI] = None
+            ui: Optional[MultiRoundInfererUI] = None,
+            prior: Optional[JaxPrior] = None
     ) -> tuple[NDArray, NDArray]:
         assert self.model is not None
         self.trn_config = config
+        self.prior = prior
         np_sequence = npkey_sequence_from_hk(rng_seq)
+
+        self._clear_and_replace_stats(training_data)
+        training_data, validation_data = self._transform_conditioning_variable(
+            training_data, validation_data
+        )
+        self.training_data, self.validation_data = self._maybe_pretransform_target(
+            training_data, validation_data
+        )
 
         if ui:
             print_func = ui.log
@@ -166,13 +358,13 @@ class AbstractNeuralFlow(ABC):
 
         train_iter = as_batch_iterator_cpu2gpu(
             rng_key=next(np_sequence), 
-            data=training_data, 
+            data=convert_x_in_named_dataset(self.training_data), # dict theta to list 
             batch_size=self.trn_config.batch_size,
             shuffle=self.trn_config.shuffle_train
         )
         val_iter = as_batch_iterator_cpu2gpu(
             rng_key=next(np_sequence), 
-            data=validation_data,
+            data=convert_x_in_named_dataset(self.validation_data), # dict theta to list
             batch_size=self.trn_config.batch_size,
             shuffle=self.trn_config.shuffle_val
         )
@@ -202,11 +394,7 @@ class AbstractNeuralFlow(ABC):
             params = self.best_params
         else:
             print_func('No previous state to initialise from. Starting fresh...')
-            params = self.model.init(
-                next(rng_seq), 
-                method='log_prob', 
-                **self._model_kwargs(**train_iter(0))
-            )
+            params = self._model_init_params(rng_seq, train_iter)
 
         lr_schedule = self._make_lr_schedule(
             warmup_steps=warmup_steps,
@@ -221,22 +409,10 @@ class AbstractNeuralFlow(ABC):
         )
         # optimiser = optax.adam(self.trn_config.learning_rate, b2=self.trn_config.adam_b2)
         state = optimiser.init(params)
-        loss_fn = self._make_loss_fn(round_weights)
+        loss_fn = self._make_loss_fn(self.mode, round_weights)
+        step = self._get_step_fn(loss_fn, optimiser)
+        val_step = self._get_val_step_fn()
         
-        @jax.jit
-        def step(params, state, **batch):
-            # def loss_fn(params):
-            #     lp = self.model.apply(params, None, method="log_prob", **batch)
-            #     return -jnp.sum(lp)
-            loss, grads = jax.value_and_grad(loss_fn)(params, **batch)
-            updates, new_state = optimiser.update(grads, state, params)
-            new_params = optax.apply_updates(params, updates)
-            return loss, new_params, new_state
-        
-        @jax.jit
-        def val_step(params, **batch):
-            return jnp.mean(self._get_nlp(params, **batch))
-
         losses = np.nan * np.zeros(self.trn_config.max_n_iter)
         val_losses = np.nan * np.zeros(self.trn_config.max_n_iter)
         best_params = params
@@ -247,14 +423,27 @@ class AbstractNeuralFlow(ABC):
             train_loss = 0.0
             for j in range(train_iter.num_batches):
                 batch = train_iter(j)
-                batch_loss, params, state = step(params, state, **batch)
+                
+                # TODO: this is shit, refactor later
+                if self.mode == 'NLE':
+                    batch_loss, params, state = step(params, state, **batch)
+                else:
+                    rng_key = next(rng_seq)
+                    batch_loss, params, state = step(params, state, rng_key, **batch)
+
                 train_loss += float(batch_loss)
             train_loss /= max(1, train_iter.num_batches)
             
             val_loss = 0.0
             for j in range(val_iter.num_batches):
                 batch = val_iter(j)
-                val_loss += float(val_step(params, **batch))
+
+                if self.mode == 'NLE':
+                    val_loss += float(val_step(params, **batch))
+                else:
+                    rng_key = next(rng_seq)
+                    val_loss += float(val_step(params, rng_key, **batch))
+
             val_loss /= max(1, val_iter.num_batches)
 
             if ui:
@@ -309,6 +498,60 @@ class AbstractNeuralFlow(ABC):
             **kwargs
         )
         return samples
+
+    # props to sbijax _src/npe.py
+    def sample_posterior(
+            self,
+            rng_key: PRNGKey,
+            n_samples: int,
+            x0: jnp.ndarray,
+            check_proposal_probs: bool = True,
+            **kwargs
+    ) -> dict[str, jnp.ndarray]:
+        assert self.prior is not None
+        assert self.mode == 'NPE'
+
+        observable = jnp.atleast_2d(x0)
+        collected = []
+        remaining_samples = int(n_samples)
+        n_total_simulations_round = 0
+        adapter = self.prior.get_adapter()
+
+        while remaining_samples > 0:
+            n_sim = int(jnp.minimum(200, remaining_samples))
+            n_total_simulations_round += n_sim
+            sample_key, rng_key = jax.random.split(rng_key)
+            proposal = self.model.apply(
+                self.best_params,
+                sample_key,
+                method="sample",
+                sample_shape=(n_sim,),
+                x=jnp.tile(observable, [n_sim, 1]),
+                **kwargs
+            )
+            proposal_tree = jax.vmap(adapter.unravel)(proposal)
+
+            if check_proposal_probs:
+                proposal_probs = self.prior.log_prob(
+                    jax.vmap(adapter.unravel)(proposal)
+                )
+                mask = jnp.isfinite(proposal_probs)
+                proposal_tree = jax.tree_map(lambda a: a[mask], proposal_tree)
+                n_accepted = int(mask.sum())
+            else:
+                n_accepted = n_sim
+
+            if n_accepted > 0:
+                collected.append(proposal_tree)
+                remaining_samples -= n_accepted
+
+        concatenated_post_samples = jax.tree_map(
+            lambda *xs: jnp.concatenate(xs, axis=0), *collected
+        )
+        concatenated_post_samples = jax.tree_map(
+            lambda a: a[:n_samples], concatenated_post_samples
+        )
+        return concatenated_post_samples
 
     def evaluate_lnlike(
         self,
@@ -379,24 +622,38 @@ class NeuralFlow(AbstractNeuralFlow):
             self,
             target_ndim: int, 
             config: NeuralFlowConfig,
+            transform_config: TransformConfig,
             data_transform: Optional[InvertibleDataTransform] = None,
+            theta_transform: Optional[InvertibleThetaTransformJax] = None
     ) -> None:
         '''
         If using a heirarchical flow, pass an invertible data transform so
         the detail blocks can be accessed.
         '''
-        super().__init__()
+        super().__init__(config, transform_config)
         self.target_ndim = target_ndim
-        self.nflow_config = config
-        self.data_transform = data_transform
-        self.mode = self.nflow_config.mode # NLE or NPE
+        self._data_transform = data_transform
+        self._theta_transform = theta_transform
+        self._mode: Literal['NLE', 'NPE'] = self.nflow_config.mode # NLE or NPE
         
-        if isinstance(self.data_transform, HaarWaveletTransform):
+        if isinstance(self.data_transform, HadamardTransform):
             self.blocks = self.data_transform.blocks
         else:
             self.blocks = None
 
         self.model = self.get_flow()
+
+    @property
+    def mode(self) -> Literal['NLE', 'NPE']:
+        return self._mode
+
+    @property
+    def data_transform(self) -> Optional[InvertibleDataTransform]:
+        return self._data_transform
+
+    @property
+    def theta_transform(self) -> Optional[InvertibleThetaTransformJax]:
+        return self._theta_transform
 
     def __repr__(self):
         lines = [f"{self.__class__.__name__}("]
@@ -607,11 +864,31 @@ class NeuralFlow(AbstractNeuralFlow):
         layers.append(Permutation(order, 1))
         return layers
 
+    def _maybe_add_transform_to_layers(self, layers: list) -> list:
+        assert len(layers) == 0
+
+        # if an NLE, we want to add the data (target) transform to the first layer
+        # if an NPE, we want the theta (target) transform on the first layer
+        if not self.target_is_pretransformed:
+            if self.mode == 'NLE':
+                if self.data_transform is not None:
+                    layers.append(self.data_transform)
+
+            elif self.mode == 'NPE':
+                if self.theta_transform is not None:
+                    layers.append(self.theta_transform)
+
+            else:
+                raise Exception(f'Mode {self.mode} not recognised.')
+
+        return layers
+
     def _make_flow(self, method: str, **kwargs):
         assert self.nflow_config.architecture is not None
 
         cur_dim = self.target_ndim
         self.layers = []
+        self.layers = self._maybe_add_transform_to_layers(self.layers)
 
         for layer in self.nflow_config.architecture:
             if layer == 'MAF':
