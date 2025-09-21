@@ -184,9 +184,17 @@ class DipolePriorNP(NPPrior):
 
     def to_jax(self) -> DipolePriorJax:
         # this is shit
-        return DipolePriorJax(
+        jax_prior = DipolePriorJax(
             mean_count_range=[self.low_ranges[0], self.high_ranges[0]],
             speed_range=[self.low_ranges[1], self.high_ranges[1]],
             longitude_range=[self.low_ranges[2], self.high_ranges[2]],
             latitude_range=[self.low_ranges[3], self.high_ranges[3]],
         )
+        np_kwargs = self.simulator_kwargs
+        jax_kwargs = jax_prior.simulator_kwargs
+
+        for i, short_name in enumerate(self.prior_names):
+            if np_kwargs[i] != jax_kwargs[i]:
+                jax_prior.change_kwarg(short_name, np_kwargs[i])
+
+        return jax_prior
