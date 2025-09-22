@@ -231,7 +231,7 @@ class AbstractNeuralFlow(ABC):
 
         def _npe_loss_fn(params, rng_key: PRNGKey, **batch):
             # in the named_dataset, y is data and x is theta (model params)
-            nlp = self._get_nlp_for_npe(params, rng_key, theta=batch['x'], y=batch['y'])
+            nlp = self._get_nlp_for_npe(params, rng_key, theta=batch['x'], y=batch['y'], is_training=True)
             return jnp.mean(nlp)
 
         if mode == 'NPE':
@@ -248,7 +248,7 @@ class AbstractNeuralFlow(ABC):
         return -lp
 
     # props to sbijax _src/npe.py
-    def _get_nlp_for_npe(self, params, rng_key: PRNGKey, theta, y, n_atoms=10):
+    def _get_nlp_for_npe(self, params, rng_key: PRNGKey, theta, y, n_atoms=10, is_training=True):
         n = theta.shape[0]
         assert self.prior is not None
 
@@ -271,7 +271,7 @@ class AbstractNeuralFlow(ABC):
         atomic_theta = atomic_theta.reshape(n * n_atoms, -1)
 
         log_prob_posterior = self.model.apply(
-            params, None, method="log_prob", y=atomic_theta, x=repeated_y
+            params, rng_key, method="log_prob", y=atomic_theta, x=repeated_y, is_training=is_training
         )
         log_prob_posterior = log_prob_posterior.reshape(n, n_atoms)
 
@@ -318,6 +318,7 @@ class AbstractNeuralFlow(ABC):
                 method='log_prob', 
                 y=initial_iter['x'],
                 x=initial_iter['y'],
+                is_training=True
             )
         else:
             params = self.model.init(
@@ -325,6 +326,7 @@ class AbstractNeuralFlow(ABC):
                 method='log_prob', 
                 y=initial_iter['y'],
                 x=initial_iter['x'],
+                is_training=True
             )
 
         return params
@@ -360,7 +362,7 @@ class AbstractNeuralFlow(ABC):
             def val_step(params, rng_key, **batch):
                 return jnp.mean(
                     self._get_nlp_for_npe(
-                        params, rng_key, theta=batch['x'], y=batch['y']
+                        params, rng_key, theta=batch['x'], y=batch['y'], is_training=False
                     )
                 )
 
@@ -548,6 +550,7 @@ class AbstractNeuralFlow(ABC):
             rng_key,
             method='sample',
             x=theta0,
+            is_training=False,
             **kwargs
         )
         return samples
@@ -582,6 +585,7 @@ class AbstractNeuralFlow(ABC):
                 method="sample",
                 sample_shape=(batch_size,),
                 x=jnp.tile(observable, [batch_size, 1]),
+                is_training=False,
                 **kwargs
             )
             proposal = proposal[:current_batch_size]
@@ -619,10 +623,11 @@ class AbstractNeuralFlow(ABC):
     ) -> jnp.ndarray:
         logprob = self.model.apply(
             params=self.best_params,
-            rng=None, # don't pass key
+            rng=None,  # deterministic evaluation
             method='log_prob',
             x=theta0,
-            y=x0
+            y=x0,
+            is_training=False
         )
         return logprob
 
@@ -946,13 +951,12 @@ class NeuralFlow(AbstractNeuralFlow):
     def _make_flow(self, method: str, **kwargs):
         assert self.nflow_config.architecture is not None
 
+        is_training = kwargs.pop("is_training", False)
         # add embedding network if specified
         if self.mode == 'NPE' and 'x' in kwargs and self.embedding_net_config:
             embedding_network = HpCNNEmbedding(**asdict(self.embedding_net_config))
             kwargs = dict(kwargs)
-            kwargs['x'] = embedding_network(
-                kwargs['x'], is_training=kwargs.get("is_training", True)
-            )
+            kwargs['x'] = embedding_network(kwargs['x'], is_training=is_training)
 
         cur_dim = self.target_ndim
         self.layers = []
