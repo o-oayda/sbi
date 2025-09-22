@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Optional, cast
 import healpy as hp
 import numpy as np
 import torch
@@ -17,6 +17,7 @@ import torch.nn.functional as F
 from jax import numpy as jnp
 import jax
 from dipolesbi.tools.np_rngkey import NPKey
+from dipolesbi.tools.dataloader import named_dataset, named_dataset_idx
 
 
 class PytreeAdapter:
@@ -71,13 +72,25 @@ class PytreeAdapter:
             return view.reshape(theta_array.shape[:-1])
         return view.reshape(theta_array.shape[:-1] + shape)
 
-def convert_x_in_named_dataset(dataset):
+    @property
+    def keys(self) -> list[str]:
+        return list(self._keys)
+
+    def key_index(self, key: str) -> int:
+        return self._keys.index(key)
+
+def convert_x_in_named_dataset(
+        dataset: named_dataset_idx | named_dataset,
+        adapter: Optional[PytreeAdapter] = None
+) -> named_dataset_idx | named_dataset:
     fields = dataset._asdict()
     x = fields['x']
     if isinstance(x, dict):
-        keys = x.keys()
-        arrays = [np.asarray(x[k]).reshape(-1, 1) for k in keys]
-        fields['x'] = np.concatenate(arrays, axis=1)
+        if adapter is None:
+            raise ValueError('PytreeAdapter required to flatten theta dicts.')
+        x_tree = {k: jnp.asarray(v) for k, v in x.items()}
+        flattened = adapter.to_array(x_tree)
+        fields['x'] = np.asarray(flattened)
     else:
         fields['x'] = np.asarray(x)
     return type(dataset)(**fields)

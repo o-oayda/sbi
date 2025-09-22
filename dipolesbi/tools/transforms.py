@@ -203,13 +203,23 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
         if not self.stats_are_none():
             raise Exception('Stats should be empty before making new ones.')
 
-        mean_nbar = jnp.nanmean(theta['mean_density'])
-        std_nbar = np.nanstd(theta['mean_density'])
-        mean_v = np.nanmean(theta['observer_speed'])
-        std_v = np.nanstd(theta['observer_speed'])
+        means = []
+        stds = []
+        for key in self.adapter.keys:
+            if key == 'mean_density':
+                means.append(jnp.nanmean(theta[key]))
+                stds.append(jnp.nanstd(theta[key]))
+            elif key == 'observer_speed':
+                means.append(jnp.nanmean(theta[key]))
+                stds.append(jnp.nanstd(theta[key]))
+            elif key in ('dipole_longitude', 'dipole_latitude'):
+                means.append(jnp.array(0.0))
+                stds.append(jnp.array(1.0))
+            else:
+                raise KeyError(f'Unexpected theta key {key} in adapter.')
 
-        self._theta_mean = jnp.asarray([mean_nbar, mean_v, 0, 0])
-        self._theta_std = jnp.asarray([std_nbar, std_v, 1, 1])
+        self._theta_mean = jnp.asarray(means)
+        self._theta_std = jnp.asarray(stds)
 
     def forward_and_log_det(
             self, 
@@ -356,16 +366,28 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
         colat = jnp.pi / 2 - jnp.deg2rad(self.adapter.flat_view(theta, 'dipole_latitude'))
 
         mean_density_norm = (
-            self.adapter.flat_view(theta, 'mean_density') - self.theta_mean[0]
-        ) / self.theta_std[0]
+            self.adapter.flat_view(theta, 'mean_density')
+            - self.theta_mean[self.adapter.key_index('mean_density')]
+        ) / self.theta_std[self.adapter.key_index('mean_density')]
         observer_speed_norm = (
-            self.adapter.flat_view(theta, 'observer_speed') - self.theta_mean[1]
-        ) / self.theta_std[1]
+            self.adapter.flat_view(theta, 'observer_speed')
+            - self.theta_mean[self.adapter.key_index('observer_speed')]
+        ) / self.theta_std[self.adapter.key_index('observer_speed')]
 
-        t_transformed = jnp.stack(
-            [mean_density_norm, observer_speed_norm, lon, colat],
-            axis=-1
-        )
+        components = []
+        for key in self.adapter.keys:
+            if key == 'mean_density':
+                components.append(mean_density_norm)
+            elif key == 'observer_speed':
+                components.append(observer_speed_norm)
+            elif key == 'dipole_longitude':
+                components.append(lon)
+            elif key == 'dipole_latitude':
+                components.append(colat)
+            else:
+                raise KeyError(f'Unexpected theta key {key} in adapter.')
+
+        t_transformed = jnp.stack(components, axis=-1)
 
         abslogdet_scalar = (
             (jnp.log(jnp.pi) - np.log(180))
@@ -394,13 +416,24 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
             transformed_theta = transformed_theta[None, :]
             squeezed_input = True
 
-        mean_density_norm = transformed_theta[..., 0]
-        observer_speed_norm = transformed_theta[..., 1]
-        lon = transformed_theta[..., 2]
-        colat = transformed_theta[..., 3]
+        idx_mean = self.adapter.key_index('mean_density')
+        idx_speed = self.adapter.key_index('observer_speed')
+        idx_lon = self.adapter.key_index('dipole_longitude')
+        idx_lat = self.adapter.key_index('dipole_latitude')
 
-        mean_density = mean_density_norm * self.theta_std[0] + self.theta_mean[0]
-        observer_speed = observer_speed_norm * self.theta_std[1] + self.theta_mean[1]
+        mean_density_norm = transformed_theta[..., idx_mean]
+        observer_speed_norm = transformed_theta[..., idx_speed]
+        lon = transformed_theta[..., idx_lon]
+        colat = transformed_theta[..., idx_lat]
+
+        mean_density = (
+            mean_density_norm * self.theta_std[idx_mean]
+            + self.theta_mean[idx_mean]
+        )
+        observer_speed = (
+            observer_speed_norm * self.theta_std[idx_speed]
+            + self.theta_mean[idx_speed]
+        )
         dipole_longitude = jnp.rad2deg(lon)
         dipole_latitude = jnp.rad2deg(jnp.pi / 2 - colat)
 
@@ -411,10 +444,20 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
             + jnp.log(self.theta_std[1])
         )
 
-        theta = jnp.stack(
-            [mean_density, observer_speed, dipole_longitude, dipole_latitude],
-            axis=-1
-        )
+        components = []
+        for key in self.adapter.keys:
+            if key == 'mean_density':
+                components.append(mean_density)
+            elif key == 'observer_speed':
+                components.append(observer_speed)
+            elif key == 'dipole_longitude':
+                components.append(dipole_longitude)
+            elif key == 'dipole_latitude':
+                components.append(dipole_latitude)
+            else:
+                raise KeyError(f'Unexpected theta key {key} in adapter.')
+
+        theta = jnp.stack(components, axis=-1)
         abslogdet_per_batch = jnp.full((theta.shape[0],), abslogdet_scalar, dtype=theta.dtype)
 
         if squeezed_input:

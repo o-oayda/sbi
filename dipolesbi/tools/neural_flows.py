@@ -383,15 +383,26 @@ class AbstractNeuralFlow(ABC):
         else:
             print_func = print
 
+        theta_adapter = None
+        if self.mode == 'NPE' and self.theta_transform is not None:
+            theta_adapter = self.theta_transform.adapter
+
+        # ensure theta is unravelled according to standard defined in prior
         train_iter = as_batch_iterator_cpu2gpu(
             rng_key=next(np_sequence), 
-            data=convert_x_in_named_dataset(self.training_data), # dict theta to list 
+            data=convert_x_in_named_dataset(
+                self.training_data,
+                adapter=theta_adapter
+            ),
             batch_size=self.trn_config.batch_size,
             shuffle=self.trn_config.shuffle_train
         )
         val_iter = as_batch_iterator_cpu2gpu(
             rng_key=next(np_sequence), 
-            data=convert_x_in_named_dataset(self.validation_data), # dict theta to list
+            data=convert_x_in_named_dataset(
+                self.validation_data,
+                adapter=theta_adapter
+            ),
             batch_size=self.trn_config.batch_size,
             shuffle=self.trn_config.shuffle_val
         )
@@ -557,7 +568,7 @@ class AbstractNeuralFlow(ABC):
                 x=jnp.tile(observable, [n_sim, 1]),
                 **kwargs
             )
-            proposal_tree = jax.vmap(adapter.unravel)(proposal)
+            proposal_tree = adapter.to_pytree(proposal)
 
             if check_proposal_probs:
                 proposal_probs = self.prior.log_prob(

@@ -1,4 +1,5 @@
 import jax
+from jax._src.core import reset_trace_state
 import jax.numpy as jnp
 
 from dipolesbi.tools.utils import PytreeAdapter
@@ -9,6 +10,14 @@ def _example_tree():
         'mean_density': jnp.array(1.23),
         'observer_speed': jnp.array([200.0, 201.0]),
         'dipole_longitude': jnp.array([[10.0, 20.0], [30.0, 40.0]]),
+        'dipole_latitude': jnp.array(-15.0),
+    }
+
+def _scalar_tree():
+    return {
+        'mean_density': jnp.array(1.23),
+        'observer_speed': jnp.array(1.),
+        'dipole_longitude': jnp.array(240.),
         'dipole_latitude': jnp.array(-15.0),
     }
 
@@ -23,6 +32,15 @@ def test_ravel_unravel_roundtrip():
     for key in tree:
         assert jnp.array_equal(restored[key], tree[key])
 
+def test_scalar_ravel_unravel():
+    tree = _scalar_tree()
+    adapter = PytreeAdapter(tree)
+
+    theta = adapter.ravel(tree)
+    restored = adapter.unravel(theta)
+
+    for key in tree:
+        assert jnp.array_equal(restored[key], tree[key])
 
 def test_ravel_unravel_batch_roundtrip():
     tree = _example_tree()
@@ -37,6 +55,9 @@ def test_ravel_unravel_batch_roundtrip():
 
     flat = adapter.to_array(batch_tree)
     restored = adapter.to_pytree(flat)
+
+    print(tree)
+    print(restored)
 
     for key in tree:
         assert jnp.array_equal(restored[key], batch_tree[key])
