@@ -174,7 +174,13 @@ class ZScore(InvertibleDataTransform):
         self.sigma = None
 
 class DipoleThetaTransform(InvertibleThetaTransformJax):
-    def __init__(self, adapter: PytreeAdapter, method: Literal['cartesian', 'zscore']):
+    def __init__(
+            self,
+            adapter: PytreeAdapter,
+            method: Literal['cartesian', 'zscore'],
+            wrap_longitude: bool = False,
+            reflect_latitude: bool = False
+    ):
         super().__init__(adapter)
 
         if method == 'cartesian':
@@ -187,6 +193,8 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
             raise Exception(f'{method} not recognised.')
 
         self.method = method
+        self.wrap_longitude = wrap_longitude
+        self.reflect_latitude = reflect_latitude
 
     def __repr__(self) -> str:
         return (
@@ -196,6 +204,16 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
             f'theta_std={self.theta_std}, '
             ')'
         )
+    
+    def _reflect_latitude(self, latitude_deg: jnp.ndarray) -> jnp.ndarray:
+        theta_lat = jnp.pi / 2 - jnp.deg2rad(latitude_deg)
+        theta_mod = jnp.mod(theta_lat, 2 * jnp.pi)
+        theta_lat = jnp.where(theta_mod > jnp.pi, 2 * jnp.pi - theta_mod, theta_mod)
+        latitude_deg = jnp.rad2deg(jnp.pi / 2 - theta_lat)
+        return latitude_deg
+
+    def _wrap_longitude(self, longitude_deg: jnp.ndarray) -> jnp.ndarray:
+        return jnp.mod(longitude_deg, 360.0)
 
     def compute_mean_and_std(self, theta: dict[str, jnp.ndarray]) -> None:
         assert len(theta.keys()) == 4
@@ -322,7 +340,12 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
         lon = jnp.arctan2(y, x)
 
         dipole_longitude = jnp.rad2deg(lon)
+        if self.wrap_longitude:
+            dipole_longitude = self._wrap_longitude(dipole_longitude)
+
         dipole_latitude = jnp.rad2deg(jnp.pi / 2 - colat)
+        if self.reflect_latitude:
+            dipole_latitude = self._reflect_latitude(dipole_latitude)
 
         abslogdet = jnp.zeros(transformed_theta.shape[0], dtype=transformed_theta.dtype)
         abslogdet -= jnp.log(jnp.pi) - np.log(180)
@@ -434,8 +457,14 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
             observer_speed_norm * self.theta_std[idx_speed]
             + self.theta_mean[idx_speed]
         )
+
         dipole_longitude = jnp.rad2deg(lon)
+        if self.wrap_longitude:
+            dipole_longitude = self._wrap_longitude(dipole_longitude)
+
         dipole_latitude = jnp.rad2deg(jnp.pi / 2 - colat)
+        if self.reflect_latitude:
+            dipole_latitude = self._reflect_latitude(dipole_latitude)
 
         abslogdet_scalar = (
             - (jnp.log(jnp.pi) - np.log(180))

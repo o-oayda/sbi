@@ -180,6 +180,8 @@ class ThetaTransformConfig:
     theta_transform: Optional[InvertibleThetaTransformJax] = None
     embed_transform_in_flow: Optional[bool] = None
     dipole_theta_method: Optional[Literal['cartesian', 'zscore']] = None
+    wrap_longitude: Optional[bool] = True
+    reflect_latitude: Optional[bool] = True
 
     @classmethod
     def blank_transform(
@@ -195,9 +197,16 @@ class ThetaTransformConfig:
     def dipole_cartesian_transform(
         cls,
         pytree_adapter: PytreeAdapter,
-        embed_transform_in_flow: bool = False
+        embed_transform_in_flow: bool = False,
+        wrap_longitude: bool = True,
+        reflect_latitude: bool = True
     ) -> 'ThetaTransformConfig':
-        theta_transform = DipoleThetaTransform(pytree_adapter, method='cartesian')
+        theta_transform = DipoleThetaTransform(
+            pytree_adapter,
+            method='cartesian',
+            wrap_longitude=wrap_longitude,
+            reflect_latitude=reflect_latitude
+        )
         return cls(
             theta_transform=theta_transform,
             embed_transform_in_flow=embed_transform_in_flow,
@@ -208,9 +217,16 @@ class ThetaTransformConfig:
     def dipole_zscore_transform(
         cls,
         pytree_adapter: PytreeAdapter,
-        embed_transform_in_flow: bool = True
+        embed_transform_in_flow: bool = True,
+        wrap_longitude: bool = True,
+        reflect_latitude: bool = True
     ) -> 'ThetaTransformConfig':
-        theta_transform = DipoleThetaTransform(pytree_adapter, method='zscore')
+        theta_transform = DipoleThetaTransform(
+            pytree_adapter, 
+            method='zscore',
+            wrap_longitude=wrap_longitude,
+            reflect_latitude=reflect_latitude
+        )
         return cls(
             theta_transform=theta_transform,
             embed_transform_in_flow=embed_transform_in_flow,
