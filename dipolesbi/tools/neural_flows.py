@@ -34,7 +34,7 @@ from dipolesbi.tools.priors_jax import JaxPrior
 from dipolesbi.tools.transforms import InvertibleDataTransform, InvertibleThetaTransformJax
 from dipolesbi.tools.hadamard_transform import HadamardTransform
 from dipolesbi.tools.ui import MultiRoundInfererUI
-from dipolesbi.tools.utils import convert_x_in_named_dataset
+from dipolesbi.tools.utils import convert_x_in_named_dataset, PytreeAdapter
 
 
 def make_mlp_with_dropout(sizes, activation=jax.nn.silu, dropout_rate=0.0):
@@ -75,6 +75,7 @@ class AbstractNeuralFlow(ABC):
         self.best_params = None
         self._config = config
         self._target_is_pretransformed = not self._config.embed_target_transform_in_flow
+        self._prior_adapter: Optional[PytreeAdapter] = None
 
     @property
     def nflow_config(self) -> NeuralFlowConfig:
@@ -271,9 +272,19 @@ class AbstractNeuralFlow(ABC):
             params, None, method="log_prob", y=atomic_theta, x=repeated_y
         )
         log_prob_posterior = log_prob_posterior.reshape(n, n_atoms)
-        log_prob_prior = self.prior.log_prob_pray_its_ordered_correctly(
-            atomic_theta
+
+        # get x back out if the flow only sees z
+        if self.target_is_pretransformed and self.theta_transform is not None:
+            atomic_theta_raw, _ = self.theta_transform.inverse_and_log_det(atomic_theta)
+        else:
+            atomic_theta_raw = atomic_theta
+
+        adapter = (
+            self._prior_adapter if self._prior_adapter is not None
+            else self.prior.get_adapter()
         )
+        theta_tree = adapter.to_pytree(atomic_theta_raw)
+        log_prob_prior = jax.vmap(self.prior.log_prob)(theta_tree)
         log_prob_prior = log_prob_prior.reshape(n, n_atoms)
 
         unnormalized_log_prob = log_prob_posterior - log_prob_prior
@@ -368,6 +379,8 @@ class AbstractNeuralFlow(ABC):
         assert self.model is not None
         self.trn_config = config
         self.prior = prior
+        if prior is not None:
+            self._prior_adapter = prior.get_adapter()
         np_sequence = npkey_sequence_from_hk(rng_seq)
 
         self._clear_and_replace_stats(training_data)
@@ -554,7 +567,7 @@ class AbstractNeuralFlow(ABC):
         collected = []
         remaining_samples = int(n_samples)
         n_total_simulations_round = 0
-        adapter = self.prior.get_adapter()
+        adapter = self._prior_adapter if self._prior_adapter is not None else self.prior.get_adapter()
         batch_size = 200
 
         while remaining_samples > 0:
@@ -570,6 +583,8 @@ class AbstractNeuralFlow(ABC):
                 **kwargs
             )
             proposal = proposal[:current_batch_size]
+            if self.target_is_pretransformed and self.theta_transform is not None:
+                proposal, _ = self.theta_transform.inverse_and_log_det(proposal)
             proposal_tree = adapter.to_pytree(proposal)
 
             if check_proposal_probs:
