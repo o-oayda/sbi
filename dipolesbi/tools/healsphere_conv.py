@@ -1,98 +1,126 @@
-# from https://github.com/aasensio/sphericalCNN
+# Adapted from https://github.com/aasensio/sphericalCNN for use with JAX/Haiku
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from typing import Optional
+import haiku as hk
 import healpy as hp
+import jax.numpy as jnp
 import numpy as np
-from jax import numpy as jnp
 
 
-class HealpixConv(nn.Module):
-    def __init__(self, neighbours, nside, in_channels, out_channels, bias=True, nest=True):
-        """Convolutional layer as defined in Krachmalnicoff & Tomasi (A&A, 2019, 628, A129)
+def build_neighbour_table(nside: int, nest: bool = True) -> jnp.ndarray:
+    """Return neighbour lookup for every Healpix pixel.
 
-        Parameters
-        ----------
-        NSIDE : int
-            HEALPix NSIDE
-        in_channels : int
-            Number of channels of the input. The size is [B,C_in,N], with B batches, 
-            C_in channels and N pixels in the HEALPix pixelization
-        out_channels : int
-            Number of channels of the output. The size is [B,C_out,N], with B batches, 
-            C_out channels and N pixels in the HEALPix pixelization
-        bias : bool, optional
-            Add bias, by default True
-        nest : bool, optional
-            Used nested mapping, by default True
-            Always use nested mapping if pooling layers are used.
-        """
-        super(HealpixConv, self).__init__()
+    The table is shape (npix, 9). Each row contains the indices of the
+    8 surrounding pixels plus the centre pixel in the middle slot. Pixels
+    for which there are only 7 neighbours (identified with -1 by healpy)
+    are filled with ``npix`` as consistent with the OG class, which is intended
+    to index a zero padding row that is appended during the convolution.
+    """
+    npix = hp.nside2npix(nside)
+    neighbours = np.empty((npix, 9), dtype=np.int32)
+    for pix in range(npix):
+        nb = hp.get_all_neighbours(nside, pix, nest=nest)
+        nb = np.insert(nb, 4, pix) # include the centre pixel
+        mask = nb == -1
+        nb[mask] = npix # assign 'npix' like in spherical.py
+        neighbours[pix] = nb
 
-        self.nside = nside
-        self.npix = 12 * nside * nside
-        self.nest = nest
+    return jnp.asarray(neighbours)
 
-        self.neighbours = jnp.zeros(9 * self.npix, dtype=jnp.int32)
-        self.weight = jnp.ones(9 * self.npix, dtype=jnp.float32)
+class HealpixConv(hk.Module):
+    """Healpix 1-D convolution as described by Krachmalnicoff & Tomasi (2019).
 
-        self.conv = nn.Conv1d(in_channels, out_channels, kernel_size=9, stride=9, bias=bias)
+    Parameters
+    ----------
+    neighbours:
+        Precomputed neighbour lookup of shape (npix, kernel_size). Use
+        :func:`build_neighbour_table` to generate it.
+    in_channels:
+        Number of input channels.
+    out_channels:
+        Number of output channels.
+    bias:
+        Whether to learn an additive bias per output channel.
+    name:
+        Optional module name.
+    """
 
-        for i in range(self.npix):
-            cur_neighbours = neighbours[i]
-            neighbours = hp.pixelfunc.get_all_neighbours(self.nside, i, nest=nest)
-            neighbours = jnp.insert(neighbours, 4, i)
+    def __init__(
+        self,
+        neighbours: jnp.ndarray,
+        in_channels: int,
+        out_channels: int,
+        bias: bool = True,
+        name: Optional[str] = None,
+    ) -> None:
+        super().__init__(name=name)
 
-            ind = np.where(neighbours == -1)[0]
-            neighbours[ind] = self.npix            
+        if neighbours.ndim != 2:
+            raise ValueError(
+                "Neighbours array must have shape (npix, kernel_size)."
+            )
 
-            self.neighbours[9*i:9*i+9] = torch.tensor(neighbours)
+        self.neighbours = neighbours
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = neighbours.shape[1]  # 9
+        self.bias = bias
+        self._pad_index = neighbours.max()
 
-        self.zeros = torch.zeros((1, 1, 1))
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+        if x.ndim != 3:
+            raise ValueError("Expected input with shape (batch, npix, channels).")
 
-        nn.init.kaiming_normal_(self.conv.weight)        
-        if (bias):
-            nn.init.constant_(self.conv.bias, 0.0)
-        
-    def forward(self, x):
+        batch, npix, channels = x.shape
+        if channels != self.in_channels:
+            raise ValueError(
+                f"Input channels {channels} do not match expected {self.in_channels}."
+            )
 
-        x2 = F.pad(x, (0,1,0,0,0,0), mode='constant', value=0.0)
-                
-        vec = x2[:, :, self.neighbours]
-        
-        tmp = self.conv(vec)
+        if self._pad_index != npix:
+            # All sentinel entries should have been set to npix
+            raise ValueError(
+                "Neighbours table -1 sentinel does not match expected index."
+            )
 
-        return tmp
+        # append a zero-valued pad pixel so sentinel indices gather zeros
+        pad = jnp.zeros((batch, 1, channels), dtype=x.dtype)
+        x_padded = jnp.concatenate([x, pad], axis=1)
 
-class sphericalDown(nn.Module):    
-    def __init__(self, NSIDE):
-        """Average pooling layer
+        gathered = jnp.take(x_padded, self.neighbours, axis=1)
+        # gathered shape: (batch, npix, kernel_size, channels)
 
-        Parameters
-        ----------
-        NSIDE : int
-            HEALPix NSIDE
-        """
-        super(sphericalDown, self).__init__()
-        
-        self.pool = nn.AvgPool1d(4)
-                
-    def forward(self, x):
-                
-        return self.pool(x)
+        w = hk.get_parameter(
+            "w",
+            shape=(self.out_channels, self.kernel_size, self.in_channels),
+            init=hk.initializers.VarianceScaling(),
+        )
 
-class sphericalUp(nn.Module):
-    def __init__(self, NSIDE):
-        """Upsampling pooling layer
+        # need to sit down and assess this einsum
+        y = jnp.einsum("okc,bnkc->bno", w, gathered)
 
-        Parameters
-        ----------
-        NSIDE : int
-            HEALPix NSIDE
-        """
-        super(sphericalUp, self).__init__()
-                
-    def forward(self, x):
-        
-        return torch.repeat_interleave(x, 4, dim=-1)
+        if self.bias:
+            b = hk.get_parameter(
+                "b", shape=(self.out_channels,), init=hk.initializers.Constant(0.0)
+            )
+            y = y + b
+
+        return y
+
+
+class HealpixDown(hk.Module):
+    """Average pooling layer on the Healpix sphere."""
+
+    def __init__(self, groups: jnp.ndarray, name: Optional[str] = None) -> None:
+        super().__init__(name=name)
+        if groups.ndim != 2:
+            raise ValueError("Groups array must have shape (npix_coarse, n_children).")
+        self.groups = groups
+
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+        if x.ndim != 3:
+            raise ValueError("Expected input with shape (batch, npix, channels).")
+
+        gathered = jnp.take(x, self.groups, axis=1)
+        # gathered: (batch, npix_coarse, n_children, channels)
+        return jnp.mean(gathered, axis=2)
