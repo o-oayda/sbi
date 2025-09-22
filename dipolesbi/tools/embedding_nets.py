@@ -66,7 +66,9 @@ class HpCNNEmbedding(hk.Module):
             cur_nside //= 2
 
     def __call__(self, x: jnp.ndarray, *, is_training: bool = True) -> jnp.ndarray:
-        if x.ndim != 3:
+        if x.ndim == 2:
+            x = x[..., None]
+        elif x.ndim != 3:
             raise ValueError(
                 "Expected input shape (batch, npix, channels),"
                 f" got {x.shape}"
