@@ -555,33 +555,33 @@ class AbstractNeuralFlow(ABC):
         remaining_samples = int(n_samples)
         n_total_simulations_round = 0
         adapter = self.prior.get_adapter()
+        batch_size = 200
 
         while remaining_samples > 0:
-            n_sim = int(jnp.minimum(200, remaining_samples))
-            n_total_simulations_round += n_sim
+            current_batch_size = min(batch_size, remaining_samples)
+            n_total_simulations_round += current_batch_size
             sample_key, rng_key = jax.random.split(rng_key)
             proposal = self.model.apply(
                 self.best_params,
                 sample_key,
                 method="sample",
-                sample_shape=(n_sim,),
-                x=jnp.tile(observable, [n_sim, 1]),
+                sample_shape=(batch_size,),
+                x=jnp.tile(observable, [batch_size, 1]),
                 **kwargs
             )
+            proposal = proposal[:current_batch_size]
             proposal_tree = adapter.to_pytree(proposal)
 
             if check_proposal_probs:
-                proposal_probs = self.prior.log_prob(
-                    jax.vmap(adapter.unravel)(proposal)
-                )
+                proposal_probs = self.prior.log_prob(proposal_tree)
                 mask = jnp.isfinite(proposal_probs)
                 proposal_tree = jax.tree_map(lambda a: a[mask], proposal_tree)
                 n_accepted = int(mask.sum())
                 if ui is not None:
-                    discarded = n_sim - n_accepted
-                    ui.log(f"Posterior batch: accepted {n_accepted}/{n_sim} (discarded {discarded})")
+                    discarded = current_batch_size - n_accepted
+                    ui.log(f"Posterior batch: accepted {n_accepted}/{current_batch_size} (discarded {discarded})")
             else:
-                n_accepted = n_sim
+                n_accepted = current_batch_size
 
             if n_accepted > 0:
                 collected.append(proposal_tree)

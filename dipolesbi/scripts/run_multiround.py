@@ -108,6 +108,7 @@ if __name__ == '__main__':
     nside16_config = ConfigOfConfigs.nside16_npe(
         theta0, 
         theta_adapter=adapter,
+        # for whatever reason batchwise doesn't work for the npe
         data_transform_overrides={'method': 'global'},
         nflow_overrides={
             'conditioner_n_neurons': 64,

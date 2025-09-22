@@ -25,6 +25,7 @@ from dipolesbi.tools.ui import MultiRoundInfererUI
 from dipolesbi.tools.utils import HidePrints, jax_sph2cart, load_dict_npz, np_sph2cart_unitsphere, save_dict_npz
 from jax import lax
 import datetime
+from corner import corner
 
 
 class MultiRoundInferer:
@@ -537,14 +538,18 @@ class MultiRoundInferer:
             n_samples: int
     ) -> dict[str, jnp.ndarray]:
         assert self.nflow is not None
+        assert self.theta_transform is not None
 
-        return self.nflow.sample_posterior(
+        posterior_samples = self.nflow.sample_posterior(
             rng_key=posterior_key, 
             n_samples=n_samples,
             x0=jax.device_put(self.reference_observation),
-            check_proposal_probs=False,
+            check_proposal_probs=self.mr_config.check_proposal_probs,
             ui=self.ui
         )
+        corner(np.asarray(self.theta_transform.adapter.to_array(posterior_samples)))
+        plt.savefig('out_corner.png', dpi=300, bbox_inches='tight')
+        return posterior_samples
 
     def _compute_posterior(self, posterior_key: PRNGKey) -> None:
         ns_key, dequantise_key = jax.random.split(posterior_key)
