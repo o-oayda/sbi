@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from functools import partial
 from os import name
 from typing import Callable, Literal, Optional
@@ -26,9 +27,10 @@ import sys
 import matplotlib.pyplot as plt
 import logging
 from abc import ABC, abstractmethod
-from dipolesbi.tools.configs import NeuralFlowConfig, TrainingConfig, TransformConfig
+from dipolesbi.tools.configs import EmbeddingNetConfig, NeuralFlowConfig, TrainingConfig, TransformConfig
 from dipolesbi.tools.distributions import IndependentWrapper, NegBinomDist, PoissonDist, StudentT
 from dipolesbi.tools.dataloader import as_batch_iterator_cpu2gpu, named_dataset_idx
+from dipolesbi.tools.embedding_nets import HpCNNEmbedding
 from dipolesbi.tools.np_rngkey import npkey_sequence_from_hk
 from dipolesbi.tools.priors_jax import JaxPrior
 from dipolesbi.tools.transforms import InvertibleDataTransform, InvertibleThetaTransformJax
@@ -680,7 +682,8 @@ class NeuralFlow(AbstractNeuralFlow):
             target_ndim: int, 
             config: NeuralFlowConfig,
             data_transform: Optional[InvertibleDataTransform] = None,
-            theta_transform: Optional[InvertibleThetaTransformJax] = None
+            theta_transform: Optional[InvertibleThetaTransformJax] = None,
+            embedding_net_config: Optional[EmbeddingNetConfig] = None
     ) -> None:
         '''
         If using a heirarchical flow, pass an invertible data transform so
@@ -691,6 +694,7 @@ class NeuralFlow(AbstractNeuralFlow):
         self._data_transform = data_transform
         self._theta_transform = theta_transform
         self._mode: Literal['NLE', 'NPE'] = self.nflow_config.mode # NLE or NPE
+        self.embedding_net_config = embedding_net_config
         
         if isinstance(self.data_transform, HadamardTransform):
             self.blocks = self.data_transform.blocks
@@ -941,6 +945,14 @@ class NeuralFlow(AbstractNeuralFlow):
 
     def _make_flow(self, method: str, **kwargs):
         assert self.nflow_config.architecture is not None
+
+        # add embedding network if specified
+        if self.mode == 'NPE' and 'x' in kwargs and self.embedding_net_config:
+            embedding_network = HpCNNEmbedding(**asdict(self.embedding_net_config))
+            kwargs = dict(kwargs)
+            kwargs['x'] = embedding_network(
+                kwargs['x'], is_training=kwargs.get("is_training", True)
+            )
 
         cur_dim = self.target_ndim
         self.layers = []

@@ -86,6 +86,7 @@ class MultiRoundInferer:
         self.data_transform = transform_config.data_transform_config.data_transform
         self.theta_transform = transform_config.theta_transform_config.theta_transform
         self.transform_config = transform_config
+        self.embedding_net_config = self.transform_config.data_transform_config.embedding_net_config
 
         self.all_data = np.full(
             (self.mr_config.simulation_budget, self.data_ndim), np.nan,
@@ -776,7 +777,8 @@ class MultiRoundInferer:
                 self.target_ndim,
                 config=self.nflow_config,
                 data_transform=self.data_transform,
-                theta_transform=self.theta_transform
+                theta_transform=self.theta_transform,
+                embedding_net_config=self.embedding_net_config
             )
         else:
             nflow = self.nflow

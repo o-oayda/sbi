@@ -5,7 +5,10 @@ from dipolesbi.tools.transforms import DipoleThetaTransform,  InvertibleDataTran
 from dipolesbi.tools.hadamard_transform import HadamardTransform, HadamardTransformJax
 import jax
 from dipolesbi.tools.utils import PytreeAdapter
+import numpy as np
 
+# TODO
+# this entire bullshit system of configs needs to be reworked
 
 @dataclass
 class TrainingConfig:
@@ -28,6 +31,21 @@ class TrainingConfig:
     validation_fraction: float = 0.1
     weight_by_round: bool = False
     alpha_weight: float = 1.
+
+@dataclass
+class EmbeddingNetConfig:
+    nside: Optional[int] = None
+    out_channels_per_layer: Optional[list[int]] = None
+    n_blocks: Optional[int] = None
+    n_mlp_neurons: int = 64
+    n_mlp_layers: int = 2
+    output_dim: int = 32
+    dropout_rate: float = 0.2
+
+    def __post_init__(self) -> None:
+        if self.n_blocks is None:
+            assert self.nside is not None
+            self.n_blocks = int(np.log2(self.nside))
 
 @dataclass
 class NeuralFlowConfig:
@@ -118,12 +136,21 @@ class MultiRoundInfererConfig:
 @dataclass
 class DataTransformConfig:
     data_transform: Optional[InvertibleDataTransform] = None
+    embedding_net_config: Optional[EmbeddingNetConfig] = None
     first_nside: Optional[int] = None
     last_nside: Optional[int] = None
     matrix_type: Optional[str] = None
     normalise_details: Optional[bool] = None
     n_chunks: Optional[int] = None
     embed_transform_in_flow: Optional[bool] = None
+
+    @classmethod
+    def hp_cnn_embed(cls, nside, **embedd_net_overrides) -> 'DataTransformConfig':
+        embedding_net_config = EmbeddingNetConfig(
+            nside=nside,
+            **embedd_net_overrides
+        )
+        return cls(embedding_net_config=embedding_net_config)
 
     @classmethod
     def blank_transform(cls, embed_transform_in_flow: bool = False) -> 'DataTransformConfig':
@@ -165,6 +192,7 @@ class DataTransformConfig:
         # this is kind of bullshit
         del config_dict['embed_transform_in_flow']
         del config_dict['data_transform']
+        del config_dict['embedding_net_config']
 
         # if embedding, we need float64 computation; otherwise, use numpy
         if config.embed_transform_in_flow:
@@ -234,7 +262,6 @@ class ThetaTransformConfig:
             dipole_theta_method='zscore'
         )
 
-# TODO: refactor out a data_transform and theta_transform subconfig
 @dataclass
 class TransformConfig:
     data_transform_config: DataTransformConfig
@@ -285,16 +312,21 @@ class TransformConfig:
     def raw_data_for_npe(
             cls,
             adapter: PytreeAdapter,
+            nside: int,
             data_transform_overrides: dict = {},
             theta_transform_overrides: dict = {}
     ) -> 'TransformConfig':
         data_transform_config_dict = {
-            'embed_transform_in_flow': None,
+            # 'embed_transform_in_flow': None,
             **data_transform_overrides
         }
-        data_transform_config = DataTransformConfig.zscore(**data_transform_config_dict)
+        data_transform_config = DataTransformConfig.hp_cnn_embed(
+            nside, 
+            **data_transform_config_dict
+        )
+        # data_transform_config = DataTransformConfig.zscore(**data_transform_config_dict)
         # data_transform_config = DataTransformConfig.hadamard_wavelet(
-            # embed_transform_in_flow=False
+        #     embed_transform_in_flow=False
         # )
         theta_transform_config_dict = {
             'pytree_adapter': adapter,
@@ -482,6 +514,7 @@ class ConfigOfConfigs:
         mr_config = MultiRoundInfererConfig(**mr_dict)
         nle_config = NeuralFlowConfig(**nle_dict)
         transform_config = TransformConfig.raw_data_for_npe(
+            nside=16,
             adapter=theta_adapter,
             data_transform_overrides=data_transform_dict,
             theta_transform_overrides=theta_transform_dict

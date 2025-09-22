@@ -109,7 +109,8 @@ if __name__ == '__main__':
         theta0, 
         theta_adapter=adapter,
         # for whatever reason batchwise doesn't work for the npe
-        data_transform_overrides={'method': 'global'},
+        # data_transform_overrides={'method': 'batchwise'},
+        theta_transform_overrides={'embed_transform_in_flow': True},
         nflow_overrides={
             'conditioner_n_neurons': 64,
             'conditioner_n_layers': 2,
@@ -123,7 +124,7 @@ if __name__ == '__main__':
             'plot_save_dir': args.out_dir,
             'initial_fraction': 0.,
             'simulation_budget': 50_000,
-            # 'n_rounds': 5
+            'n_rounds': 3
         }
     )
     # nside16_config = ConfigOfConfigs.nside16_nle(
@@ -167,7 +168,8 @@ if __name__ == '__main__':
     meta_cfg = {
         4: nside16_config,
         16: nside16_config,
-        32: nside32_config
+        32: nside16_config
+        # 32: nside32_config
     }
     cur_cfg = meta_cfg[NSIDE]
 
