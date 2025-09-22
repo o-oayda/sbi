@@ -60,12 +60,13 @@ class HealpixConv(hk.Module):
                 "Neighbours array must have shape (npix, kernel_size)."
             )
 
+        neighbours = jnp.asarray(neighbours)
         self.neighbours = neighbours
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.kernel_size = neighbours.shape[1]  # 9
+        self.kernel_size = neighbours.shape[1]
         self.bias = bias
-        self._pad_index = neighbours.max()
+        self._pad_index = jnp.max(neighbours)
 
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
         if x.ndim != 3:
@@ -75,12 +76,6 @@ class HealpixConv(hk.Module):
         if channels != self.in_channels:
             raise ValueError(
                 f"Input channels {channels} do not match expected {self.in_channels}."
-            )
-
-        if self._pad_index != npix:
-            # All sentinel entries should have been set to npix
-            raise ValueError(
-                "Neighbours table -1 sentinel does not match expected index."
             )
 
         # append a zero-valued pad pixel so sentinel indices gather zeros
