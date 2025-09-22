@@ -707,11 +707,22 @@ class MultiRoundInferer:
 
             if n_posterior > 0:
                 self.sample_posterior_seed += 1
-                posterior_samples = self.nested_samples.sample(
-                    n=n_posterior,
-                    random_state=self.sample_posterior_seed
-                )
-                posterior_samples = self._reformat_samples(posterior_samples)
+
+                if self.mode == 'NLE':
+                    posterior_samples = self.nested_samples.sample(
+                        n=n_posterior,
+                        random_state=self.sample_posterior_seed
+                    )
+                    posterior_samples = self._reformat_samples(posterior_samples)
+
+                elif self.mode == 'NPE':
+                    assert self.posterior_samples is not None
+                    tree = self.posterior_samples
+                    n_available = next(iter(tree.values())).shape[0]
+                    idx = np.random.choice(n_available, size=n_posterior, replace=True)
+                    posterior_samples = {
+                        key: value[idx] for key, value in tree.items()
+                    }
             else:
                 posterior_samples = None
 
