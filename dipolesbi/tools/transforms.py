@@ -160,13 +160,21 @@ class ZScore(InvertibleDataTransform):
         assert self.mu is not None
 
         log_det_jac = - np.log(self.sigma).sum() * np.ones(n_batches)
+        if np.ndim(self.sigma) == 0:
+            # times by pixel count if we don't do a batchwise per-pixel zscore
+            log_det_jac *= data.shape[1]
         z = (data - self.mu) / self.sigma
         return z, log_det_jac
 
     def inverse_and_log_det(self, transformed_data: NDArray) -> tuple[NDArray, NDArray]:
+        n_batches = transformed_data.shape[0]
+        assert self.sigma is not None
+        assert self.mu is not None
+
         data = transformed_data * self.sigma + self.mu
-        n_batches = data.shape[0]
         log_det_jac = np.log(self.sigma).sum() * np.ones(n_batches) # type: ignore
+        if np.ndim(self.sigma) == 0:
+            log_det_jac *= data.shape[1]
         return data, log_det_jac
 
     def clear(self) -> None:
@@ -412,13 +420,20 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
 
         t_transformed = jnp.stack(components, axis=-1)
 
+        idx_mean = self.adapter.key_index('mean_density')
+        idx_speed = self.adapter.key_index('observer_speed')
+
         abslogdet_scalar = (
-            (jnp.log(jnp.pi) - np.log(180))
+              (jnp.log(jnp.pi) - np.log(180))
             + (jnp.log(jnp.pi) - np.log(180))
-            - jnp.log(self.theta_std[0])
-            - jnp.log(self.theta_std[1])
+            - jnp.log(self.theta_std[idx_mean])
+            - jnp.log(self.theta_std[idx_speed])
         )
-        abslogdet_per_batch = jnp.full((t_transformed.shape[0],), abslogdet_scalar, dtype=theta.dtype)
+        abslogdet_per_batch = jnp.full(
+            (t_transformed.shape[0],), 
+            abslogdet_scalar, 
+            dtype=theta.dtype
+        )
 
         if squeezed_input:
             t_transformed = jnp.squeeze(t_transformed, axis=0)
@@ -469,8 +484,8 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
         abslogdet_scalar = (
             - (jnp.log(jnp.pi) - np.log(180))
             - (jnp.log(jnp.pi) - np.log(180))
-            + jnp.log(self.theta_std[0])
-            + jnp.log(self.theta_std[1])
+            + jnp.log(self.theta_std[idx_mean])
+            + jnp.log(self.theta_std[idx_speed])
         )
 
         components = []
