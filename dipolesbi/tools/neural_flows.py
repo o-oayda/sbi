@@ -231,7 +231,13 @@ class AbstractNeuralFlow(ABC):
 
         def _npe_loss_fn(params, rng_key: PRNGKey, **batch):
             # in the named_dataset, y is data and x is theta (model params)
-            nlp = self._get_nlp_for_npe(params, rng_key, theta=batch['x'], y=batch['y'], is_training=True)
+            nlp = self._get_nlp_for_npe(
+                params,
+                rng_key, 
+                theta=batch['x'], 
+                y=batch['y'], 
+                is_training=True
+            )
             return jnp.mean(nlp)
 
         if mode == 'NPE':
@@ -271,7 +277,12 @@ class AbstractNeuralFlow(ABC):
         atomic_theta = atomic_theta.reshape(n * n_atoms, -1)
 
         log_prob_posterior = self.model.apply(
-            params, rng_key, method="log_prob", y=atomic_theta, x=repeated_y, is_training=is_training
+            params, 
+            rng_key, 
+            method="log_prob", 
+            y=atomic_theta, 
+            x=repeated_y, 
+            is_training=is_training
         )
         log_prob_posterior = log_prob_posterior.reshape(n, n_atoms)
 
@@ -569,22 +580,32 @@ class AbstractNeuralFlow(ABC):
         assert self.mode == 'NPE'
 
         observable = jnp.atleast_2d(x0)
+        # this should be the same pointer to the nflow data_transform stats
+        if self.mode == 'NPE' and self.data_transform is not None:
+            # Bring to host for numpy-based transform, then back to jax
+            obs_np, _ = self.data_transform(np.asarray(jax.device_get(observable)))
+            observable = jnp.asarray(obs_np)
+
         collected = []
         remaining_samples = int(n_samples)
         n_total_simulations_round = 0
-        adapter = self._prior_adapter if self._prior_adapter is not None else self.prior.get_adapter()
+        adapter = (
+            self._prior_adapter if self._prior_adapter is not None
+            else self.prior.get_adapter()
+        )
         batch_size = 200
 
         while remaining_samples > 0:
             current_batch_size = min(batch_size, remaining_samples)
             n_total_simulations_round += current_batch_size
             sample_key, rng_key = jax.random.split(rng_key)
+            observable_tile = jnp.tile(observable, [batch_size, 1]) # (B, npix)
             proposal = self.model.apply(
                 self.best_params,
                 sample_key,
                 method="sample",
                 sample_shape=(batch_size,),
-                x=jnp.tile(observable, [batch_size, 1]),
+                x=observable_tile,
                 is_training=False,
                 **kwargs
             )
@@ -600,7 +621,9 @@ class AbstractNeuralFlow(ABC):
                 n_accepted = int(mask.sum())
                 if ui is not None:
                     discarded = current_batch_size - n_accepted
-                    ui.log(f"Posterior batch: accepted {n_accepted}/{current_batch_size} (discarded {discarded})")
+                    ui.log(
+                        f"Posterior batch: accepted {n_accepted}/{current_batch_size}"
+                        f" (discarded {discarded})")
             else:
                 n_accepted = current_batch_size
 
@@ -954,9 +977,9 @@ class NeuralFlow(AbstractNeuralFlow):
         is_training = kwargs.pop("is_training", False)
         # add embedding network if specified
         if self.mode == 'NPE' and 'x' in kwargs and self.embedding_net_config:
-            embedding_network = HpCNNEmbedding(**asdict(self.embedding_net_config))
+            self.embedding_network = HpCNNEmbedding(**asdict(self.embedding_net_config))
             kwargs = dict(kwargs)
-            kwargs['x'] = embedding_network(kwargs['x'], is_training=is_training)
+            kwargs['x'] = self.embedding_network(kwargs['x'], is_training=is_training)
 
         cur_dim = self.target_ndim
         self.layers = []
