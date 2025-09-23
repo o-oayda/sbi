@@ -15,7 +15,6 @@ import numpy as np
 
 class HpCNNEmbedding(hk.Module):
     """CNN embedding for Healpix maps, ported from sphericalCNN."""
-
     def __init__(
         self,
         nside: int,
@@ -76,6 +75,7 @@ class HpCNNEmbedding(hk.Module):
 
         z = x
         in_ch = self.in_channels
+        cur_ns = self.nside
         for neighbours, pool_indices, out_ch in zip(
             self._neighbour_tables, self._pool_tables, self.out_channels_per_layer
         ):
@@ -83,19 +83,23 @@ class HpCNNEmbedding(hk.Module):
             z = conv(z)
             z = jax.nn.relu(z)
             pool = HealpixDown(pool_indices)
+            cur_ns //= 2
             z = pool(z)
             in_ch = out_ch
 
+        # flatten for linear layers
         z = jnp.reshape(z, (z.shape[0], -1))
         if self.dropout_rate > 0.0 and is_training:
             z = hk.dropout(hk.next_rng_key(), self.dropout_rate, z)
 
-        mlp = hk.nets.MLP(
-            [self.n_mlp_neurons] * (self.n_mlp_layers - 1) + [self.output_dim],
+        self.mlp = hk.nets.MLP(
+            [out_ch * 12 * cur_ns * cur_ns]
+          + [self.n_mlp_neurons] * self.n_mlp_layers
+          + [self.output_dim],
             activation=jax.nn.relu,
             name="hp_mlp",
         )
-        return mlp(z)
+        return self.mlp(z)
 
 
 def _build_pool_groups(nside: int, nest: bool) -> jnp.ndarray:
