@@ -1,14 +1,39 @@
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field, fields, make_dataclass, replace
 from typing import Optional, Literal
 from numpy.typing import NDArray
-from dipolesbi.tools.transforms import DipoleThetaTransform,  InvertibleDataTransform, InvertibleThetaTransformJax, ZScore
+from dipolesbi.tools.transforms import (
+    DipoleThetaTransform,
+    InvertibleDataTransform,
+    InvertibleThetaTransformJax,
+    ZScore
+)
 from dipolesbi.tools.hadamard_transform import HadamardTransform, HadamardTransformJax
 import jax
 from dipolesbi.tools.utils import PytreeAdapter
 import numpy as np
 
-# TODO
-# this entire bullshit system of configs needs to be reworked
+
+def _make_override_class(base_cls):
+    specs = []
+    for f in fields(base_cls):
+        if not f.init:
+            continue
+        specs.append((f.name, Optional[f.type], field(default=None)))
+
+    override_cls = make_dataclass(
+        f"{base_cls.__name__}Overrides",
+        specs,
+        frozen=False,
+    )
+
+    def to_dict(self):
+        return {
+            name: getattr(self, name) for name, *_ in specs
+            if getattr(self, name) is not None
+        }
+
+    override_cls.to_dict = to_dict
+    return override_cls
 
 @dataclass
 class TrainingConfig:
@@ -32,6 +57,10 @@ class TrainingConfig:
     weight_by_round: bool = False
     alpha_weight: float = 1.
 
+
+TrainingConfigOverrides = _make_override_class(TrainingConfig)
+
+@dataclass
 @dataclass
 class EmbeddingNetConfig:
     nside: Optional[int] = None
@@ -46,6 +75,9 @@ class EmbeddingNetConfig:
         if self.n_blocks is None:
             assert self.nside is not None
             self.n_blocks = int(np.log2(self.nside))
+
+
+EmbeddingNetConfigOverrides = _make_override_class(EmbeddingNetConfig)
 
 @dataclass
 class NeuralFlowConfig:
@@ -100,6 +132,9 @@ class NeuralFlowConfig:
                 "Number of 'MAF' before 'healpix_funnel' must be even"
             )
 
+
+NeuralFlowConfigOverrides = _make_override_class(NeuralFlowConfig)
+
 @dataclass
 class MultiRoundInfererConfig:
     '''
@@ -133,16 +168,107 @@ class MultiRoundInfererConfig:
                 'Supply number of requantisations when setting dequantise_data=True.'
             )
 
+@dataclass(frozen=True)
+class DataTransformSpec:
+    kind: Literal['blank', 'zscore', 'hadamard', 'hp_cnn'] = 'blank'
+    embed_in_flow: bool = False
+    zscore_method: Literal['batchwise', 'global'] = 'batchwise'
+    hadamard_first_nside: Optional[int] = None
+    hadamard_last_nside: Optional[int] = None
+    hadamard_matrix_type: Optional[str] = None
+    hadamard_normalise_details: Optional[bool] = None
+    hadamard_n_chunks: Optional[int] = None
+    embedding_config: Optional[EmbeddingNetConfig] = None
+
+    @classmethod
+    def blank(cls, *, embed_in_flow: bool = False) -> 'DataTransformSpec':
+        return cls(kind='blank', embed_in_flow=embed_in_flow)
+
+    @classmethod
+    def zscore(
+        cls,
+        *,
+        method: Literal['batchwise', 'global'] = 'batchwise',
+        embed_in_flow: bool = False,
+        embedding_config: Optional[EmbeddingNetConfig] = None,
+    ) -> 'DataTransformSpec':
+        return cls(
+            kind='zscore',
+            embed_in_flow=embed_in_flow,
+            zscore_method=method,
+            embedding_config=embedding_config,
+        )
+
+    @classmethod
+    def hadamard(
+        cls,
+        *,
+        first_nside: int = 16,
+        last_nside: int = 1,
+        matrix_type: str = 'hadamard',
+        normalise_details: bool = True,
+        n_chunks: int = 1,
+        embed_in_flow: bool = True,
+        embedding_config: Optional[EmbeddingNetConfig] = None,
+    ) -> 'DataTransformSpec':
+        return cls(
+            kind='hadamard',
+            embed_in_flow=embed_in_flow,
+            hadamard_first_nside=first_nside,
+            hadamard_last_nside=last_nside,
+            hadamard_matrix_type=matrix_type,
+            hadamard_normalise_details=normalise_details,
+            hadamard_n_chunks=n_chunks,
+            embedding_config=embedding_config,
+        )
+
+    @classmethod
+    def hp_cnn_embed(
+        cls,
+        *,
+        embedding_config: EmbeddingNetConfig,
+        embed_in_flow: bool = False,
+    ) -> 'DataTransformSpec':
+        return cls(
+            kind='hp_cnn', 
+            embed_in_flow=embed_in_flow, 
+            embedding_config=embedding_config
+        )
+
+
+def _build_data_transform(spec: DataTransformSpec) -> Optional[InvertibleDataTransform]:
+    if spec.kind == 'blank' or spec.kind == 'hp_cnn':
+        return None
+    if spec.kind == 'zscore':
+        return ZScore(method=spec.zscore_method)
+    if spec.kind == 'hadamard':
+        required = (
+            spec.hadamard_first_nside,
+            spec.hadamard_last_nside,
+            spec.hadamard_matrix_type,
+            spec.hadamard_normalise_details,
+            spec.hadamard_n_chunks,
+        )
+        if any(value is None for value in required):
+            raise ValueError('Incomplete hadamard data transform specification')
+        params = dict(
+            first_nside=spec.hadamard_first_nside,
+            last_nside=spec.hadamard_last_nside,
+            matrix_type=spec.hadamard_matrix_type,
+            normalise_details=spec.hadamard_normalise_details,
+            n_chunks=spec.hadamard_n_chunks,
+        )
+        if spec.embed_in_flow:
+            jax.config.update('jax_enable_x64', True)
+            return HadamardTransformJax(**params)  # type: ignore[arg-type]
+        return HadamardTransform(**params)  # type: ignore[arg-type]
+    raise ValueError(f"Unknown data transform spec kind '{spec.kind}'")
+
+
 @dataclass
 class DataTransformConfig:
-    data_transform: Optional[InvertibleDataTransform] = None
-    embedding_net_config: Optional[EmbeddingNetConfig] = None
-    first_nside: Optional[int] = None
-    last_nside: Optional[int] = None
-    matrix_type: Optional[str] = None
-    normalise_details: Optional[bool] = None
-    n_chunks: Optional[int] = None
-    embed_transform_in_flow: Optional[bool] = None
+    spec: DataTransformSpec
+    _transform: Optional[InvertibleDataTransform] = field(default=None, init=False, repr=False)
 
     @classmethod
     def hp_cnn_embed(cls, nside, **embedd_net_overrides) -> 'DataTransformConfig':
@@ -150,24 +276,34 @@ class DataTransformConfig:
             nside=nside,
             **embedd_net_overrides
         )
-        return cls(embedding_net_config=embedding_net_config)
+        spec = DataTransformSpec.hp_cnn_embed(embedding_config=embedding_net_config)
+        return cls(spec)
 
     @classmethod
-    def blank_transform(cls, embed_transform_in_flow: bool = False) -> 'DataTransformConfig':
-        config = cls(embed_transform_in_flow=embed_transform_in_flow)
-        config.data_transform = None
-        return config
+    def blank_transform(
+        cls,
+        embed_transform_in_flow: bool = False,
+    ) -> 'DataTransformConfig':
+        return cls(
+            DataTransformSpec.blank(
+                embed_in_flow=embed_transform_in_flow,
+            )
+        )
 
     @classmethod
     def zscore(
             cls,
-            embed_transform_in_flow: bool = False, 
-            method: Literal['batchwise', 'global'] = 'batchwise'
+            embed_transform_in_flow: bool = False,
+            method: Literal['batchwise', 'global'] = 'batchwise',
+            embedding_net_config: Optional[EmbeddingNetConfig] = None,
     ) -> 'DataTransformConfig':
-        data_transform = ZScore(method=method)
-        config = cls(embed_transform_in_flow=embed_transform_in_flow)
-        config.data_transform = data_transform
-        return config
+        return cls(
+            DataTransformSpec.zscore(
+                method=method,
+                embed_in_flow=embed_transform_in_flow,
+                embedding_config=embedding_net_config,
+            )
+        )
 
     @classmethod
     def hadamard_wavelet(
@@ -178,50 +314,108 @@ class DataTransformConfig:
             normalise_details: bool = True,
             n_chunks: int = 1,
             embed_transform_in_flow: bool = True,
+            embedding_net_config: Optional[EmbeddingNetConfig] = None,
     ) -> 'DataTransformConfig':
-        config = cls(
-            first_nside=first_nside,
-            last_nside=last_nside,
-            matrix_type=matrix_type,
-            normalise_details=normalise_details,
-            n_chunks=n_chunks,
-            embed_transform_in_flow=embed_transform_in_flow
+        return cls(
+            DataTransformSpec.hadamard(
+                first_nside=first_nside,
+                last_nside=last_nside,
+                matrix_type=matrix_type,
+                normalise_details=normalise_details,
+                n_chunks=n_chunks,
+                embed_in_flow=embed_transform_in_flow,
+                embedding_config=embedding_net_config,
+            )
         )
-        config_dict = asdict(config)
 
-        # this is kind of bullshit
-        del config_dict['embed_transform_in_flow']
-        del config_dict['data_transform']
-        del config_dict['embedding_net_config']
+    @property
+    def data_transform(self) -> Optional[InvertibleDataTransform]:
+        if self.spec.kind in ('blank', 'hp_cnn'):
+            return None
+        if self._transform is None:
+            self._transform = _build_data_transform(self.spec)
+        return self._transform
 
-        # if embedding, we need float64 computation; otherwise, use numpy
-        if config.embed_transform_in_flow:
-            jax.config.update('jax_enable_x64', True)
-            data_transform_instance = HadamardTransformJax(**config_dict)
-        else:
-            data_transform_instance = HadamardTransform(**config_dict)
+    @property
+    def embedding_net_config(self) -> Optional[EmbeddingNetConfig]:
+        return self.spec.embedding_config
 
-        config.data_transform = data_transform_instance
-        return config
+    @property
+    def embed_transform_in_flow(self) -> bool:
+        return self.spec.embed_in_flow
+
+@dataclass(frozen=True)
+class ThetaTransformSpec:
+    kind: Literal['blank', 'dipole_cartesian', 'dipole_zscore'] = 'blank'
+    embed_in_flow: bool = False
+    wrap_longitude: bool = True
+    reflect_latitude: bool = True
+
+    @classmethod
+    def blank(cls, *, embed_in_flow: bool = False) -> 'ThetaTransformSpec':
+        return cls(kind='blank', embed_in_flow=embed_in_flow)
+
+    @classmethod
+    def dipole_cartesian(
+        cls,
+        *,
+        embed_in_flow: bool = False,
+        wrap_longitude: bool = True,
+        reflect_latitude: bool = True,
+    ) -> 'ThetaTransformSpec':
+        return cls(
+            kind='dipole_cartesian',
+            embed_in_flow=embed_in_flow,
+            wrap_longitude=wrap_longitude,
+            reflect_latitude=reflect_latitude,
+        )
+
+    @classmethod
+    def dipole_zscore(
+        cls,
+        *,
+        embed_in_flow: bool = True,
+        wrap_longitude: bool = True,
+        reflect_latitude: bool = True,
+    ) -> 'ThetaTransformSpec':
+        return cls(
+            kind='dipole_zscore',
+            embed_in_flow=embed_in_flow,
+            wrap_longitude=wrap_longitude,
+            reflect_latitude=reflect_latitude,
+        )
+
+
+def _build_theta_transform(
+    spec: ThetaTransformSpec,
+    adapter: Optional[PytreeAdapter],
+) -> Optional[InvertibleThetaTransformJax]:
+    if spec.kind == 'blank':
+        return None
+    if adapter is None:
+        raise ValueError('Adapter required to build theta transform')
+    method = 'cartesian' if spec.kind == 'dipole_cartesian' else 'zscore'
+    return DipoleThetaTransform(
+        adapter,
+        method=method,
+        wrap_longitude=spec.wrap_longitude,
+        reflect_latitude=spec.reflect_latitude,
+    )
+
 
 @dataclass
 class ThetaTransformConfig:
-    theta_transform: Optional[InvertibleThetaTransformJax] = None
-    embed_transform_in_flow: Optional[bool] = None
-    dipole_theta_method: Optional[Literal['cartesian', 'zscore']] = None
-    wrap_longitude: Optional[bool] = True
-    reflect_latitude: Optional[bool] = True
+    spec: ThetaTransformSpec
+    adapter: Optional[PytreeAdapter] = None
+    _transform: Optional[InvertibleThetaTransformJax] = field(default=None, init=False, repr=False)
 
     @classmethod
     def blank_transform(
         cls,
         embed_transform_in_flow: bool = False
     ) -> 'ThetaTransformConfig':
-        theta_transform = None
-        return cls(
-            theta_transform=theta_transform,
-            embed_transform_in_flow=embed_transform_in_flow
-        )
+        return cls(ThetaTransformSpec.blank(embed_in_flow=embed_transform_in_flow))
+
     @classmethod
     def dipole_cartesian_transform(
         cls,
@@ -230,17 +424,12 @@ class ThetaTransformConfig:
         wrap_longitude: bool = True,
         reflect_latitude: bool = True
     ) -> 'ThetaTransformConfig':
-        theta_transform = DipoleThetaTransform(
-            pytree_adapter,
-            method='cartesian',
+        spec = ThetaTransformSpec.dipole_cartesian(
+            embed_in_flow=embed_transform_in_flow,
             wrap_longitude=wrap_longitude,
-            reflect_latitude=reflect_latitude
+            reflect_latitude=reflect_latitude,
         )
-        return cls(
-            theta_transform=theta_transform,
-            embed_transform_in_flow=embed_transform_in_flow,
-            dipole_theta_method='cartesian'
-        )
+        return cls(spec=spec, adapter=pytree_adapter)
 
     @classmethod
     def dipole_zscore_transform(
@@ -250,198 +439,193 @@ class ThetaTransformConfig:
         wrap_longitude: bool = True,
         reflect_latitude: bool = True
     ) -> 'ThetaTransformConfig':
-        theta_transform = DipoleThetaTransform(
-            pytree_adapter, 
-            method='zscore',
+        spec = ThetaTransformSpec.dipole_zscore(
+            embed_in_flow=embed_transform_in_flow,
             wrap_longitude=wrap_longitude,
-            reflect_latitude=reflect_latitude
+            reflect_latitude=reflect_latitude,
         )
-        return cls(
-            theta_transform=theta_transform,
-            embed_transform_in_flow=embed_transform_in_flow,
-            dipole_theta_method='zscore'
-        )
+        return cls(spec=spec, adapter=pytree_adapter)
+
+    @property
+    def theta_transform(self) -> Optional[InvertibleThetaTransformJax]:
+        if self.spec.kind == 'blank':
+            return None
+        if self._transform is None:
+            self._transform = _build_theta_transform(self.spec, self.adapter)
+        return self._transform
+
+    @property
+    def embed_transform_in_flow(self) -> bool:
+        return self.spec.embed_in_flow
 
 @dataclass
 class TransformConfig:
     data_transform_config: DataTransformConfig
     theta_transform_config: ThetaTransformConfig
 
-    @classmethod
-    def blank_transform(cls) -> 'TransformConfig':
-        data_transform_config = DataTransformConfig.blank_transform()
-        theta_transform_config = ThetaTransformConfig.blank_transform()
-        return cls(
-            data_transform_config=data_transform_config,
-            theta_transform_config=theta_transform_config
-        )
 
-    @classmethod
-    def hadamard_for_nle(
-        cls,
-        adapter: PytreeAdapter,
-        data_transform_overrides: dict = {},
-        theta_transform_overrides: dict = {},
-    ) -> 'TransformConfig':
-        data_transform_config_dict = {
-            'first_nside': 16,
-            'last_nside': 1,
-            'matrix_type': 'hadamard',
-            'normalise_details': True,
-            'n_chunks': 1,
-            'embed_transform_in_flow': False,
-            **data_transform_overrides
-        }
-        theta_transform_config_dict = {
-            'pytree_adapter': adapter,
-            'embed_transform_in_flow': None,
-            **theta_transform_overrides
-        }
-        data_transform_config = DataTransformConfig.hadamard_wavelet(
-            **data_transform_config_dict
-        )
-        theta_transform_config = ThetaTransformConfig.dipole_cartesian_transform(
-            **theta_transform_config_dict
-        )
-        return cls(
-            data_transform_config=data_transform_config,
-            theta_transform_config=theta_transform_config
-        )
+def _apply_data_spec_overrides(
+    spec: DataTransformSpec,
+    overrides: Optional[dict]
+) -> DataTransformSpec:
+    if not overrides:
+        return spec
+    mapping = {
+        'first_nside': 'hadamard_first_nside',
+        'last_nside': 'hadamard_last_nside',
+        'matrix_type': 'hadamard_matrix_type',
+        'normalise_details': 'hadamard_normalise_details',
+        'n_chunks': 'hadamard_n_chunks',
+        'method': 'zscore_method',
+        'embed_transform_in_flow': 'embed_in_flow',
+    }
+    updates = {}
+    for key, value in overrides.items():
+        target = mapping.get(key, key)
+        if target not in DataTransformSpec.__dataclass_fields__:
+            raise KeyError(f"Unknown data transform spec field '{key}'")
+        updates[target] = value
+    return replace(spec, **updates)
 
-    @classmethod
-    def raw_data_for_npe(
-            cls,
-            adapter: PytreeAdapter,
-            nside: int,
-            data_transform_overrides: dict = {},
-            theta_transform_overrides: dict = {}
-    ) -> 'TransformConfig':
-        data_transform_config_dict = {
-            # 'embed_transform_in_flow': None,
-            **data_transform_overrides
-        }
-        # data_transform_config = DataTransformConfig.hp_cnn_embed(
-        #     nside, 
-        #     **data_transform_config_dict
-        # )
-        data_transform = ZScore(method='global')
-        # data_transform_config = DataTransformConfig(data_transform=data_transform)
-        # data_transform_config.data_transform = data_transform
-        # data_transform_config = DataTransformConfig.zscore(**data_transform_config_dict)
-        data_transform_config = DataTransformConfig.hadamard_wavelet(
-            first_nside=4,
-            embed_transform_in_flow=False
-        )
-        theta_transform_config_dict = {
-            'pytree_adapter': adapter,
-            'embed_transform_in_flow': True,
-            **theta_transform_overrides
-        }
-        theta_transform_config = ThetaTransformConfig.dipole_zscore_transform(
-            **theta_transform_config_dict
-        )
-        return cls(
-            data_transform_config=data_transform_config,
-            theta_transform_config=theta_transform_config
-        )
-        
+
+def _apply_theta_spec_overrides(
+    spec: ThetaTransformSpec,
+    overrides: Optional[dict]
+) -> ThetaTransformSpec:
+    if not overrides:
+        return spec
+    mapping = {
+        'embed_transform_in_flow': 'embed_in_flow',
+    }
+    updates = {}
+    for key, value in overrides.items():
+        target = mapping.get(key, key)
+        if target not in ThetaTransformSpec.__dataclass_fields__:
+            raise KeyError(f"Unknown theta transform spec field '{key}'")
+        updates[target] = value
+    return replace(spec, **updates)
+
+
+def _prepare_data_config(
+    spec: DataTransformSpec,
+    overrides: Optional[dict] = None,
+) -> DataTransformConfig:
+    updated_spec = _apply_data_spec_overrides(spec, overrides)
+    return DataTransformConfig(updated_spec)
+
+
+def _prepare_theta_config(
+    spec: ThetaTransformSpec,
+    adapter: Optional[PytreeAdapter],
+    overrides: Optional[dict] = None,
+) -> ThetaTransformConfig:
+    updated_spec = _apply_theta_spec_overrides(spec, overrides)
+    if updated_spec.kind != 'blank' and adapter is None:
+        raise ValueError('Adapter required for non-blank theta transform spec.')
+    return ThetaTransformConfig(
+        spec=updated_spec,
+        adapter=adapter if updated_spec.kind != 'blank' else None,
+    )
+
+
+def _sync_flow_embed_flag(flow_cfg: NeuralFlowConfig, transforms: TransformConfig) -> None:
+    if flow_cfg.mode == 'NLE':
+        flow_cfg.embed_target_transform_in_flow = transforms.data_transform_config.embed_transform_in_flow
+    elif flow_cfg.mode == 'NPE':
+        flow_cfg.embed_target_transform_in_flow = transforms.theta_transform_config.embed_transform_in_flow
+    else:
+        flow_cfg.embed_target_transform_in_flow = False
+
+
 @dataclass
-class ConfigOfConfigs:
-    '''
-    Meta configuration class for configs which, from experimenting, work well in
-    particular settings. Access each setting by calling the relevant class method.
-    '''
-    training_config: TrainingConfig
-    multiround_config: MultiRoundInfererConfig
-    ssnle_config: NeuralFlowConfig
-    transform_config: TransformConfig
-
-    # no idea where to put this logic for now
-    def __post_init__(self) -> None:
-        if (
-            (self.ssnle_config.mode == 'NLE')
-            and self.transform_config.data_transform_config.embed_transform_in_flow
-        ):
-            self.ssnle_config.embed_target_transform_in_flow = True
-        elif (
-            (self.ssnle_config.mode == 'NPE')
-            and self.transform_config.theta_transform_config.embed_transform_in_flow
-            ):
-            self.ssnle_config.embed_target_transform_in_flow = True
-        else:
-            self.embed_target_transform_in_flow = False
+class Scenario:
+    training: TrainingConfig
+    multiround: MultiRoundInfererConfig
+    flow: NeuralFlowConfig
+    transforms: TransformConfig
 
     @classmethod
     def blank(
-            cls,
-            reference_theta: dict[str, NDArray],
-            training_overrides: dict = {},
-            multiround_overrides: dict = {},
-            ssnle_overrides: dict = {}
-    ) -> 'ConfigOfConfigs':
-        mr_config_dict = {
+        cls,
+        reference_theta: dict[str, NDArray],
+        *,
+        theta_adapter: Optional[PytreeAdapter] = None,
+        training_overrides: Optional[dict] = None,
+        multiround_overrides: Optional[dict] = None,
+        flow_overrides: Optional[dict] = None,
+        data_spec: Optional[DataTransformSpec] = None,
+        theta_spec: Optional[ThetaTransformSpec] = None,
+        data_spec_overrides: Optional[dict] = None,
+        theta_spec_overrides: Optional[dict] = None,
+    ) -> 'Scenario':
+        train_cfg = TrainingConfig(**(training_overrides or {}))
+        mr_defaults = {
             'simulation_budget': 10_000,
             'n_rounds': 15,
             'reference_theta': reference_theta,
-            **multiround_overrides
         }
-        nle_config_dict = {
+        mr_defaults.update(multiround_overrides or {})
+        mr_cfg = MultiRoundInfererConfig(**mr_defaults)
+
+        flow_defaults = {
             'mode': 'NLE',
             'architecture': 3 * ['MAF'],
-            **ssnle_overrides
         }
+        flow_defaults.update(flow_overrides or {})
+        flow_cfg = NeuralFlowConfig(**flow_defaults)
 
-        transform_config = TransformConfig.blank_transform()
-        train_config = TrainingConfig(**training_overrides)
-        mr_config = MultiRoundInfererConfig(**mr_config_dict)
-        nle_config = NeuralFlowConfig(**nle_config_dict)
+        base_data_spec = data_spec or DataTransformSpec.blank(embed_in_flow=False)
+        data_cfg = _prepare_data_config(base_data_spec, data_spec_overrides)
 
-        return cls(
-            training_config=train_config,
-            multiround_config=mr_config,
-            ssnle_config=nle_config,
-            transform_config=transform_config
+        base_theta_spec = theta_spec or ThetaTransformSpec.blank(embed_in_flow=False)
+        theta_cfg = _prepare_theta_config(
+            base_theta_spec, theta_adapter, theta_spec_overrides
         )
 
-    # low learning rate high nside?
-    # ok not weighting by round helps in keeping posterior narrow
+        transforms = TransformConfig(
+            data_transform_config=data_cfg,
+            theta_transform_config=theta_cfg,
+        )
+
+        _sync_flow_embed_flag(flow_cfg, transforms)
+
+        return cls(train_cfg, mr_cfg, flow_cfg, transforms)
+
     @classmethod
     def nside16_nle(
-            cls,
-            reference_theta: dict[str, NDArray],
-            theta_adapter: PytreeAdapter,
-            training_overrides: dict = {},
-            multiround_overrides: dict = {},
-            nflow_overrides: dict = {},
-            data_transform_overrides: dict = {},
-            theta_transform_overrides: dict = {}
-    ) -> 'ConfigOfConfigs':
-        data_transform_dict = {
-            'first_nside': 16,
-            'last_nside': 1,
-            'matrix_type': 'hadamard',
-            'normalise_details': True,
-            'n_chunks': 1,
-            **data_transform_overrides
-        }
-        theta_transform_dict = theta_transform_overrides
-        train_dict = {
-            'patience': 20, 
-            'learning_rate': 5e-5, # 5e-5 for optimal nside=16
+        cls,
+        reference_theta: dict[str, NDArray],
+        theta_adapter: PytreeAdapter,
+        *,
+        training_overrides: Optional[dict] = None,
+        multiround_overrides: Optional[dict] = None,
+        flow_overrides: Optional[dict] = None,
+        data_spec: Optional[DataTransformSpec] = None,
+        theta_spec: Optional[ThetaTransformSpec] = None,
+        data_spec_overrides: Optional[dict] = None,
+        theta_spec_overrides: Optional[dict] = None,
+    ) -> 'Scenario':
+        train_defaults = {
+            'patience': 20,
+            'learning_rate': 5e-5,
             'restore_from_previous': True,
             'weight_by_round': False,
-            **training_overrides
         }
-        mr_dict = {
+        train_defaults.update(training_overrides or {})
+        train_cfg = TrainingConfig(**train_defaults)
+
+        mr_defaults = {
             'simulation_budget': 50_000,
             'n_rounds': 15,
             'reference_theta': reference_theta,
             'dequantise_data': False,
             'initial_fraction': 0.5,
             'n_likelihood_samples': 25_000,
-            **multiround_overrides
         }
-        nflow_dict = {
+        mr_defaults.update(multiround_overrides or {})
+        mr_cfg = MultiRoundInfererConfig(**mr_defaults)
+
+        flow_defaults = {
             'mode': 'NLE',
             'architecture': ['healpix_funnel'] + 15 * ['MAF'],
             'funnel_one_and_done': False,
@@ -449,149 +633,175 @@ class ConfigOfConfigs:
             'conditioner_n_layers': 4,
             'conditioner_n_neurons': 256,
             'decoder_n_layers': 3,
-            'decoder_n_neurons': 64, # keep decoder_n_neurons ~ 64 for nside=16?
+            'decoder_n_neurons': 64,
             'decoder_distribution': 'gaussian',
-            **nflow_overrides
         }
+        flow_defaults.update(flow_overrides or {})
+        flow_cfg = NeuralFlowConfig(**flow_defaults)
 
-        train_config = TrainingConfig(**train_dict)
-        mr_config = MultiRoundInfererConfig(**mr_dict)
-        nle_config = NeuralFlowConfig(**nflow_dict)
-        transform_config = TransformConfig.hadamard_for_nle(
-            adapter=theta_adapter,
-            data_transform_overrides=data_transform_dict,
-            theta_transform_overrides=theta_transform_dict
+        base_data_spec = data_spec or DataTransformSpec.hadamard(
+            first_nside=16,
+            last_nside=1,
+            matrix_type='hadamard',
+            normalise_details=True,
+            n_chunks=1,
+            embed_in_flow=False,
+        )
+        data_cfg = _prepare_data_config(base_data_spec, data_spec_overrides)
+
+        base_theta_spec = theta_spec or ThetaTransformSpec.dipole_cartesian(
+            embed_in_flow=False
+        )
+        theta_cfg = _prepare_theta_config(
+            base_theta_spec, theta_adapter, theta_spec_overrides
         )
 
-        return cls(
-            training_config=train_config,
-            multiround_config=mr_config,
-            ssnle_config=nle_config,
-            transform_config=transform_config
+        transforms = TransformConfig(
+            data_transform_config=data_cfg,
+            theta_transform_config=theta_cfg,
         )
+
+        _sync_flow_embed_flag(flow_cfg, transforms)
+
+        return cls(train_cfg, mr_cfg, flow_cfg, transforms)
 
     @classmethod
     def nside16_npe(
-            cls,
-            reference_theta: dict[str, NDArray],
-            theta_adapter: PytreeAdapter,
-            training_overrides: dict = {},
-            multiround_overrides: dict = {},
-            nflow_overrides: dict = {},
-            data_transform_overrides: dict = {},
-            theta_transform_overrides: dict = {}
-    ) -> 'ConfigOfConfigs':
-        data_transform_dict = {
-            **data_transform_overrides
-        }
-        theta_transform_dict = {
-            'embed_transform_in_flow': True,
-            **theta_transform_overrides
-        }
-        train_dict = {
-            'patience': 20, 
-            'learning_rate': 5e-5, # 5e-5 for optimal nside=16
+        cls,
+        reference_theta: dict[str, NDArray],
+        theta_adapter: PytreeAdapter,
+        *,
+        training_overrides: Optional[dict] = None,
+        multiround_overrides: Optional[dict] = None,
+        flow_overrides: Optional[dict] = None,
+        data_spec: Optional[DataTransformSpec] = None,
+        theta_spec: Optional[ThetaTransformSpec] = None,
+        data_spec_overrides: Optional[dict] = None,
+        theta_spec_overrides: Optional[dict] = None,
+    ) -> 'Scenario':
+        train_defaults = {
+            'patience': 20,
+            'learning_rate': 5e-5,
             'restore_from_previous': True,
             'weight_by_round': False,
-            **training_overrides
         }
-        mr_dict = {
+        train_defaults.update(training_overrides or {})
+        train_cfg = TrainingConfig(**train_defaults)
+
+        mr_defaults = {
             'simulation_budget': 50_000,
             'n_rounds': 15,
             'reference_theta': reference_theta,
             'dequantise_data': False,
             'initial_fraction': 0.5,
             'n_likelihood_samples': 25_000,
-            **multiround_overrides
         }
-        nle_dict = {
+        mr_defaults.update(multiround_overrides or {})
+        mr_cfg = MultiRoundInfererConfig(**mr_defaults)
+
+        flow_defaults = {
             'mode': 'NPE',
             'architecture': 8 * ['MAF'],
             'funnel_one_and_done': False,
             'funnel_maf_extension': 0,
             'conditioner_n_layers': 4,
             'conditioner_n_neurons': 256,
-            **nflow_overrides
         }
+        flow_defaults.update(flow_overrides or {})
+        flow_cfg = NeuralFlowConfig(**flow_defaults)
 
-        train_config = TrainingConfig(**train_dict)
-        mr_config = MultiRoundInfererConfig(**mr_dict)
-        nle_config = NeuralFlowConfig(**nle_dict)
-        transform_config = TransformConfig.raw_data_for_npe(
-            nside=16,
-            adapter=theta_adapter,
-            data_transform_overrides=data_transform_dict,
-            theta_transform_overrides=theta_transform_dict
+        base_data_spec = data_spec or DataTransformSpec.hadamard(
+            first_nside=16,
+            last_nside=1,
+            matrix_type='hadamard',
+            normalise_details=True,
+            n_chunks=1,
+            embed_in_flow=False,
+        )
+        data_cfg = _prepare_data_config(base_data_spec, data_spec_overrides)
+
+        base_theta_spec = theta_spec or ThetaTransformSpec.dipole_zscore(embed_in_flow=True)
+        theta_cfg = _prepare_theta_config(base_theta_spec, theta_adapter, theta_spec_overrides)
+
+        transforms = TransformConfig(
+            data_transform_config=data_cfg,
+            theta_transform_config=theta_cfg,
         )
 
-        return cls(
-            training_config=train_config,
-            multiround_config=mr_config,
-            ssnle_config=nle_config,
-            transform_config=transform_config
-        )
+        _sync_flow_embed_flag(flow_cfg, transforms)
+
+        return cls(train_cfg, mr_cfg, flow_cfg, transforms)
 
     @classmethod
     def nside32(
-            cls,
-            reference_theta: dict[str, NDArray],
-            theta_adapter: PytreeAdapter,
-            training_overrides: dict = {},
-            multiround_overrides: dict = {},
-            ssnle_overrides: dict = {},
-            data_transform_overrides: dict = {},
-            theta_transform_overrides: dict = {}
-    ) -> 'ConfigOfConfigs':
-        data_transform_dict = {
-            'first_nside': 32,
-            'last_nside': 1,
-            **data_transform_overrides
-        }
-        theta_transform_dict = {
-            'embed_transform_in_flow': False,
-            **theta_transform_overrides
-        }
-        train_dict = {
-            'patience': 20, 
+        cls,
+        reference_theta: dict[str, NDArray],
+        theta_adapter: PytreeAdapter,
+        *,
+        training_overrides: Optional[dict] = None,
+        multiround_overrides: Optional[dict] = None,
+        flow_overrides: Optional[dict] = None,
+        data_spec: Optional[DataTransformSpec] = None,
+        theta_spec: Optional[ThetaTransformSpec] = None,
+        data_spec_overrides: Optional[dict] = None,
+        theta_spec_overrides: Optional[dict] = None,
+    ) -> 'Scenario':
+        train_defaults = {
+            'patience': 20,
             'learning_rate': 1e-5,
             'restore_from_previous': True,
             'weight_by_round': False,
-            **training_overrides
         }
-        mr_dict = {
+        train_defaults.update(training_overrides or {})
+        train_cfg = TrainingConfig(**train_defaults)
+
+        mr_defaults = {
             'simulation_budget': 50_000,
             'n_rounds': 15,
             'reference_theta': reference_theta,
             'dequantise_data': False,
             'initial_fraction': 0.5,
             'n_likelihood_samples': 25_000,
-            **multiround_overrides
         }
-        nle_dict = {
+        mr_defaults.update(multiround_overrides or {})
+        mr_cfg = MultiRoundInfererConfig(**mr_defaults)
+
+        flow_defaults = {
             'mode': 'NLE',
             'architecture': ['healpix_funnel'] + 15 * ['MAF'],
             'funnel_one_and_done': False,
             'funnel_maf_extension': 0,
             'conditioner_n_layers': 4,
-            'conditioner_n_neurons': 256, # don't drop these, hinders inference, 20250905_094425
+            'conditioner_n_neurons': 256,
             'decoder_n_layers': 3,
             'decoder_n_neurons': 64,
             'decoder_distribution': 'gaussian',
-            **ssnle_overrides
         }
+        flow_defaults.update(flow_overrides or {})
+        flow_cfg = NeuralFlowConfig(**flow_defaults)
 
-        train_config = TrainingConfig(**train_dict)
-        mr_config = MultiRoundInfererConfig(**mr_dict)
-        nle_config = NeuralFlowConfig(**nle_dict)
-        transform_config = TransformConfig.hadamard_for_nle(
-            adapter=theta_adapter,
-            data_transform_overrides=data_transform_dict,
-            theta_transform_overrides=theta_transform_dict
+        base_data_spec = data_spec or DataTransformSpec.hadamard(
+            first_nside=32,
+            last_nside=1,
+            matrix_type='hadamard',
+            normalise_details=True,
+            n_chunks=1,
+            embed_in_flow=False,
+        )
+        data_cfg = _prepare_data_config(base_data_spec, data_spec_overrides)
+
+        base_theta_spec = theta_spec or ThetaTransformSpec.dipole_cartesian(
+            embed_in_flow=False
+        )
+        theta_cfg = _prepare_theta_config(
+            base_theta_spec, theta_adapter, theta_spec_overrides
         )
 
-        return cls(
-            training_config=train_config,
-            multiround_config=mr_config,
-            ssnle_config=nle_config,
-            transform_config=transform_config
+        transforms = TransformConfig(
+            data_transform_config=data_cfg,
+            theta_transform_config=theta_cfg,
         )
+
+        _sync_flow_embed_flag(flow_cfg, transforms)
+
+        return cls(train_cfg, mr_cfg, flow_cfg, transforms)

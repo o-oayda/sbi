@@ -1,6 +1,6 @@
 from jax.random import PRNGKey
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
-from dipolesbi.tools.configs import ConfigOfConfigs
+from dipolesbi.tools.configs import Scenario, DataTransformSpec, EmbeddingNetConfig
 from dipolesbi.tools.inference import NotShitLikelihoodBasedInferer
 from dipolesbi.tools.np_rngkey import npkey_from_jax
 from dipolesbi.tools.maps import SimpleDipoleMap
@@ -105,20 +105,28 @@ if __name__ == '__main__':
     # corner(lb_inferer._samples)
     # plt.show()
 
-    nside16_config = ConfigOfConfigs.nside16_npe(
-        theta0, 
+    embedding_cfg = EmbeddingNetConfig(
+        nside=NSIDE,
+        out_channels_per_layer=[2, 4, 8, 16],
+        dropout_rate=0.2,
+    )
+    data_spec = DataTransformSpec.zscore(
+        method='batchwise',
+        embedding_config=embedding_cfg,
+    )
+    # data_spec = DataTransformSpec.hadamard(
+    #     first_nside=NSIDE,
+    #     embed_in_flow=False
+    # )
+    nside16_scenario = Scenario.nside16_npe(
+        reference_theta=theta0,
         theta_adapter=adapter,
-        # for whatever reason batchwise doesn't work for the npe
-        # data_transform_overrides={'method': 'batchwise'},
-        data_transform_overrides={
-            'out_channels_per_layer': [2, 4, 8, 16],
-            'dropout_rate': 0.2
-        },
-        theta_transform_overrides={'embed_transform_in_flow': False},
-        nflow_overrides={
+        data_spec=data_spec,
+        theta_spec_overrides={'embed_transform_in_flow': True},
+        flow_overrides={
             'conditioner_n_neurons': 64,
             'conditioner_n_layers': 2,
-            'architecture': 5 * ['MAF']
+            'architecture': 5 * ['MAF'],
         },
         training_overrides={'restore_from_previous': False},
         multiround_overrides={
@@ -128,10 +136,10 @@ if __name__ == '__main__':
             'plot_save_dir': args.out_dir,
             'initial_fraction': 0.,
             'simulation_budget': 50_000,
-            'n_rounds': 3
-        }
+            'n_rounds': 3,
+        },
     )
-    # nside16_config = ConfigOfConfigs.nside16_nle(
+    # nside16_scenario = Scenario.nside16_nle(
     #     theta0, 
     #     theta_adapter=adapter,
     #     data_transform_overrides={
@@ -155,34 +163,18 @@ if __name__ == '__main__':
     #         'simulation_budget': 50_000
     #     }
     # )
-    nside32_config = ConfigOfConfigs.nside32(
-        theta0, 
-        theta_adapter=adapter,
-        multiround_overrides={
-            'simulation_budget': 100_000, 
-            'dequantise_data': True,
-            'n_requantisations': 32,
-        },
-        training_overrides={
-            'warmup_epochs': 0.5, 
-            'restore_from_previous': True, 
-            'batch_size': 200
-        }
-    )
     meta_cfg = {
-        4: nside16_config,
-        16: nside16_config,
-        32: nside16_config
-        # 32: nside32_config
+        4: nside16_scenario,
+        16: nside16_scenario,
     }
     cur_cfg = meta_cfg[NSIDE]
 
     inferer = MultiRoundInferer(
         'NPE', prior, model.generate_dipole, x0,
-        multi_round_config=cur_cfg.multiround_config,
-        transform_config=cur_cfg.transform_config,
-        nflow_config=cur_cfg.ssnle_config,
-        train_config=cur_cfg.training_config
+        multi_round_config=cur_cfg.multiround,
+        transform_config=cur_cfg.transforms,
+        nflow_config=cur_cfg.flow,
+        train_config=cur_cfg.training
     )
     inferer.run()
 
