@@ -110,7 +110,11 @@ if __name__ == '__main__':
         theta_adapter=adapter,
         # for whatever reason batchwise doesn't work for the npe
         # data_transform_overrides={'method': 'batchwise'},
-        theta_transform_overrides={'embed_transform_in_flow': True},
+        data_transform_overrides={
+            'out_channels_per_layer': [2, 4, 8, 16],
+            'dropout_rate': 0.2
+        },
+        theta_transform_overrides={'embed_transform_in_flow': False},
         nflow_overrides={
             'conditioner_n_neurons': 64,
             'conditioner_n_layers': 2,

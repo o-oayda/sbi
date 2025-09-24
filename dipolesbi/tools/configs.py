@@ -320,14 +320,18 @@ class TransformConfig:
             # 'embed_transform_in_flow': None,
             **data_transform_overrides
         }
-        data_transform_config = DataTransformConfig.hp_cnn_embed(
-            nside, 
-            **data_transform_config_dict
-        )
-        # data_transform_config = DataTransformConfig.zscore(**data_transform_config_dict)
-        # data_transform_config = DataTransformConfig.hadamard_wavelet(
-        #     embed_transform_in_flow=False
+        # data_transform_config = DataTransformConfig.hp_cnn_embed(
+        #     nside, 
+        #     **data_transform_config_dict
         # )
+        data_transform = ZScore(method='global')
+        # data_transform_config = DataTransformConfig(data_transform=data_transform)
+        # data_transform_config.data_transform = data_transform
+        # data_transform_config = DataTransformConfig.zscore(**data_transform_config_dict)
+        data_transform_config = DataTransformConfig.hadamard_wavelet(
+            first_nside=4,
+            embed_transform_in_flow=False
+        )
         theta_transform_config_dict = {
             'pytree_adapter': adapter,
             'embed_transform_in_flow': True,
