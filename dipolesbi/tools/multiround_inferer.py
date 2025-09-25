@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Callable, Literal, Optional
+from typing import Callable, Literal, Optional, cast
 from anesthetic import NestedSamples
 from blackjax.types import PRNGKey
 from getdist import MCSamples, plots
@@ -8,15 +8,14 @@ import haiku as hk
 import jax
 import numpy as np
 from numpy.typing import NDArray
-from jax import numpy as jnp
+from jax import device_put, numpy as jnp
 from matplotlib import pyplot as plt
 import healpy as hp
 from dipolesbi.tools.configs import MultiRoundInfererConfig, NeuralFlowConfig, TrainingConfig, TransformConfig
 from dipolesbi.tools.dataloader import split_train_val_dict
 from dipolesbi.tools.inference import JaxNestedSampler
 from dipolesbi.tools.maps import SimpleDipoleMapJax
-from surjectors.util import named_dataset
-from dipolesbi.tools.dataloader import named_dataset_idx
+from dipolesbi.tools.dataloader import healpix_map_dataset, healpix_map_dataset_idx
 from dipolesbi.tools.neural_flows import NeuralFlow
 from dipolesbi.tools.np_rngkey import NPKey, npkey_from_jax
 from dipolesbi.tools.priors_np import DipolePriorNP
@@ -35,9 +34,9 @@ class MultiRoundInferer:
             initial_proposal: DipolePriorNP,
             simulator_function: Callable[
                 [NPKey, dict[str, NDArray[np.float32]], bool],
-                NDArray[np.float32]
+                tuple[NDArray[np.float32], NDArray[np.bool_]]
             ],
-            reference_observation: NDArray,
+            reference_observation: tuple[NDArray, NDArray[np.bool_]],
             multi_round_config: MultiRoundInfererConfig,
             nflow_config: NeuralFlowConfig,
             transform_config: TransformConfig,
@@ -53,7 +52,9 @@ class MultiRoundInferer:
         self.initial_proposal_jax.change_kwarg('N', 'mean_density')
 
         self.simulator_function = simulator_function
-        self.data_ndim = reference_observation.shape[-1]
+        self.reference_observation = reference_observation[0]
+        self.reference_mask = reference_observation[1]
+        self.data_ndim = self.reference_observation.shape[-1]
         self.theta_ndim = initial_proposal.ndim
         self.nside = hp.npix2nside(self.data_ndim)
 
@@ -91,6 +92,10 @@ class MultiRoundInferer:
         self.all_data = np.full(
             (self.mr_config.simulation_budget, self.data_ndim), np.nan,
             dtype=np.float32
+        )
+        self.all_mask = np.full(
+            (self.mr_config.simulation_budget, self.data_ndim), 1,
+            dtype=np.bool_
         )
         self.all_theta = {
             k: np.full((self.mr_config.simulation_budget,), np.nan, dtype=np.float32)
@@ -509,18 +514,20 @@ class MultiRoundInferer:
     def _add_to_simulation_pool(
             self,
             rng_key: NPKey,
-            data: NDArray,
+            data: tuple[NDArray[np.float32], NDArray[np.bool_]],
             theta: dict[str, NDArray]
     ) -> None:
         start = self.current_round * self.mr_config.simulations_per_round
         end = (self.current_round + 1) * self.mr_config.simulations_per_round
+        dmap, mask = data
 
         if self.mr_config.dequantise_data:
             _, dequantise_key = rng_key.split(2)
-            data += dequantise_key.uniform(shape=data.shape, low=-0.5, high=0.5)
+            dmap += dequantise_key.uniform(shape=dmap.shape, low=-0.5, high=0.5)
 
         self.ui.log(f'Adding data from idx {start} to idx {end}...')
-        self.all_data[start:end, :] = data
+        self.all_data[start:end, :] = dmap
+        self.all_mask[start:end, :] = mask
         self.all_round_id[start:end] = self.current_round
 
         for key in self.all_theta.keys():
@@ -544,7 +551,7 @@ class MultiRoundInferer:
         posterior_samples = self.nflow.sample_posterior(
             rng_key=posterior_key, 
             n_samples=n_samples,
-            x0=jax.device_put(self.reference_observation),
+            dmap_and_mask=(jax.device_put(self.reference_observation), jax.device_put(self.reference_mask)),
             check_proposal_probs=self.mr_config.check_proposal_probs,
             ui=self.ui
         )
@@ -624,20 +631,13 @@ class MultiRoundInferer:
         self.lnZ_per_round.append(self.nested_samples.logZ())
         self.lnZerr_per_round.append(self.nested_samples.logZ(100).std()) # type: ignore
 
-    def _make_train_val_set(self, split_key: NPKey) -> tuple[named_dataset_idx, named_dataset]:
-        (trn_data, val_data), (trn_theta, val_theta), rnd_idx = self._split_train_val(
-            self.all_data, # type: ignore
-            self.all_theta, 
-            self.all_round_id,
+    def _make_train_val_set(
+            self, 
+            split_key: NPKey
+    ) -> tuple[healpix_map_dataset_idx, healpix_map_dataset]:
+        (trn_data, val_data), (trn_theta, val_theta), (trn_mask, val_mask), rnd_idx = self._split_train_val(
             split_key=split_key
         )
-
-        # self._compute_theta_norm(trn_theta)
-        #
-        # norm_train_data, _ = self._transform_data_and_logdet(trn_data)
-        # norm_val_data, _ = self._transform_data_and_logdet(val_data)
-        # norm_train_theta = self._transform_theta(trn_theta)
-        # norm_val_theta = self._transform_theta(val_theta)
 
         assert not jnp.any(jnp.isnan(trn_data))
         assert not any(jnp.isnan(arr).any() for arr in trn_theta.values())
@@ -645,31 +645,37 @@ class MultiRoundInferer:
         assert not any(jnp.isnan(arr).any() for arr in val_theta.values())
         assert not jnp.any(rnd_idx == self.round_idx_badval)
 
-        trn_set = named_dataset_idx(trn_data, trn_theta, rnd_idx)
-        val_set = named_dataset(val_data, val_theta)
+        trn_set = healpix_map_dataset_idx(trn_data, trn_theta, trn_mask, rnd_idx)
+        val_set = healpix_map_dataset(val_data, val_theta, val_mask)
 
         return trn_set, val_set
 
     def _split_train_val(
             self, 
-            data: NDArray, 
-            theta: dict[str, NDArray],
-            round_idx: NDArray,
             split_key: NPKey
     ) -> tuple[
         tuple[NDArray, NDArray], 
         tuple[dict[str, NDArray], dict[str, NDArray]],
+        tuple[NDArray[np.bool_], NDArray[np.bool_]],
         NDArray
     ]:
         cur_max_idx = (self.current_round+1) * self.mr_config.simulations_per_round
-        cur_data = data[:cur_max_idx, :]
-        cur_theta = {key: theta[key][:cur_max_idx] for key in theta.keys()}
-        cur_round_idx = round_idx[:cur_max_idx]
+
+        cur_data = self.all_data[:cur_max_idx, :]
+        cur_data = cast(NDArray[np.float32], cur_data)
+
+        cur_mask = self.all_mask[:cur_max_idx, :]
+        cur_mask = cast(NDArray[np.bool_], cur_mask)
+
+        cur_theta = {key: self.all_theta[key][:cur_max_idx] for key in self.all_theta.keys()}
+        cur_round_idx = self.all_round_id[:cur_max_idx]
+
         return split_train_val_dict(
             key=split_key,
             y=cur_data,
             x=cur_theta,
             round_idx=cur_round_idx,
+            mask=cur_mask,
             validation_fraction=self.train_config.validation_fraction
         )
 
@@ -768,7 +774,7 @@ class MultiRoundInferer:
             self, 
             key: NPKey,
             theta: dict[str, NDArray]
-    ) -> NDArray:
+    ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
         return self.simulator_function(key, theta, True)
 
     def _instantiate_nflow(self) -> NeuralFlow:

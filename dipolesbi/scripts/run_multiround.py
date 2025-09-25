@@ -89,8 +89,11 @@ if __name__ == '__main__':
     }
 
     model = SimpleDipoleMap(nside=NSIDE)
-    x0 = model.generate_dipole(npkey_from_jax(x0_rng_key), theta=theta0)
+    model.equatorial_plane_mask(angle=30)
+    x0, mask = model.generate_dipole(npkey_from_jax(x0_rng_key), theta=theta0)
     model.reference_data = x0
+    hp.projview(x0.squeeze() * mask.squeeze(), nest=True)
+    plt.show()
 
     prior = DipolePriorNP(
         mean_count_range=[float(0.95*MEAN_DENSITY), float(1.05*MEAN_DENSITY)],
@@ -114,15 +117,18 @@ if __name__ == '__main__':
     #     method='global', # use global for npe
     #     embedding_config=embedding_cfg,
     # )
-    nside16_scenario = Scenario.nside16_npe(
+    nside16_scenario = Scenario.anynside_npe(
+        nside=NSIDE,
         reference_theta=theta0,
         theta_adapter=adapter,
         theta_spec_overrides={'embed_transform_in_flow': True},
         multiround_overrides={
             'prng_integer_seed': args.ssnle_seed,
             'plot_save_dir': args.out_dir,
-            'n_rounds': 3
-        }
+            'n_rounds': 10,
+            'check_proposal_probs': True
+        },
+        training_overrides={'learning_rate': 0.001}
     )
 
     meta_cfg = {
@@ -132,7 +138,7 @@ if __name__ == '__main__':
     cur_cfg = meta_cfg[NSIDE]
 
     inferer = MultiRoundInferer(
-        'NPE', prior, model.generate_dipole, x0,
+        'NPE', prior, model.generate_dipole, (x0, mask),
         multi_round_config=cur_cfg.multiround,
         transform_config=cur_cfg.transforms,
         nflow_config=cur_cfg.flow,

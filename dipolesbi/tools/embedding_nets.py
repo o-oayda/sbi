@@ -64,38 +64,65 @@ class HpCNNEmbedding(hk.Module):
             self._pool_tables.append(parent_indices)
             cur_nside //= 2
 
-    def __call__(self, x: jnp.ndarray, *, is_training: bool = True) -> jnp.ndarray:
+    def __call__(
+        self,
+        x: jnp.ndarray,
+        mask: Optional[jnp.ndarray] = None,
+        *,
+        is_training: bool = True,
+    ) -> jnp.ndarray:
         if x.ndim == 2:
             x = x[..., None]
-        elif x.ndim != 3:
+        if x.ndim != 3:
             raise ValueError(
                 "Expected input shape (batch, npix, channels),"
                 f" got {x.shape}"
             )
 
+        if mask is None:
+            mask = jnp.ones(x.shape[:2], dtype=x.dtype)
+        if mask.ndim not in (2, 3):
+            raise ValueError("Mask must have shape (batch, npix) or (batch, npix, 1)")
+        if mask.shape[0] != x.shape[0] or mask.shape[1] != x.shape[1]:
+            raise ValueError(
+                "Mask spatial dimensions must match input, "
+                f"x: {x.shape}, mask: {mask.shape}"
+            )
+        if mask.ndim == 3 and mask.shape[-1] == 1:
+            mask = jnp.squeeze(mask, axis=-1)
+
         z = x
+        m = mask
         in_ch = self.in_channels
         cur_ns = self.nside
         for neighbours, pool_indices, out_ch in zip(
             self._neighbour_tables, self._pool_tables, self.out_channels_per_layer
         ):
+            if m.ndim == 2:
+                z = z * m[..., None]
+            else:
+                z = z * m
             conv = HealpixConv(neighbours, in_ch, out_ch)
             z = conv(z)
             z = jax.nn.relu(z)
             pool = HealpixDown(pool_indices)
             cur_ns //= 2
-            z = pool(z)
+            result = pool(z, m)
+            if isinstance(result, tuple):
+                z, m = result
+            else:
+                z = result
+                m = jnp.ones_like(z[..., :1])
             in_ch = out_ch
 
-        # out is (batch, npix, channels)
-        # # normalise channels per pixel to stabilise the dense head without removing global means
-        # z = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True, name="hp_conv_layernorm")(z)
-
         # flatten for linear layers
-        z = jnp.reshape(z, (z.shape[0], -1)) # (batch, last_npix * channels)
-
+        m = jnp.clip(m, 0.0, 1.0)
+        z_flat = jnp.reshape(z, (z.shape[0], -1))
         if self.dropout_rate > 0.0 and is_training:
-            z = hk.dropout(hk.next_rng_key(), self.dropout_rate, z)
+            z_flat = hk.dropout(hk.next_rng_key(), self.dropout_rate, z_flat)
+        m_flat = jnp.reshape(m, (m.shape[0], -1))
+        # z = jnp.concatenate([z_flat, m_flat], axis=-1)
+        z = z_flat
 
         hidden_layers = max(self.n_mlp_layers - 1, 0)
         mlp_layers = [self.n_mlp_neurons] * hidden_layers + [self.output_dim]
@@ -108,6 +135,10 @@ class HpCNNEmbedding(hk.Module):
 
 
 def _build_pool_groups(nside: int, nest: bool) -> jnp.ndarray:
+    '''
+    For the next coarsest nside of a given nside (i.e., nside / 2),
+    get all the child pixels in each coarse pixel from the original nside.
+    '''
     if nside <= 1:
         raise ValueError("Cannot down-sample NSIDE <= 1")
 

@@ -1,6 +1,6 @@
 # Adapted from https://github.com/aasensio/sphericalCNN for use with JAX/Haiku
 
-from typing import Optional
+from typing import Optional, Union
 import haiku as hk
 import healpy as hp
 import jax.numpy as jnp
@@ -75,7 +75,8 @@ class HealpixConv(hk.Module):
         batch, npix, channels = x.shape
         if channels != self.in_channels:
             raise ValueError(
-                f"Input channels {channels} do not match expected {self.in_channels}."
+                f"Input channels {channels} do not match expected {self.in_channels}, "
+                f"x: {x.shape}"
             )
 
         # append a zero-valued pad pixel so sentinel indices gather zeros
@@ -104,7 +105,7 @@ class HealpixConv(hk.Module):
 
 
 class HealpixDown(hk.Module):
-    """Average pooling layer on the Healpix sphere."""
+    """Average pooling layer on the Healpix sphere, with optional mask support."""
 
     def __init__(self, groups: jnp.ndarray, name: Optional[str] = None) -> None:
         super().__init__(name=name)
@@ -112,10 +113,26 @@ class HealpixDown(hk.Module):
             raise ValueError("Groups array must have shape (npix_coarse, n_children).")
         self.groups = groups
 
-    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+    def __call__(
+        self,
+        x: jnp.ndarray,
+        mask: Optional[jnp.ndarray] = None,
+    ) -> jnp.ndarray | tuple[jnp.ndarray, jnp.ndarray]:
         if x.ndim != 3:
             raise ValueError("Expected input with shape (batch, npix, channels).")
 
         gathered = jnp.take(x, self.groups, axis=1)
-        # gathered: (batch, npix_coarse, n_children, channels)
-        return jnp.mean(gathered, axis=2)
+        if mask is None:
+            return jnp.mean(gathered, axis=2)
+
+        if mask.ndim == 2:
+            mask = mask[..., None]
+        if mask.ndim != 3:
+            raise ValueError("Mask must have shape (batch, npix, 1) or (batch, npix, channels)")
+
+        mask_gathered = jnp.take(mask, self.groups, axis=1)
+        mask_sum = jnp.sum(mask_gathered, axis=2, keepdims=True)
+        mask_mean = mask_sum / mask_gathered.shape[2]
+        mask_sum = jnp.maximum(mask_sum, 1e-6)
+        pooled = jnp.sum(gathered * mask_gathered, axis=2) / mask_sum.squeeze(-1)
+        return pooled, mask_mean.squeeze(-1)

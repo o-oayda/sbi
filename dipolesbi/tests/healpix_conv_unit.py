@@ -34,7 +34,8 @@ def test_conv_shape():
 
     def apply(x):
         conv = HpCNNEmbedding(**cfg)
-        return conv(x)
+        mask = jnp.ones(x.shape[:2], dtype=x.dtype)
+        return conv(x, mask)
 
     tf = hk.transform(apply)
     rng = jax.random.PRNGKey(42)

@@ -8,8 +8,8 @@ from numpy.typing import NDArray
 from dipolesbi.tools.np_rngkey import NPKey
 from surjectors.util import _DataLoader, named_dataset
 
-
-named_dataset_idx = namedtuple("named_dataset_idx", "y x round_id")
+healpix_map_dataset_idx = namedtuple("healpix_map_dataset", "y x mask round_id")
+healpix_map_dataset = namedtuple("healpix_map_dataset", "y x mask")
 
 class DataHandler(Dataset):
     def __init__(self, theta: Tensor, x: Tensor) -> None:
@@ -47,10 +47,12 @@ def split_train_val_dict(
         y: NDArray, 
         x: dict[str, NDArray], 
         round_idx: NDArray,
+        mask: NDArray[np.bool_],
         validation_fraction: float = 0.1, 
 ) -> tuple[
         tuple[NDArray, NDArray],
         tuple[dict[str, NDArray], dict[str, NDArray]],
+        tuple[NDArray[np.bool_], NDArray[np.bool_]],
         NDArray
     ]:
     '''
@@ -71,11 +73,15 @@ def split_train_val_dict(
     x_tuple = (x_tr, x_val)
 
     training_set_round_idxs = round_idx[train_idx]
-    return y_tuple, x_tuple, training_set_round_idxs
+    mask_tuple = (mask[train_idx], mask[val_idx])
+    return y_tuple, x_tuple, mask_tuple, training_set_round_idxs
 
 
 def as_batch_iterator_cpu2gpu(
-    rng_key: NPKey, data: named_dataset_idx | named_dataset, batch_size: int, shuffle=True
+    rng_key: NPKey, 
+    data: healpix_map_dataset_idx | healpix_map_dataset, 
+    batch_size: int, 
+    shuffle=True
 ):
     """Create a batch iterator for a data set, converting from CPU (numpy)
     to GPU (jax) as required.

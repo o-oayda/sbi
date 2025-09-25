@@ -145,8 +145,7 @@ class SimpleDipoleMap:
             self, 
             nside: int = 64, 
             dtype: DTypeLike = np.float32,
-            reference_data: Optional[NDArray] = None,
-            fill_value: float = np.nan
+            reference_data: Optional[NDArray] = None
     ) -> None:
         self.nside = nside
         self.dtype = dtype
@@ -154,7 +153,7 @@ class SimpleDipoleMap:
         self.nest = True
         self.mask = Mask(nside=nside)
         self.masked_pixels = set()
-        self.fill_value = fill_value
+        self.is_masked_val = 0
         self.reference_data = reference_data
     
     def equatorial_plane_mask(self, angle: float) -> None:
@@ -164,7 +163,7 @@ class SimpleDipoleMap:
             rng_key: NPKey,
             theta: dict[str, NDArray],
             make_poisson_draws: bool = True
-    ) -> NDArray:
+    ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
         for key in theta.keys():
             if theta[key].shape == ():
                 theta[key] = theta[key].reshape((1,))
@@ -177,13 +176,14 @@ class SimpleDipoleMap:
             ).astype(self.dtype)
         else:
             self._density_map = poisson_mean.astype(self.dtype)
-        return self.density_map
+        return self.dmap_and_mask
 
     @property
-    def density_map(self) -> NDArray[np.float32]:
+    def dmap_and_mask(self) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
         out_map = self._density_map.copy()
-        out_map[:, list(self.masked_pixels)] = self.fill_value
-        return out_map
+        mask_map = np.ones_like(self._density_map, dtype=np.bool_)
+        mask_map[:, list(self.masked_pixels)] = self.is_masked_val
+        return out_map, mask_map
 
     def dipole_signal(
             self, 

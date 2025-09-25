@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from jax import numpy as jnp
 import jax
 from dipolesbi.tools.np_rngkey import NPKey
-from dipolesbi.tools.dataloader import named_dataset, named_dataset_idx
+from dipolesbi.tools.dataloader import healpix_map_dataset_idx, healpix_map_dataset
 
 
 class PytreeAdapter:
@@ -80,9 +80,9 @@ class PytreeAdapter:
         return self._keys.index(key)
 
 def convert_x_in_named_dataset(
-        dataset: named_dataset_idx | named_dataset,
+        dataset: healpix_map_dataset_idx | healpix_map_dataset,
         adapter: Optional[PytreeAdapter] = None
-) -> named_dataset_idx | named_dataset:
+) -> healpix_map_dataset_idx | healpix_map_dataset:
     fields = dataset._asdict()
     x = fields['x']
     if isinstance(x, dict):

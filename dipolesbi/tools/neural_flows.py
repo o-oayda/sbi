@@ -29,7 +29,7 @@ import logging
 from abc import ABC, abstractmethod
 from dipolesbi.tools.configs import EmbeddingNetConfig, NeuralFlowConfig, TrainingConfig, TransformConfig
 from dipolesbi.tools.distributions import IndependentWrapper, NegBinomDist, PoissonDist, StudentT
-from dipolesbi.tools.dataloader import as_batch_iterator_cpu2gpu, named_dataset_idx
+from dipolesbi.tools.dataloader import as_batch_iterator_cpu2gpu, healpix_map_dataset, healpix_map_dataset_idx
 from dipolesbi.tools.embedding_nets import HpCNNEmbedding
 from dipolesbi.tools.np_rngkey import npkey_sequence_from_hk
 from dipolesbi.tools.priors_jax import JaxPrior
@@ -102,7 +102,7 @@ class AbstractNeuralFlow(ABC):
     def theta_transform(self) -> Optional[InvertibleThetaTransformJax]:
         pass
 
-    def _clear_and_replace_stats(self, training_data: named_dataset_idx) -> None:
+    def _clear_and_replace_stats(self, training_data: healpix_map_dataset_idx) -> None:
         # recompute summary stats for new training data
         if self.data_transform is not None:
             self.data_transform.clear()
@@ -114,9 +114,9 @@ class AbstractNeuralFlow(ABC):
 
     def _maybe_transform_conditioning_variable(
             self,
-            training_data: named_dataset_idx, 
-            validation_data: named_dataset
-    ) -> tuple[named_dataset_idx, named_dataset]:
+            training_data: healpix_map_dataset_idx, 
+            validation_data: healpix_map_dataset
+    ) -> tuple[healpix_map_dataset_idx, healpix_map_dataset]:
         all_data = [training_data, validation_data]
         new_data = []
 
@@ -139,9 +139,9 @@ class AbstractNeuralFlow(ABC):
 
     def _maybe_pretransform_target(
             self,
-            training_data: named_dataset_idx,
-            validation_data: named_dataset
-    ) -> tuple[named_dataset_idx, named_dataset]:
+            training_data: healpix_map_dataset_idx,
+            validation_data: healpix_map_dataset
+    ) -> tuple[healpix_map_dataset_idx, healpix_map_dataset]:
         all_data = [training_data, validation_data]
         new_data = []
 
@@ -236,7 +236,8 @@ class AbstractNeuralFlow(ABC):
                 rng_key, 
                 theta=batch['x'], 
                 y=batch['y'], 
-                is_training=True
+                is_training=True,
+                mask=batch['mask']
             )
             return jnp.mean(nlp)
 
@@ -254,12 +255,22 @@ class AbstractNeuralFlow(ABC):
         return -lp
 
     # props to sbijax _src/npe.py
-    def _get_nlp_for_npe(self, params, rng_key: PRNGKey, theta, y, n_atoms=10, is_training=True):
+    def _get_nlp_for_npe(
+            self, 
+            params, 
+            rng_key: PRNGKey, 
+            theta, 
+            y, 
+            mask: jnp.ndarray,
+            n_atoms=10, 
+            is_training=True, 
+    ):
         n = theta.shape[0]
         assert self.prior is not None
 
         n_atoms = np.maximum(2, np.minimum(n_atoms, n))
         repeated_y = jnp.repeat(y, n_atoms, axis=0)
+        repeated_mask = jnp.repeat(mask, n_atoms, axis=0)
         probs = jnp.ones((n, n)) * (1 - jnp.eye(n)) / (n - 1)
 
         choice = partial(
@@ -282,7 +293,8 @@ class AbstractNeuralFlow(ABC):
             method="log_prob", 
             y=atomic_theta, 
             x=repeated_y, 
-            is_training=is_training
+            is_training=is_training,
+            mask=repeated_mask
         )
         log_prob_posterior = log_prob_posterior.reshape(n, n_atoms)
 
@@ -329,6 +341,7 @@ class AbstractNeuralFlow(ABC):
                 method='log_prob', 
                 y=initial_iter['x'],
                 x=initial_iter['y'],
+                mask=initial_iter['mask'],
                 is_training=True
             )
         else:
@@ -337,6 +350,7 @@ class AbstractNeuralFlow(ABC):
                 method='log_prob', 
                 y=initial_iter['y'],
                 x=initial_iter['x'],
+                mask=initial_iter['mask'],
                 is_training=True
             )
 
@@ -373,7 +387,12 @@ class AbstractNeuralFlow(ABC):
             def val_step(params, rng_key, **batch):
                 return jnp.mean(
                     self._get_nlp_for_npe(
-                        params, rng_key, theta=batch['x'], y=batch['y'], is_training=False
+                        params, 
+                        rng_key, 
+                        theta=batch['x'], 
+                        y=batch['y'],
+                        mask=batch['mask'],
+                        is_training=False
                     )
                 )
 
@@ -385,8 +404,8 @@ class AbstractNeuralFlow(ABC):
     def train(
             self,
             rng_seq: hk.PRNGSequence, 
-            training_data: named_dataset_idx, 
-            validation_data: named_dataset,
+            training_data: healpix_map_dataset_idx, 
+            validation_data: healpix_map_dataset,
             config: TrainingConfig = TrainingConfig(),
             ui: Optional[MultiRoundInfererUI] = None,
             prior: Optional[JaxPrior] = None
@@ -581,7 +600,7 @@ class AbstractNeuralFlow(ABC):
             self,
             rng_key: PRNGKey,
             n_samples: int,
-            x0: jnp.ndarray,
+            dmap_and_mask: tuple[jnp.ndarray, jnp.ndarray],
             check_proposal_probs: bool = True,
             ui: Optional[MultiRoundInfererUI] = None,
             **kwargs
@@ -589,7 +608,10 @@ class AbstractNeuralFlow(ABC):
         assert self.prior is not None
         assert self.mode == 'NPE'
 
+        x0, data_mask = dmap_and_mask
         observable = jnp.atleast_2d(x0)
+        data_mask = jnp.atleast_2d(data_mask)
+
         # this should be the same pointer to the nflow data_transform stats
         if self.mode == 'NPE' and self.data_transform is not None:
             # Bring to host for numpy-based transform, then back to jax
@@ -610,12 +632,15 @@ class AbstractNeuralFlow(ABC):
             n_total_simulations_round += current_batch_size
             sample_key, rng_key = jax.random.split(rng_key)
             observable_tile = jnp.tile(observable, [batch_size, 1]) # (B, npix)
+            observable_mask = jnp.tile(data_mask, [batch_size, 1])
+
             proposal = self.model.apply(
                 self.best_params,
                 sample_key,
                 method="sample",
-                sample_shape=(batch_size,),
+                # sample_shape=(batch_size,),
                 x=observable_tile,
+                mask=observable_mask,
                 is_training=False,
                 **kwargs
             )
@@ -825,6 +850,8 @@ class NeuralFlow(AbstractNeuralFlow):
             'students_t': 3
         }
         self.n_decoder_params = decoder_params_lookup[decoder_distribution]
+        assert self.nflow_config.decoder_n_neurons is not None
+        assert self.nflow_config.decoder_n_layers is not None
 
         decoder_net = make_mlp(
             [self.nflow_config.decoder_n_neurons] * self.nflow_config.decoder_n_layers
@@ -985,11 +1012,22 @@ class NeuralFlow(AbstractNeuralFlow):
         assert self.nflow_config.architecture is not None
 
         is_training = kwargs.pop("is_training", False)
+        mask = kwargs.pop('mask', None)
         # add embedding network if specified
         if self.mode == 'NPE' and 'x' in kwargs and self.embedding_net_config:
             self.embedding_network = HpCNNEmbedding(**asdict(self.embedding_net_config))
             kwargs = dict(kwargs)
-            kwargs['x'] = self.embedding_network(kwargs['x'], is_training=is_training)
+            x_in = kwargs['x']
+
+            if x_in.ndim == 3:
+                # for some unknown reason, an extra dimension is added at the start
+                # of x when sampling, e.g. (2, 200, 3072) -> (?, B, npix)
+                # we flatten over this axis to get around the problem and repeat
+                # the mask too
+                x_in = x_in.reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))
+                mask = jnp.repeat(mask, repeats=2, axis=0)
+
+            kwargs['x'] = self.embedding_network(x_in, mask, is_training=is_training)
 
         cur_dim = self.target_ndim
         self.layers = []
