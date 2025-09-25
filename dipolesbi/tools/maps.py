@@ -145,7 +145,8 @@ class SimpleDipoleMap:
             self, 
             nside: int = 64, 
             dtype: DTypeLike = np.float32,
-            reference_data: Optional[NDArray] = None
+            reference_data: Optional[NDArray] = None,
+            fill_value: float = np.nan
     ) -> None:
         self.nside = nside
         self.dtype = dtype
@@ -153,7 +154,7 @@ class SimpleDipoleMap:
         self.nest = True
         self.mask = Mask(nside=nside)
         self.masked_pixels = set()
-        self.fill_value = np.nan
+        self.fill_value = fill_value
         self.reference_data = reference_data
     
     def equatorial_plane_mask(self, angle: float) -> None:
