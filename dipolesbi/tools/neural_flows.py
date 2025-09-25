@@ -484,20 +484,28 @@ class AbstractNeuralFlow(ABC):
         best_params = params
         best_val = np.inf
         wait = 0
+        step_count = 0
+        current_lr = (
+            float(lr_schedule(step_count)) if lr_schedule is not None
+            else self.trn_config.learning_rate
+        )
 
         for i in range(self.trn_config.max_n_iter):
             train_loss = 0.0
             for j in range(train_iter.num_batches):
                 batch = train_iter(j)
-                
+
                 # TODO: this is shit, refactor later
                 if self.mode == 'NLE':
+                    current_lr = float(lr_schedule(step_count))
                     batch_loss, params, state = step(params, state, **batch)
                 else:
                     rng_key = next(rng_seq)
+                    current_lr = float(lr_schedule(step_count))
                     batch_loss, params, state = step(params, state, rng_key, **batch)
 
                 train_loss += float(batch_loss)
+                step_count += 1
             train_loss /= max(1, train_iter.num_batches)
             
             val_loss = 0.0
@@ -517,6 +525,7 @@ class AbstractNeuralFlow(ABC):
                     f"Iter: {i} | "
                     f"Train NLL: {train_loss:.4f} | "
                     f"Val NLL: {val_loss:.4f} | "
+                    f"𝜂 = {current_lr:.2e} | "
                     f"Stop at {self.trn_config.patience} ({wait})"
                 )
             else:
@@ -524,6 +533,7 @@ class AbstractNeuralFlow(ABC):
                     f"\rIter: {i} | "
                     f"Train NLL: {train_loss:.4f} | "
                     f"Val NLL: {val_loss:.4f} | "
+                    f"𝜂 = {current_lr:.2e} | "
                     f"Stop at {self.trn_config.patience} ({wait})"
                 )
                 sys.stdout.flush()
