@@ -61,7 +61,6 @@ class TrainingConfig:
 TrainingConfigOverrides = _make_override_class(TrainingConfig)
 
 @dataclass
-@dataclass
 class EmbeddingNetConfig:
     nside: Optional[int] = None
     out_channels_per_layer: Optional[list[int]] = None
@@ -666,8 +665,9 @@ class Scenario:
         return cls(train_cfg, mr_cfg, flow_cfg, transforms)
 
     @classmethod
-    def nside16_npe(
+    def anynside_npe(
         cls,
+        nside: int,
         reference_theta: dict[str, NDArray],
         theta_adapter: PytreeAdapter,
         *,
@@ -709,11 +709,11 @@ class Scenario:
         flow_cfg = NeuralFlowConfig(**flow_defaults)
 
         embedding_cfg = EmbeddingNetConfig(
-            nside=16,
+            nside=nside,
             out_channels_per_layer=[2, 4, 8, 16], # don't bump thse too high
             dropout_rate=0.2,
             n_mlp_neurons=128,
-            n_blocks=2
+            n_blocks=int(np.log2(nside) - 2)
         )
         base_data_spec = data_spec or DataTransformSpec.zscore(
             method='global', # use global for npe
