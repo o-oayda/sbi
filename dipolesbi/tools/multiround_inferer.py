@@ -285,8 +285,8 @@ class MultiRoundInferer:
                 self.ui.advance_global(n=self.mr_config.simulations_per_round)
 
         self.ui.start_step(5, 'benchmarking')
-        self.final_posterior_samples = self.nested_samples
-        self.final_classic_samples = self.classic_nested_samples
+        self.final_posterior_samples = self.posterior_samples
+        # self.final_classic_samples = self.classic_nested_samples
         self.ui.finish_step('benchmarked')
 
     def _train_nflow(self, train_key: PRNGKey) -> None:

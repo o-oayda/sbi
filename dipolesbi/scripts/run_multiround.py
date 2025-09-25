@@ -105,64 +105,26 @@ if __name__ == '__main__':
     # corner(lb_inferer._samples)
     # plt.show()
 
-    embedding_cfg = EmbeddingNetConfig(
-        nside=NSIDE,
-        out_channels_per_layer=[2, 4, 8, 16],
-        dropout_rate=0.2,
-    )
-    data_spec = DataTransformSpec.zscore(
-        method='batchwise',
-        embedding_config=embedding_cfg,
-    )
-    # data_spec = DataTransformSpec.hadamard(
-    #     first_nside=NSIDE,
-    #     embed_in_flow=False
+    # embedding_cfg = EmbeddingNetConfig(
+    #     nside=NSIDE,
+    #     out_channels_per_layer=[2, 4, 8, 16],
+    #     dropout_rate=0.2,
+    # )
+    # data_spec = DataTransformSpec.zscore(
+    #     method='global', # use global for npe
+    #     embedding_config=embedding_cfg,
     # )
     nside16_scenario = Scenario.nside16_npe(
         reference_theta=theta0,
         theta_adapter=adapter,
-        data_spec=data_spec,
         theta_spec_overrides={'embed_transform_in_flow': True},
-        flow_overrides={
-            'conditioner_n_neurons': 64,
-            'conditioner_n_layers': 2,
-            'architecture': 5 * ['MAF'],
-        },
-        training_overrides={'restore_from_previous': False},
         multiround_overrides={
             'prng_integer_seed': args.ssnle_seed,
-            'dequantise_data': False,
-            'n_requantisations': None,
             'plot_save_dir': args.out_dir,
-            'initial_fraction': 0.,
-            'simulation_budget': 50_000,
-            'n_rounds': 3,
-        },
+            'n_rounds': 3
+        }
     )
-    # nside16_scenario = Scenario.nside16_nle(
-    #     theta0, 
-    #     theta_adapter=adapter,
-    #     data_transform_overrides={
-    #         'matrix_type': 'hadamard',
-    #         'normalise_details': True,
-    #         'last_nside': 1 # broken now?
-    #     },
-    #     training_overrides={'restore_from_previous': False},
-    #     nflow_overrides={
-    #         'decoder_distribution': 'gaussian',
-    #         'architecture': ['healpix_funnel'], # + 2 * ['MAF'],# + 14 * ['MAF'],
-    #         'funnel_one_and_done': False,
-    #         'funnel_maf_extension': 2
-    #     },
-    #     multiround_overrides={
-    #         'prng_integer_seed': args.ssnle_seed,
-    #         'dequantise_data': False,
-    #         'n_requantisations': None,
-    #         'plot_save_dir': args.out_dir,
-    #         'initial_fraction': 0.,
-    #         'simulation_budget': 50_000
-    #     }
-    # )
+
     meta_cfg = {
         4: nside16_scenario,
         16: nside16_scenario,
@@ -178,4 +140,4 @@ if __name__ == '__main__':
     )
     inferer.run()
 
-    lnZ_plot(inferer, out_dir=args.out_dir)
+    # lnZ_plot(inferer, out_dir=args.out_dir)

@@ -87,8 +87,13 @@ class HpCNNEmbedding(hk.Module):
             z = pool(z)
             in_ch = out_ch
 
+        # out is (batch, npix, channels)
+        # # normalise channels per pixel to stabilise the dense head without removing global means
+        # z = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True, name="hp_conv_layernorm")(z)
+
         # flatten for linear layers
-        z = jnp.reshape(z, (z.shape[0], -1))
+        z = jnp.reshape(z, (z.shape[0], -1)) # (batch, last_npix * channels)
+
         if self.dropout_rate > 0.0 and is_training:
             z = hk.dropout(hk.next_rng_key(), self.dropout_rate, z)
 

@@ -679,21 +679,21 @@ class Scenario:
         data_spec_overrides: Optional[dict] = None,
         theta_spec_overrides: Optional[dict] = None,
     ) -> 'Scenario':
+        # NPE needs a generally higher lr than NLE
         train_defaults = {
-            'patience': 20,
-            'learning_rate': 5e-5,
-            'restore_from_previous': True,
-            'weight_by_round': False,
+            'patience': 30,
+            'min_lr_ratio': 1.,
+            'learning_rate': 5e-4,
+            'restore_from_previous': False
         }
         train_defaults.update(training_overrides or {})
         train_cfg = TrainingConfig(**train_defaults)
 
         mr_defaults = {
             'simulation_budget': 50_000,
-            'n_rounds': 15,
+            'n_rounds': 3,
             'reference_theta': reference_theta,
-            'dequantise_data': False,
-            'initial_fraction': 0.5,
+            'initial_fraction': 0.,
             'n_likelihood_samples': 25_000,
         }
         mr_defaults.update(multiround_overrides or {})
@@ -701,22 +701,23 @@ class Scenario:
 
         flow_defaults = {
             'mode': 'NPE',
-            'architecture': 8 * ['MAF'],
-            'funnel_one_and_done': False,
-            'funnel_maf_extension': 0,
-            'conditioner_n_layers': 4,
-            'conditioner_n_neurons': 256,
+            'architecture': 5 * ['MAF'],
+            'conditioner_n_layers': 2,
+            'conditioner_n_neurons': 64,
         }
         flow_defaults.update(flow_overrides or {})
         flow_cfg = NeuralFlowConfig(**flow_defaults)
 
-        base_data_spec = data_spec or DataTransformSpec.hadamard(
-            first_nside=16,
-            last_nside=1,
-            matrix_type='hadamard',
-            normalise_details=True,
-            n_chunks=1,
-            embed_in_flow=False,
+        embedding_cfg = EmbeddingNetConfig(
+            nside=16,
+            out_channels_per_layer=[2, 4, 8, 16], # don't bump thse too high
+            dropout_rate=0.2,
+            n_mlp_neurons=128,
+            n_blocks=2
+        )
+        base_data_spec = data_spec or DataTransformSpec.zscore(
+            method='global', # use global for npe
+            embedding_config=embedding_cfg,
         )
         data_cfg = _prepare_data_config(base_data_spec, data_spec_overrides)
 
