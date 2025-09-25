@@ -92,14 +92,14 @@ class HpCNNEmbedding(hk.Module):
         if self.dropout_rate > 0.0 and is_training:
             z = hk.dropout(hk.next_rng_key(), self.dropout_rate, z)
 
-        self.mlp = hk.nets.MLP(
-            [out_ch * 12 * cur_ns * cur_ns]
-          + [self.n_mlp_neurons] * self.n_mlp_layers
-          + [self.output_dim],
+        hidden_layers = max(self.n_mlp_layers - 1, 0)
+        mlp_layers = [self.n_mlp_neurons] * hidden_layers + [self.output_dim]
+        mlp = hk.nets.MLP(
+            mlp_layers,
             activation=jax.nn.relu,
             name="hp_mlp",
         )
-        return self.mlp(z)
+        return mlp(z)
 
 
 def _build_pool_groups(nside: int, nest: bool) -> jnp.ndarray:
