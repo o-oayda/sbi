@@ -32,17 +32,13 @@ class JaxPrior(ABC):
 
     @property
     def low_ranges(self) -> jnp.ndarray:
-        low_ranges = jnp.empty(self.ndim)
-        for i, name in enumerate(self.prior_names):
-            low_ranges[i] = self.prior_dict[name]['low_range']
-        return low_ranges 
+        vals = [self.prior_dict[n]['low_range'] for n in self.prior_names]
+        return jnp.asarray(vals, dtype=jnp.float32)
 
     @property
     def high_ranges(self) -> jnp.ndarray:
-        high_ranges = jnp.empty(self.ndim)
-        for i, name in enumerate(self.prior_names):
-            high_ranges[i] = self.prior_dict[name]['high_range']
-        return high_ranges 
+        vals = [self.prior_dict[n]['high_range'] for n in self.prior_names]
+        return jnp.asarray(vals, dtype=jnp.float32)
 
     @property
     def simulator_kwargs(self) -> list[str]:
