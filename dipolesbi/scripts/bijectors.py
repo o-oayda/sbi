@@ -29,9 +29,15 @@ class UniformIntervalSigmoid:
     # theta -> base z
     def inverse_and_log_det(self, theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         logit_argument = (theta - self.low) / self.span # [0, 1]
-        p = jnp.clip( logit_argument, self._eps, 1.0 - self._eps ) # [a bit > 0, a bit < 1]
+        p = jnp.clip(logit_argument, self._eps, 1.0 - self._eps) # [a bit > 0, a bit < 1]
         z = logit(p) # unconstrained (-inf, inf)
         log_det_jac = -jnp.log(self.span) - jnp.log(p) - jnp.log1p(-p)
+
+        below = theta <= self.low
+        above = theta >= self.high
+        log_det_jac = jnp.where(below | above, -jnp.inf, log_det_jac)
+        z = jnp.where(below, -jnp.inf, z)
+        z = jnp.where(above, jnp.inf, z)
         return z, log_det_jac
 
 class LatitudeBijector:
@@ -66,5 +72,9 @@ class LatitudeBijector:
           - jnp.log(sigma)
           - jnp.log1p(-sigma)
         )
+        below = b <= -0.5 * jnp.pi
+        above = b >= 0.5 * jnp.pi
+        log_det_jac = jnp.where(below | above, -jnp.inf, log_det_jac)
+        z = jnp.where(below, -jnp.inf, z)
+        z = jnp.where(above, jnp.inf, z)
         return z, log_det_jac
-
