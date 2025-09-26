@@ -88,7 +88,8 @@ class SimpleDipoleMapJax:
     def __init__(
             self, 
             nside: int = 64, 
-            reference_data: Optional[jnp.ndarray] = None
+            reference_data: Optional[jnp.ndarray] = None,
+            reference_mask: Optional[jnp.ndarray] = None
     ) -> None:
         self.nside = nside
         self.fiducial_amplitude = 0.005
@@ -98,7 +99,9 @@ class SimpleDipoleMapJax:
         self.pixel_vectors = np.stack(
             hp.pix2vec(self.nside, self.pixel_indices, nest=True)
         )
+
         self.reference_data = reference_data
+        self.reference_mask = reference_mask
 
     def generate_dipole(
             self,
@@ -132,20 +135,26 @@ class SimpleDipoleMapJax:
         return poisson_mean
 
     def log_likelihood(self, theta: dict[str, jnp.ndarray]) -> jnp.ndarray:
+        assert self.reference_data is not None
         dipole_signal = self.dipole_signal(**theta)
-        return jnp.sum(
-            jax.scipy.stats.poisson.logpmf(
-                k=self.reference_data, # type: ignore
-                mu=dipole_signal
+        logl = lambda k, mu: jnp.sum(jax.scipy.stats.poisson.logpmf(k=k, mu=mu)) # no batch dim
+
+        if self.reference_mask is not None:
+            mask = self.reference_mask
+            assert mask.shape == self.reference_data.shape, (
+                f'Mask: {mask.shape}, x0: {self.reference_data.shape}'
             )
-        )
+            return logl(self.reference_data[mask], dipole_signal[mask])
+        else:
+            return logl(self.reference_data, dipole_signal)
 
 class SimpleDipoleMap:
     def __init__(
             self, 
             nside: int = 64, 
             dtype: DTypeLike = np.float32,
-            reference_data: Optional[NDArray] = None
+            reference_data: Optional[NDArray] = None,
+            reference_mask: Optional[NDArray[np.bool_]] = None
     ) -> None:
         self.nside = nside
         self.dtype = dtype
@@ -154,7 +163,9 @@ class SimpleDipoleMap:
         self.mask = Mask(nside=nside)
         self.masked_pixels = set()
         self.is_masked_val = 0
+
         self.reference_data = reference_data
+        self.reference_mask = reference_mask
     
     def equatorial_plane_mask(self, angle: float) -> None:
         self.masked_pixels |= set(self.mask.equator_mask(angle))
@@ -186,7 +197,7 @@ class SimpleDipoleMap:
         return out_map, mask_map
 
     def dipole_signal(
-            self, 
+            self,
             mean_density: NDArray[np.floating],
             observer_speed: NDArray[np.floating],
             dipole_longitude: NDArray[np.floating],
@@ -214,14 +225,18 @@ class SimpleDipoleMap:
         return poisson_mean
 
     def log_likelihood(self, theta: dict[str, NDArray]) -> NDArray:
+        assert self.reference_data is not None
         dipole_signal = self.dipole_signal(**theta)
-        return np.sum(
-            sp.stats.poisson.logpmf(
-                k=self.reference_data,
-                mu=dipole_signal
-            ),
-            axis=1
-        )
+        logl = lambda k, mu: np.sum(sp.stats.poisson.logpmf(k=k, mu=mu), axis=1)
+
+        if self.reference_mask is not None:
+            mask = np.repeat(self.reference_mask, dipole_signal.shape[0], axis=1)
+            assert mask.shape == self.reference_data.shape, (
+                f'Mask: {mask.shape}, x0: {self.reference_data.shape}'
+            )
+            return logl(self.reference_data[mask], dipole_signal[mask])
+        else:
+            return logl(self.reference_data, self.dipole_signal)
 
 class SkyMap:
     def __init__(self, nside: int = 32, device: str = 'cpu'):
