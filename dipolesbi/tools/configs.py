@@ -590,9 +590,11 @@ class Scenario:
 
         return cls(train_cfg, mr_cfg, flow_cfg, transforms)
 
+    # good for nside <= 16
     @classmethod
-    def nside16_nle(
+    def anynside_nle(
         cls,
+        nside: int,
         reference_theta: dict[str, NDArray],
         theta_adapter: PytreeAdapter,
         *,
@@ -626,9 +628,9 @@ class Scenario:
 
         flow_defaults = {
             'mode': 'NLE',
-            'architecture': ['healpix_funnel'] + 15 * ['MAF'],
+            'architecture': ['healpix_funnel'],
             'funnel_one_and_done': False,
-            'funnel_maf_extension': 0,
+            'funnel_maf_extension': 2,
             'conditioner_n_layers': 4,
             'conditioner_n_neurons': 256,
             'decoder_n_layers': 3,
@@ -639,7 +641,7 @@ class Scenario:
         flow_cfg = NeuralFlowConfig(**flow_defaults)
 
         base_data_spec = data_spec or DataTransformSpec.hadamard(
-            first_nside=16,
+            first_nside=nside,
             last_nside=1,
             matrix_type='hadamard',
             normalise_details=True,
