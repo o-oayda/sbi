@@ -52,13 +52,12 @@ class MultiRoundInferer:
         self.initial_proposal_jax.change_kwarg('N', 'mean_density')
 
         self.simulator_function = simulator_function
-        self.reference_observation = reference_observation[0]
+        self.reference_data = reference_observation[0]
         self.reference_mask = reference_observation[1]
-        self.data_ndim = self.reference_observation.shape[-1]
+        self.data_ndim = self.reference_data.shape[-1]
         self.theta_ndim = initial_proposal.ndim
         self.nside = hp.npix2nside(self.data_ndim)
 
-        self.reference_observation = reference_observation
         reference_theta = self.mr_config.reference_theta
         if reference_theta is not None:
             self.reference_theta_jax: dict[str, jnp.ndarray] = {
@@ -120,40 +119,6 @@ class MultiRoundInferer:
             return self.theta_ndim
         else:
             raise Exception(f'Mode {self.mode} not recognised.')
-
-    # def run_preloaded(self) -> None:
-    #     print(f'Loading simulations from {self.mr_config.simulation_path}...')
-    #     self.load_simulations(self.mr_config.simulation_path)
-    #
-    #     current_key = self.rng_key
-    #     current_key, train_key = jax.random.split(current_key)
-    #     self.current_round = self.mr_config.n_rounds
-    #
-    #     self.trn_set, self.val_set = self._make_train_val_set()
-    #
-    #     self.nle = self._instantiate_nle()
-    #
-    #     print('Starting training...')
-    #     self.nle.train(
-    #         hk.PRNGSequence(train_key),
-    #         self.trn_set, 
-    #         self.val_set,
-    #         config=self.train_config
-    #     )
-    #     self.nle.plot_loss_curve(
-    #         show=False, 
-    #         save_path=(
-    #             self.mr_config.plot_save_dir
-    #           + f'/loss_curve_{self.current_round}.png'
-    #         )
-    #     )
-    #     self._inspect_learned_likelihood(train_key)
-    #
-    #     self._compute_posterior()
-    #
-    #     self._clear_data_summary_stats()
-    #
-    #     self._benchmark_classic(current_key)
 
     def run(self) -> None:
         if self.mode == 'NLE':
@@ -221,8 +186,6 @@ class MultiRoundInferer:
                 self.ui.update_last_stats_row({'Evidence': self.jax_ns.evidence_str})
                 self.ui.finish_step('computed')
 
-                # do this inside the train step now
-                # self._clear_data_summary_stats()
                 plt.close('all')
                 self.ui.advance_global(n=self.mr_config.simulations_per_round)
 
@@ -285,13 +248,13 @@ class MultiRoundInferer:
                 )
                 self.ui.finish_step('computed')
 
-                # self._clear_data_summary_stats()
                 plt.close('all')
                 self.ui.advance_global(n=self.mr_config.simulations_per_round)
 
         self.ui.start_step(5, 'benchmarking')
+        self._benchmark_classic(current_key)
         self.final_posterior_samples = self.posterior_samples
-        # self.final_classic_samples = self.classic_nested_samples
+        self.final_classic_samples = self.classic_nested_samples
         self.ui.finish_step('benchmarked')
 
     def _train_nflow(self, train_key: PRNGKey) -> None:
@@ -382,6 +345,7 @@ class MultiRoundInferer:
             samples = self.nflow.sample_likelihood_func(
                 subkey,
                 theta0=theta_chunk,
+                mask=jax.device_put(self.reference_mask), # ???
                 sample_shape=(batch_size,)
             )
 
@@ -402,15 +366,17 @@ class MultiRoundInferer:
         assert self.nflow is not None
 
         samples = self._sample_likelihood_stream(rng_key, n_repeats)
-        true_mean_likelihood = self.simulator_function(
+        true_mean_likelihood, mask = self.simulator_function(
             simulate_key,
             self.mr_config.reference_theta,
             False
-        ).squeeze()
+        )
+        true_mean_likelihood = true_mean_likelihood.squeeze()
 
         samples = jax.device_get(samples)
         samples_untransformed, _ = self._untransform_data_and_logdet(samples)
         self.mean_samples = samples_untransformed.mean(axis=0)
+        self.mean_samples[~mask.squeeze()] = np.nan
 
         plt.figure()
         hp.projview(
@@ -433,7 +399,8 @@ class MultiRoundInferer:
     ) -> tuple[float, float, NestedSamples]:
         classic_model = SimpleDipoleMapJax(
             self.nside,
-            reference_data=jnp.asarray(self.reference_observation)
+            reference_data=jnp.asarray(self.reference_data).squeeze(),
+            reference_mask=jnp.asarray(self.reference_mask).squeeze()
         )
 
         def lnlike_jax(params: dict[str, jnp.ndarray]) -> jnp.ndarray:
@@ -447,12 +414,13 @@ class MultiRoundInferer:
         self.classic_jax_ns.setup(rng_key, n_live=1000, n_delete=200)
         self.classic_nested_samples = self.classic_jax_ns.run()
 
-        self.true_lnZ = float(classic_nested_samples.logZ()) # type: ignore
-        self.true_lnZerr = float(classic_nested_samples.logZ(100).std()) # type: ignore
-        self.ui.log(
-            f"NLE Log Evidence: {self.nested_samples.logZ():.2f} "
-            f"± {self.nested_samples.logZ(100).std():.2f}" # type: ignore
-        )
+        self.true_lnZ = float(self.classic_nested_samples.logZ()) # type: ignore
+        self.true_lnZerr = float(self.classic_nested_samples.logZ(100).std()) # type: ignore
+        if self.mode == 'NLE':
+            self.ui.log(
+                f"NLE Log Evidence: {self.nested_samples.logZ():.2f} "
+                f"± {self.nested_samples.logZ(100).std():.2f}" # type: ignore
+            )
         self.ui.log(
             f"Classic Log Evidence: {self.true_lnZ:.2f} "
             f"± {self.true_lnZerr:.2f}" # type: ignore
@@ -464,19 +432,28 @@ class MultiRoundInferer:
             self._get_true_posterior_and_evidence(rng_key)
         )
 
-        diff = self.nested_samples.logZ() - self.true_lnZ # type: ignore
-        sigma = (
-            np.abs(diff) # type: ignore
-          / np.sqrt(
-                self.nested_samples.logZ(100).std()**2  # type: ignore
-              + self.true_lnZerr**2 # type: ignore
-            ) 
-        )
-        self.ui.log(f'Tension: {sigma}')
+        if self.mode == 'NLE':
+            diff = self.nested_samples.logZ() - self.true_lnZ # type: ignore
+            sigma = (
+                np.abs(diff) # type: ignore
+              / np.sqrt(
+                    self.nested_samples.logZ(100).std()**2  # type: ignore
+                  + self.true_lnZerr**2 # type: ignore
+                ) 
+            )
+            self.ui.log(f'Tension: {sigma}')
 
-        nle_raw_samples = self.nested_samples.to_numpy()[:, :-3]
-        idx_weights = self.nested_samples.index.to_numpy()
-        weights = np.asarray([el[1] for el in idx_weights])
+            nle_raw_samples = self.nested_samples.to_numpy()[:, :-3]
+            idx_weights = self.nested_samples.index.to_numpy()
+            weights = np.asarray([el[1] for el in idx_weights])
+            posterior_samples = nle_raw_samples
+        else:
+            assert self.theta_transform is not None
+            flat_samples = np.asarray(
+                self.theta_transform.adapter.to_array(self.posterior_samples)
+            )
+            weights = np.asarray(jnp.ones(flat_samples.shape[0]))
+            posterior_samples = np.asarray(flat_samples)
 
         classic_raw_samples = self.classic_nested_samples.to_numpy()[:, :-3]
         classic_idx_weights = self.classic_nested_samples.index.to_numpy()
@@ -484,7 +461,7 @@ class MultiRoundInferer:
 
         with HidePrints():
             nle_samples = MCSamples(
-                samples=nle_raw_samples,
+                samples=posterior_samples,
                 weights=weights,
                 sampler='nested',
                 names=self.initial_proposal.prior_names,
@@ -503,12 +480,13 @@ class MultiRoundInferer:
                 filled=True,
                 markers=list(self.mr_config.reference_theta.values()), # type: ignore
                 marker_args={'lw': 1}, # type: ignore
-                legend_labels=['NLE', 'Truth']
+                legend_labels=[self.mode, 'Truth']
             )
         plt.savefig(
             self.mr_config.plot_save_dir
           + f'/corner_final.png',
-            bbox_inches='tight'
+            bbox_inches='tight',
+            dpi=300
         )
 
     def _add_to_simulation_pool(
@@ -551,12 +529,22 @@ class MultiRoundInferer:
         posterior_samples = self.nflow.sample_posterior(
             rng_key=posterior_key, 
             n_samples=n_samples,
-            dmap_and_mask=(jax.device_put(self.reference_observation), jax.device_put(self.reference_mask)),
+            dmap_and_mask=(
+                jax.device_put(self.reference_data),
+                jax.device_put(self.reference_mask)
+            ),
             check_proposal_probs=self.mr_config.check_proposal_probs,
             ui=self.ui
         )
-        corner(np.asarray(self.theta_transform.adapter.to_array(posterior_samples)))
-        plt.savefig('out_corner.png', dpi=300, bbox_inches='tight')
+        corner(
+            np.asarray(self.theta_transform.adapter.to_array(posterior_samples))
+        )
+        plt.savefig(
+            self.mr_config.plot_save_dir
+          + f'/corner_{self.current_round}.png',
+            bbox_inches='tight',
+            dpi=300
+        )
         return posterior_samples
 
     def _compute_posterior(self, posterior_key: PRNGKey) -> None:
@@ -572,9 +560,9 @@ class MultiRoundInferer:
                 minval=-0.5, 
                 maxval=0.5
             )
-            x0 = self.reference_observation + epsilon
+            x0 = self.reference_data + epsilon
         else:
-            x0 = self.reference_observation
+            x0 = self.reference_data
 
             # add batch dimension if none provided
             if x0.ndim == 1:
@@ -593,12 +581,22 @@ class MultiRoundInferer:
         def lnlike_jax(params: dict[str, jnp.ndarray]) -> jnp.ndarray:
             if self.theta_transform is not None:
                 theta, _ = self.theta_transform(params, in_ns=True)
+            else:
+                raise NotImplementedError
 
             if not self.mr_config.dequantise_data:
-                log_like = self.nflow.evaluate_lnlike(theta[None, :], z0) # type: ignore
+                log_like = self.nflow.evaluate_lnlike( # type: ignore
+                    theta[None, :], 
+                    z0, 
+                    mask=jax.device_put(self.reference_mask)
+                )
             else:
                 log_like_by_permbatch = jax.vmap(
-                    lambda zi: self.nflow.evaluate_lnlike(theta[None, :], zi[None, :]) # type: ignore
+                    lambda zi: self.nflow.evaluate_lnlike( # type: ignore
+                        theta[None, :],
+                        zi[None, :],
+                        mask=jnp.atleast_2d(jax.device_put(self.reference_mask))
+                    )
                 )(z0)
                 log_like = (
                     jax.scipy.special.logsumexp(log_like_by_permbatch, axis=0)

@@ -250,7 +250,14 @@ class AbstractNeuralFlow(ABC):
 
     def _get_nlp_for_nle(self, params, **batch):
         lp = self.model.apply(
-            params, None, method='log_prob', **self._model_kwargs(**batch)
+            params, 
+            None, 
+            method='log_prob', 
+            y=batch['y'],
+            x=batch['x'],
+            mask=batch['mask'],
+            is_training=True
+            # **self._model_kwargs(**batch)
         )
         return -lp
 
@@ -583,6 +590,7 @@ class AbstractNeuralFlow(ABC):
             self, 
             rng_key: PRNGKey, 
             theta0: jnp.ndarray,
+            mask: jnp.ndarray,
             **kwargs
     ) -> jnp.ndarray:
         samples = self.model.apply(
@@ -591,6 +599,7 @@ class AbstractNeuralFlow(ABC):
             method='sample',
             x=theta0,
             is_training=False,
+            mask=mask,
             **kwargs
         )
         return samples
@@ -677,7 +686,8 @@ class AbstractNeuralFlow(ABC):
     def evaluate_lnlike(
         self,
         theta0: jnp.ndarray,
-        x0: jnp.ndarray
+        x0: jnp.ndarray,
+        mask: jnp.ndarray
     ) -> jnp.ndarray:
         logprob = self.model.apply(
             params=self.best_params,
@@ -685,6 +695,7 @@ class AbstractNeuralFlow(ABC):
             method='log_prob',
             x=theta0,
             y=x0,
+            mask=mask,
             is_training=False
         )
         return logprob
@@ -1008,12 +1019,18 @@ class NeuralFlow(AbstractNeuralFlow):
 
         return layers
 
-    def _make_flow(self, method: str, **kwargs):
-        assert self.nflow_config.architecture is not None
-
+    def _maybe_transform_healpy_map(self, **kwargs):
+        '''
+        If the healpix data is the target (NLE), we want to mask out pixels
+        such that these pixels are truncated i.e. never seen by the flow.
+        Instead, if the data is the conditioning variable (NPE), we potentially
+        want to pass the mask and the full data vector to the CNN embedding network.
+        '''
         is_training = kwargs.pop("is_training", False)
         mask = kwargs.pop('mask', None)
-        # add embedding network if specified
+        assert mask is not None, 'Mask should be hard-coded in dataset.'
+
+        # x being the data here
         if self.mode == 'NPE' and 'x' in kwargs and self.embedding_net_config:
             self.embedding_network = HpCNNEmbedding(**asdict(self.embedding_net_config))
             kwargs = dict(kwargs)
@@ -1021,13 +1038,32 @@ class NeuralFlow(AbstractNeuralFlow):
 
             if x_in.ndim == 3:
                 # for some unknown reason, an extra dimension is added at the start
-                # of x when sampling, e.g. (2, 200, 3072) -> (?, B, npix)
+                # of x when sampling, e.g. (2, 200, 3072) = (?, B, npix)
                 # we flatten over this axis to get around the problem and repeat
                 # the mask too
                 x_in = x_in.reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))
                 mask = jnp.repeat(mask, repeats=2, axis=0)
 
             kwargs['x'] = self.embedding_network(x_in, mask, is_training=is_training)
+
+        # y being the data here
+        elif self.mode == 'NLE':
+            # assume all masks are the same across batches
+            col_mask = mask[0]
+            
+            # kick the can down the road --- eventually we have to worry about masks
+            # if col_mask.all():
+            #     pass
+            # else:
+            #     y_sel = kwargs['y'][:, col_mask]
+            #     kwargs['y'] = y_sel
+
+        return kwargs
+
+    def _make_flow(self, method: str, **kwargs):
+        assert self.nflow_config.architecture is not None
+
+        kwargs = self._maybe_transform_healpy_map(**kwargs)
 
         cur_dim = self.target_ndim
         self.layers = []

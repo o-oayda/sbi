@@ -65,6 +65,11 @@ if __name__ == '__main__':
         help='Nside of simulated maps.'
     )
     parser.add_argument(
+        '--mode',
+        type=str,
+        help='NLE or NPE.'
+    )
+    parser.add_argument(
         '--ssnle_seed',
         type=int,
         help='Integer seed for the multiround inferer pipeline.'
@@ -81,6 +86,7 @@ if __name__ == '__main__':
     NSIDE = args.nside 
     TOTAL_SOURCES = 1_920_000
     MEAN_DENSITY = np.asarray(TOTAL_SOURCES / hp.nside2npix(NSIDE))
+    MODE = args.mode
     theta0 = {
         'mean_density': MEAN_DENSITY,
         'observer_speed': np.asarray(2.),
@@ -89,7 +95,7 @@ if __name__ == '__main__':
     }
 
     model = SimpleDipoleMap(nside=NSIDE)
-    model.equatorial_plane_mask(angle=30)
+    # model.equatorial_plane_mask(angle=0)
     x0, mask = model.generate_dipole(npkey_from_jax(x0_rng_key), theta=theta0)
     model.reference_data = x0
     hp.projview(x0.squeeze() * mask.squeeze(), nest=True)
@@ -117,7 +123,7 @@ if __name__ == '__main__':
     #     method='global', # use global for npe
     #     embedding_config=embedding_cfg,
     # )
-    nside16_scenario = Scenario.anynside_npe(
+    nside16_scenario_npe = Scenario.anynside_npe(
         nside=NSIDE,
         reference_theta=theta0,
         theta_adapter=adapter,
@@ -125,20 +131,31 @@ if __name__ == '__main__':
         multiround_overrides={
             'prng_integer_seed': args.ssnle_seed,
             'plot_save_dir': args.out_dir,
-            'n_rounds': 10,
+            'n_rounds': 1,
             'check_proposal_probs': True
         },
         training_overrides={'learning_rate': 0.001}
     )
+    nside16_scenario_nle = Scenario.anynside_nle(
+        nside=NSIDE,
+        reference_theta=theta0,
+        theta_adapter=adapter,
+        multiround_overrides={
+            'prng_integer_seed': args.ssnle_seed,
+            'plot_save_dir': args.out_dir,
+            'n_rounds': 1,
+            'check_proposal_probs': True
+        },
+    )
 
     meta_cfg = {
-        4: nside16_scenario,
-        16: nside16_scenario,
+        'NLE': nside16_scenario_nle,
+        'NPE': nside16_scenario_npe
     }
-    cur_cfg = meta_cfg[NSIDE]
+    cur_cfg = meta_cfg[MODE]
 
     inferer = MultiRoundInferer(
-        'NPE', prior, model.generate_dipole, (x0, mask),
+        MODE, prior, model.generate_dipole, (x0, mask),
         multi_round_config=cur_cfg.multiround,
         transform_config=cur_cfg.transforms,
         nflow_config=cur_cfg.flow,
