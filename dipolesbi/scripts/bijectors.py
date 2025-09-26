@@ -33,11 +33,11 @@ class UniformIntervalSigmoid:
         z = logit(p) # unconstrained (-inf, inf)
         log_det_jac = -jnp.log(self.span) - jnp.log(p) - jnp.log1p(-p)
 
-        below = theta <= self.low
-        above = theta >= self.high
-        log_det_jac = jnp.where(below | above, -jnp.inf, log_det_jac)
-        z = jnp.where(below, -jnp.inf, z)
-        z = jnp.where(above, jnp.inf, z)
+        # below = theta <= self.low
+        # above = theta >= self.high
+        # log_det_jac = jnp.where(below | above, -jnp.inf, log_det_jac)
+        # z = jnp.where(below, -jnp.inf, z)
+        # z = jnp.where(above, jnp.inf, z)
         return z, log_det_jac
 
 class LatitudeBijector:
@@ -52,17 +52,20 @@ class LatitudeBijector:
     def forward_and_log_det(self, z: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         sigma = sigmoid(z)              # (-inf, inf) -> [0, 1]
         t = 2. * sigma - 1.             # [-1, 1]
+        b = jnp.arcsin(t)               # [-pi/2, pi/2]
+        b_deg = jnp.rad2deg(b)          # [-90, 90]
         log_det_jac = (
           - 0.5 * jnp.log1p(-t * t)
           + jnp.log(2)
           + jnp.log(sigma)
           + jnp.log1p(-sigma)
+          + jnp.log(180 / jnp.pi)
         )
-        b = jnp.arcsin(t)               # [-pi/2, pi/2]
-        return b, log_det_jac
+        return b_deg, log_det_jac
 
     def inverse_and_log_det(self, b: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
-        logit_argument = 0.5 * (jnp.sin(b) + 1)
+        b_rad = jnp.deg2rad(b)
+        logit_argument = 0.5 * (jnp.sin(b_rad) + 1)
         sigma = jnp.clip(logit_argument, self._eps, 1 - self._eps)
         t = 2. * sigma - 1.
         z = logit(sigma)
@@ -71,10 +74,11 @@ class LatitudeBijector:
           - jnp.log(2)
           - jnp.log(sigma)
           - jnp.log1p(-sigma)
+          - jnp.log(180 / jnp.pi)
         )
-        below = b <= -0.5 * jnp.pi
-        above = b >= 0.5 * jnp.pi
-        log_det_jac = jnp.where(below | above, -jnp.inf, log_det_jac)
-        z = jnp.where(below, -jnp.inf, z)
-        z = jnp.where(above, jnp.inf, z)
+        # below = b <= -0.5 * jnp.pi
+        # above = b >= 0.5 * jnp.pi
+        # log_det_jac = jnp.where(below | above, -jnp.inf, log_det_jac)
+        # z = jnp.where(below, -jnp.inf, z)
+        # z = jnp.where(above, jnp.inf, z)
         return z, log_det_jac

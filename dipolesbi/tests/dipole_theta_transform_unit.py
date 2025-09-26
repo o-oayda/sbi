@@ -1,17 +1,14 @@
 import jax.numpy as jnp
+from dipolesbi.tools.priors_jax import DipolePriorJax
 from dipolesbi.tools.transforms import DipoleThetaTransform
 from dipolesbi.tools.utils import PytreeAdapter
 
 
 def _build_transform():
-    adapter = PytreeAdapter({
-        'mean_density': jnp.array(0.0),
-        'observer_speed': jnp.array(0.0),
-        'dipole_longitude': jnp.array(0.0),
-        'dipole_latitude': jnp.array(0.0),
-    })
+    prior = DipolePriorJax()
+    prior.change_kwarg('N', 'mean_density')
 
-    transform = DipoleThetaTransform(adapter=adapter, method='cartesian')
+    transform = DipoleThetaTransform(prior=prior, method='cartesian')
 
     theta_stats = {
         'mean_density': jnp.array([1.0, 1.5, 2.0]),

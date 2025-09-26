@@ -1,7 +1,9 @@
 from dataclasses import dataclass, field, fields, make_dataclass, replace
 from typing import Optional, Literal
 from numpy.typing import NDArray
+from dipolesbi.tools.priors_jax import DipolePriorJax
 from dipolesbi.tools.transforms import (
+    DipoleBijectorWrapper,
     DipoleThetaTransform,
     InvertibleDataTransform,
     InvertibleThetaTransformJax,
@@ -9,7 +11,6 @@ from dipolesbi.tools.transforms import (
 )
 from dipolesbi.tools.hadamard_transform import HadamardTransform, HadamardTransformJax
 import jax
-from dipolesbi.tools.utils import PytreeAdapter
 import numpy as np
 
 
@@ -345,10 +346,10 @@ class DataTransformConfig:
 
 @dataclass(frozen=True)
 class ThetaTransformSpec:
-    kind: Literal['blank', 'dipole_cartesian', 'dipole_zscore'] = 'blank'
+    kind: Literal['blank', 'dipole_cartesian', 'dipole_zscore', 'dipole_bijector'] = 'blank'
     embed_in_flow: bool = False
-    wrap_longitude: bool = True
-    reflect_latitude: bool = True
+    wrap_longitude: Optional[bool] = None
+    reflect_latitude: Optional[bool] = None
 
     @classmethod
     def blank(cls, *, embed_in_flow: bool = False) -> 'ThetaTransformSpec':
@@ -384,28 +385,46 @@ class ThetaTransformSpec:
             reflect_latitude=reflect_latitude,
         )
 
+    @classmethod
+    def dipole_bijector(
+        cls,
+        *,
+        embed_in_flow: bool = True
+    ) -> 'ThetaTransformSpec':
+        return cls(
+            kind='dipole_bijector',
+            embed_in_flow=embed_in_flow
+        )
+
 
 def _build_theta_transform(
     spec: ThetaTransformSpec,
-    adapter: Optional[PytreeAdapter],
+    prior: Optional[DipolePriorJax],
 ) -> Optional[InvertibleThetaTransformJax]:
     if spec.kind == 'blank':
         return None
-    if adapter is None:
-        raise ValueError('Adapter required to build theta transform')
-    method = 'cartesian' if spec.kind == 'dipole_cartesian' else 'zscore'
-    return DipoleThetaTransform(
-        adapter,
-        method=method,
-        wrap_longitude=spec.wrap_longitude,
-        reflect_latitude=spec.reflect_latitude,
-    )
+    if prior is None:
+        raise ValueError('Prior required to build theta transform')
+    
+    method = spec.kind.split('_')[1]
+    if method in ['cartesian', 'zscore']:
+        assert spec.wrap_longitude is not None
+        assert spec.reflect_latitude is not None
+        return DipoleThetaTransform(
+            prior,
+            method=method, # type: ignore
+            wrap_longitude=spec.wrap_longitude,
+            reflect_latitude=spec.reflect_latitude,
+        )
+    else:
+        assert method == 'bijector', f'Method: {method}'
+        return DipoleBijectorWrapper(prior=prior)
 
 
 @dataclass
 class ThetaTransformConfig:
     spec: ThetaTransformSpec
-    adapter: Optional[PytreeAdapter] = None
+    prior: Optional[DipolePriorJax] = None
     _transform: Optional[InvertibleThetaTransformJax] = field(default=None, init=False, repr=False)
 
     @classmethod
@@ -418,7 +437,7 @@ class ThetaTransformConfig:
     @classmethod
     def dipole_cartesian_transform(
         cls,
-        pytree_adapter: PytreeAdapter,
+        prior: DipolePriorJax,
         embed_transform_in_flow: bool = False,
         wrap_longitude: bool = True,
         reflect_latitude: bool = True
@@ -428,12 +447,12 @@ class ThetaTransformConfig:
             wrap_longitude=wrap_longitude,
             reflect_latitude=reflect_latitude,
         )
-        return cls(spec=spec, adapter=pytree_adapter)
+        return cls(spec=spec, prior=prior)
 
     @classmethod
     def dipole_zscore_transform(
         cls,
-        pytree_adapter: PytreeAdapter,
+        prior: DipolePriorJax,
         embed_transform_in_flow: bool = True,
         wrap_longitude: bool = True,
         reflect_latitude: bool = True
@@ -443,14 +462,14 @@ class ThetaTransformConfig:
             wrap_longitude=wrap_longitude,
             reflect_latitude=reflect_latitude,
         )
-        return cls(spec=spec, adapter=pytree_adapter)
+        return cls(spec=spec, prior=prior)
 
     @property
     def theta_transform(self) -> Optional[InvertibleThetaTransformJax]:
         if self.spec.kind == 'blank':
             return None
         if self._transform is None:
-            self._transform = _build_theta_transform(self.spec, self.adapter)
+            self._transform = _build_theta_transform(self.spec, self.prior)
         return self._transform
 
     @property
@@ -515,15 +534,15 @@ def _prepare_data_config(
 
 def _prepare_theta_config(
     spec: ThetaTransformSpec,
-    adapter: Optional[PytreeAdapter],
+    prior: Optional[DipolePriorJax],
     overrides: Optional[dict] = None,
 ) -> ThetaTransformConfig:
     updated_spec = _apply_theta_spec_overrides(spec, overrides)
-    if updated_spec.kind != 'blank' and adapter is None:
-        raise ValueError('Adapter required for non-blank theta transform spec.')
+    if updated_spec.kind != 'blank' and prior is None:
+        raise ValueError('Prior required for non-blank theta transform spec.')
     return ThetaTransformConfig(
         spec=updated_spec,
-        adapter=adapter if updated_spec.kind != 'blank' else None,
+        prior=prior if updated_spec.kind != 'blank' else None,
     )
 
 
@@ -548,7 +567,7 @@ class Scenario:
         cls,
         reference_theta: dict[str, NDArray],
         *,
-        theta_adapter: Optional[PytreeAdapter] = None,
+        theta_prior: Optional[DipolePriorJax] = None,
         training_overrides: Optional[dict] = None,
         multiround_overrides: Optional[dict] = None,
         flow_overrides: Optional[dict] = None,
@@ -578,7 +597,7 @@ class Scenario:
 
         base_theta_spec = theta_spec or ThetaTransformSpec.blank(embed_in_flow=False)
         theta_cfg = _prepare_theta_config(
-            base_theta_spec, theta_adapter, theta_spec_overrides
+            base_theta_spec, theta_prior, theta_spec_overrides
         )
 
         transforms = TransformConfig(
@@ -596,7 +615,7 @@ class Scenario:
         cls,
         nside: int,
         reference_theta: dict[str, NDArray],
-        theta_adapter: PytreeAdapter,
+        theta_prior: DipolePriorJax,
         *,
         training_overrides: Optional[dict] = None,
         multiround_overrides: Optional[dict] = None,
@@ -654,7 +673,7 @@ class Scenario:
             embed_in_flow=False
         )
         theta_cfg = _prepare_theta_config(
-            base_theta_spec, theta_adapter, theta_spec_overrides
+            base_theta_spec, theta_prior, theta_spec_overrides
         )
 
         transforms = TransformConfig(
@@ -671,7 +690,7 @@ class Scenario:
         cls,
         nside: int,
         reference_theta: dict[str, NDArray],
-        theta_adapter: PytreeAdapter,
+        theta_prior: DipolePriorJax,
         *,
         training_overrides: Optional[dict] = None,
         multiround_overrides: Optional[dict] = None,
@@ -723,8 +742,8 @@ class Scenario:
         )
         data_cfg = _prepare_data_config(base_data_spec, data_spec_overrides)
 
-        base_theta_spec = theta_spec or ThetaTransformSpec.dipole_zscore(embed_in_flow=True)
-        theta_cfg = _prepare_theta_config(base_theta_spec, theta_adapter, theta_spec_overrides)
+        base_theta_spec = theta_spec or ThetaTransformSpec.dipole_bijector(embed_in_flow=True)
+        theta_cfg = _prepare_theta_config(base_theta_spec, theta_prior, theta_spec_overrides)
 
         transforms = TransformConfig(
             data_transform_config=data_cfg,
@@ -739,7 +758,7 @@ class Scenario:
     def nside32(
         cls,
         reference_theta: dict[str, NDArray],
-        theta_adapter: PytreeAdapter,
+        theta_prior: DipolePriorJax,
         *,
         training_overrides: Optional[dict] = None,
         multiround_overrides: Optional[dict] = None,
@@ -797,7 +816,7 @@ class Scenario:
             embed_in_flow=False
         )
         theta_cfg = _prepare_theta_config(
-            base_theta_spec, theta_adapter, theta_spec_overrides
+            base_theta_spec, theta_prior, theta_spec_overrides
         )
 
         transforms = TransformConfig(

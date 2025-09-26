@@ -95,7 +95,7 @@ if __name__ == '__main__':
     }
 
     model = SimpleDipoleMap(nside=NSIDE)
-    # model.equatorial_plane_mask(angle=0)
+    model.equatorial_plane_mask(angle=30)
     x0, mask = model.generate_dipole(npkey_from_jax(x0_rng_key), theta=theta0)
     model.reference_data = x0
     hp.projview(x0.squeeze() * mask.squeeze(), nest=True)
@@ -108,30 +108,15 @@ if __name__ == '__main__':
     prior_jax = prior.to_jax()
     adapter = prior_jax.get_adapter()
 
-    # prior.change_kwarg('N', 'mean_density')
-    # lb_inferer = NotShitLikelihoodBasedInferer(model.log_likelihood, prior, x0)
-    # lb_inferer.run_ultranest()
-    # corner(lb_inferer._samples)
-    # plt.show()
-
-    # embedding_cfg = EmbeddingNetConfig(
-    #     nside=NSIDE,
-    #     out_channels_per_layer=[2, 4, 8, 16],
-    #     dropout_rate=0.2,
-    # )
-    # data_spec = DataTransformSpec.zscore(
-    #     method='global', # use global for npe
-    #     embedding_config=embedding_cfg,
-    # )
     nside16_scenario_npe = Scenario.anynside_npe(
         nside=NSIDE,
         reference_theta=theta0,
-        theta_adapter=adapter,
+        theta_prior=prior_jax,
         theta_spec_overrides={'embed_transform_in_flow': True},
         multiround_overrides={
             'prng_integer_seed': args.ssnle_seed,
             'plot_save_dir': args.out_dir,
-            'n_rounds': 1,
+            'n_rounds': 10,
             'check_proposal_probs': True
         },
         training_overrides={'learning_rate': 0.001}
@@ -139,12 +124,10 @@ if __name__ == '__main__':
     nside16_scenario_nle = Scenario.anynside_nle(
         nside=NSIDE,
         reference_theta=theta0,
-        theta_adapter=adapter,
+        theta_prior=prior_jax,
         multiround_overrides={
             'prng_integer_seed': args.ssnle_seed,
-            'plot_save_dir': args.out_dir,
-            'n_rounds': 1,
-            'check_proposal_probs': True
+            'plot_save_dir': args.out_dir
         },
     )
 

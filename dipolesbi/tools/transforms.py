@@ -3,6 +3,8 @@ from numpy.typing import NDArray
 import torch
 from torch.utils.data import Dataset
 import numpy as np
+from dipolesbi.scripts.bijectors import LatitudeBijector, UniformIntervalSigmoid
+from dipolesbi.tools.priors_jax import DipolePriorJax
 from dipolesbi.tools.utils import PytreeAdapter, jax_sph2cart
 from abc import ABC, abstractmethod
 import jax
@@ -37,10 +39,11 @@ class InvertibleDataTransform(ABC):
         pass
 
 class InvertibleThetaTransformJax(ABC):
-    def __init__(self, pytree_adapter: PytreeAdapter) -> None:
+    def __init__(self, prior: DipolePriorJax) -> None:
         self._theta_mean = None
         self._theta_std = None
-        self._adapter = pytree_adapter
+        self.prior = prior
+        self._adapter = self.prior.get_adapter()
     
     def __call__(
             self, 
@@ -181,15 +184,96 @@ class ZScore(InvertibleDataTransform):
         self.mu = None
         self.sigma = None
 
+class DipoleBijectorWrapper(InvertibleThetaTransformJax):
+    def __init__(self, prior: DipolePriorJax) -> None:
+        super().__init__(prior)
+        self.bijectors = {
+            'mean_density': UniformIntervalSigmoid(
+                self.prior.low_ranges[0], 
+                self.prior.high_ranges[0]
+            ),
+            'observer_speed': UniformIntervalSigmoid(
+                self.prior.low_ranges[1], 
+                self.prior.high_ranges[1]
+            ),
+            'dipole_longitude': UniformIntervalSigmoid(
+                self.prior.low_ranges[2], 
+                self.prior.high_ranges[2]
+            ),
+            'dipole_latitude': LatitudeBijector() # assume -90, 90 for now
+        }
+
+    def __repr__(self) -> str:
+        return 'DipoleBijectorWrapper()'
+
+    def compute_mean_and_std(self, theta: dict[str, jnp.ndarray]) -> None:
+        pass
+
+    def forward_and_log_det(
+            self, 
+            theta: dict[str, jnp.ndarray] | jnp.ndarray
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+        if type(theta) is dict:
+            leaves = jax.tree.leaves(theta)
+            if any(leaf.ndim == 0 for leaf in leaves):
+                theta = self.adapter.ravel(theta)
+            else:
+                theta = self.adapter.to_array(theta)
+        theta = cast(jnp.ndarray, theta)
+
+        if theta.ndim == 1:
+            theta = theta[None, :]
+        batches = theta.shape[0]
+
+        unconstrained_vars = []
+        logdet = jnp.zeros(batches)
+
+        for key in self.adapter.keys:
+            bijector = self.bijectors[key]
+            var, ld = bijector.inverse_and_log_det(
+                self.adapter.flat_view(theta, key)
+            )
+            logdet += ld
+            unconstrained_vars.append(var)
+
+        t_transformed = jnp.stack(unconstrained_vars, axis=-1)
+
+        return t_transformed.squeeze(), logdet.squeeze()
+
+    def inverse_and_log_det(
+            self, 
+            transformed_theta: jnp.ndarray
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
+
+        if transformed_theta.ndim == 1:
+            transformed_theta = transformed_theta[None, :]
+
+        batches = transformed_theta.shape[0]
+    
+        constrained_vars = []
+        logdet = jnp.zeros(batches)
+
+        for key in self.adapter.keys:
+            bijector = self.bijectors[key]
+            var, ld = bijector.forward_and_log_det(
+                self.adapter.flat_view(transformed_theta, key)
+            )
+            logdet += ld
+            constrained_vars.append(var)
+
+        theta = jnp.stack(constrained_vars, axis=-1)
+
+        return theta, logdet
+
 class DipoleThetaTransform(InvertibleThetaTransformJax):
     def __init__(
             self,
-            adapter: PytreeAdapter,
+            prior: DipolePriorJax,
             method: Literal['cartesian', 'zscore'],
             wrap_longitude: bool = False,
             reflect_latitude: bool = False
     ):
-        super().__init__(adapter)
+        super().__init__(prior)
 
         if method == 'cartesian':
             self._forward_and_log_det = self._forward_and_log_det_cartesian
