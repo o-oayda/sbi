@@ -536,6 +536,8 @@ class MultiRoundInferer:
             check_proposal_probs=self.mr_config.check_proposal_probs,
             ui=self.ui
         )
+        if posterior_samples is None:
+            raise Exception('All posterior samples rejected.')
         corner(
             np.asarray(self.theta_transform.adapter.to_array(posterior_samples))
         )

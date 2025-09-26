@@ -33,7 +33,7 @@ from dipolesbi.tools.dataloader import as_batch_iterator_cpu2gpu, healpix_map_da
 from dipolesbi.tools.embedding_nets import HpCNNEmbedding
 from dipolesbi.tools.np_rngkey import npkey_sequence_from_hk
 from dipolesbi.tools.priors_jax import JaxPrior
-from dipolesbi.tools.transforms import InvertibleDataTransform, InvertibleThetaTransformJax
+from dipolesbi.tools.transforms import DipoleThetaTransform, InvertibleDataTransform, InvertibleThetaTransformJax
 from dipolesbi.tools.hadamard_transform import HadamardTransform
 from dipolesbi.tools.ui import MultiRoundInfererUI
 from dipolesbi.tools.utils import convert_x_in_named_dataset, PytreeAdapter
@@ -613,7 +613,7 @@ class AbstractNeuralFlow(ABC):
             check_proposal_probs: bool = True,
             ui: Optional[MultiRoundInfererUI] = None,
             **kwargs
-    ) -> dict[str, jnp.ndarray]:
+    ) -> dict[str, jnp.ndarray] | None:
         assert self.prior is not None
         assert self.mode == 'NPE'
 
@@ -668,6 +668,9 @@ class AbstractNeuralFlow(ABC):
                     ui.log(
                         f"Posterior batch: accepted {n_accepted}/{current_batch_size}"
                         f" (discarded {discarded})")
+                    if discarded == batch_size:
+                        ui.log('All proposed samples discarded... breaking.')
+                        return None
             else:
                 n_accepted = current_batch_size
 
