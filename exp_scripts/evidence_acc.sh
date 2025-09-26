@@ -11,13 +11,15 @@ done
 # Remove --resume from positional parameters
 set -- $(printf '%s\n' "$@" | grep -v -- '--resume')
 
-if [ "$#" -ne 2 ]; then
+# e.g. exp_scripts/evidence_acc.sh 16 'cold_start_only_post_100k' --resume
+if [ "$#" -ne 3 ]; then
     echo "Usage: $0 <NSIDE> <DESCRIPTOR> [--resume]"
     exit 1
 fi
 
 NSIDE=$1
-DESCRIPTOR=$2
+MODE=$2
+DESCRIPTOR=$3
 
 # First, check NSIDE is a positive integer
 if ! [[ "$NSIDE" =~ ^[0-9]+$ ]] || [ "$NSIDE" -le 0 ]; then
@@ -88,7 +90,7 @@ fi
 for SEED in $(seq $START_SEED $END_SEED)
 do
     log "Running SEED=$SEED..."
-    python dipolesbi/scripts/run_multiround.py --nside "$NSIDE" --ssnle_seed "$SEED" --out_dir "$OUTDIR" >> "$LOGFILE" 2>&1
+    python dipolesbi/scripts/run_multiround.py --nside "$NSIDE" --mode "$MODE" --ssnle_seed "$SEED" --out_dir "$OUTDIR" >> "$LOGFILE" 2>&1
     if [ $? -eq 0 ]; then
         log "SEED=$SEED completed successfully."
         RUN_SEEDS+=("$SEED")
