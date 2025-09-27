@@ -153,6 +153,7 @@ class HadamardTransform(InvertibleDataTransform):
 
         nside = first_nside
         self.npix_per_level = []
+        self.encoded_masks_fine2coarse = []
 
         # stop before nside = 1: out map has nside=2 resolution coarse and details
         # i.e. 12 coarse, 12 x 3 details, total of 48
@@ -177,6 +178,27 @@ class HadamardTransform(InvertibleDataTransform):
         self.normalise_details: bool = normalise_details
         self.n_chunks = n_chunks
         self.blocks = self._build_surjective_blocks()
+
+    def _masked_moments(self, x, mask, axis=0, eps=1e-6, ddof=1):
+        """
+        x:  (B, P) values
+        m:  (B, P) bool mask (True = valid)
+        returns mean:(P,), std:(P,), enough:(P,) bool where count > ddof
+        """
+        xp = self.xp
+        mask = mask.astype(x.dtype)
+        n_unmasked = mask.sum(axis=axis)                         # (P,)
+        n_unmasked_safe = xp.maximum(n_unmasked, 1.0)            # stop 0
+        mean = (x * mask).sum(axis=axis) / n_unmasked_safe       # (P,)
+
+        # unbiased sample variance (ddof = 1) over valid entries only
+        xc = x - mean[None, :]
+        var_num = (mask * xc * xc).sum(axis=axis)   # (P,)
+        denom = xp.maximum(n_unmasked - ddof, 1.0)
+        std = xp.sqrt(var_num / denom + eps)        # (P,)
+
+        enough = n_unmasked > ddof                  # True for >= 2 samples with ddof=1
+        return mean, std, enough
 
     def _make_post_dict(self) -> dict:
         xp = self.xp
@@ -244,6 +266,7 @@ class HadamardTransform(InvertibleDataTransform):
             self, 
             level: int | Literal['all']
     ) -> Callable[[jnp.ndarray], jnp.ndarray]:
+        raise NotImplementedError
         # in mu_at_level_post, level_idx 0 corresponds to the finest level
         # being the first one thrown away in the heirarchical SSNLE
         # note details are interleaved
@@ -353,17 +376,21 @@ class HadamardTransform(InvertibleDataTransform):
             pass
         return (z, mask), logdet
 
-    def inverse_and_log_det(self, transformed_data: NDArray) -> tuple[NDArray, NDArray]:
+    def inverse_and_log_det(
+            self, 
+            transformed_data: NDArray, 
+            transformed_mask: NDArray
+    ) -> tuple[tuple[NDArray, NDArray], NDArray]:
         orig_dtype = getattr(transformed_data, 'dtype', None)
         transformed_data = self.xp.asarray(transformed_data, dtype=self.dtype)
-        x, logdet = self._reverse_cycle_healpix_tree(transformed_data)
+        (x, mask), logdet = self._reverse_cycle_healpix_tree(transformed_data, transformed_mask)
         try:
             if orig_dtype == getattr(self.xp, 'float32'):
                 x = x.astype(self.xp.float32)
                 logdet = logdet.astype(self.xp.float32)
         except Exception:
             pass
-        return x, logdet
+        return (x, mask), logdet
 
     def _build_surjective_blocks(self) -> list[tuple[int, int]]:
         steps = split_off_details(self.first_nside, self.last_nside)
@@ -385,6 +412,7 @@ class HadamardTransform(InvertibleDataTransform):
         mask_fine2coarse: list[NDArray] = []
         a_list: list[NDArray] = []
         logdets_at_each_level: list[NDArray] = []
+        self.encoded_masks_fine2coarse = []
         abslogdet: NDArray = self.xp.zeros(batches)
         
         if self.empty_norm_stats_flag:
@@ -422,15 +450,22 @@ class HadamardTransform(InvertibleDataTransform):
         a_mask = downstream_mask
 
         if self.empty_norm_stats_flag:
-            mean_coarse = a_coarse.mean(axis=0) # across the batch axis
-            std_coarse = a_coarse.std(axis=0)
+            mean_coarse, std_coarse, enough_c = self._masked_moments(
+                a_coarse, a_mask, axis=0, ddof=1
+            ) # across the batch axis
+            assert enough_c.all(), 'Somehow there are < 2 detail coefficients at a level...'
         else:
             mean_coarse = self.mu_at_level_post['coarse']
-            std_coarse = self.std_at_level_post['coarse']
+            std_coarse  = self.std_at_level_post['coarse']
+            enough_c    = self.xp.ones_like(std_coarse, dtype=bool)
 
-        a_coarse = ( a_coarse - mean_coarse ) / std_coarse
+        # set masked to 0, these should be removed later
+        a_coarse = self.xp.where(a_mask, (a_coarse - mean_coarse) / std_coarse, 0.0)
 
-        abslogdet += -self.xp.log(std_coarse).sum(axis=-1) # sum over pixels
+        # only add the logdet per batch for valid coarse coeffs
+        abslogdet += - (
+            a_mask.astype(a_coarse.dtype) * self.xp.log(std_coarse)[None, :]
+        ).sum(axis=1)
 
         if self.empty_norm_stats_flag:
             assert self._post_dict_is_empty()
@@ -454,39 +489,44 @@ class HadamardTransform(InvertibleDataTransform):
         ): # now coarse->fine
             
             if self.empty_norm_stats_flag:
-                mean_d1 = y[..., 1].mean(axis=0)
-                mean_d2 = y[..., 2].mean(axis=0)
-                mean_d3 = y[..., 3].mean(axis=0)
-                std_d1 = y[..., 1].std(axis=0)
-                std_d2 = y[..., 2].std(axis=0)
-                std_d3 = y[..., 3].std(axis=0)
+                mu_d1, s_d1, ok1 = self._masked_moments(y[..., 1], msk[..., 1], axis=0, ddof=1)
+                mu_d2, s_d2, ok2 = self._masked_moments(y[..., 2], msk[..., 2], axis=0, ddof=1)
+                mu_d3, s_d3, ok3 = self._masked_moments(y[..., 3], msk[..., 3], axis=0, ddof=1)
+                assert ok1.all(); assert ok2.all(); assert ok3.all()
             else:
-                mean_d1 = self.mu_at_level_post['detail'][0][lvl_idx - lvl]
-                mean_d2 = self.mu_at_level_post['detail'][1][lvl_idx - lvl]
-                mean_d3 = self.mu_at_level_post['detail'][2][lvl_idx - lvl]
+                mu_d1 = self.mu_at_level_post['detail'][0][lvl_idx - lvl]
+                mu_d2 = self.mu_at_level_post['detail'][1][lvl_idx - lvl]
+                mu_d3 = self.mu_at_level_post['detail'][2][lvl_idx - lvl]
 
-                std_d1 = self.std_at_level_post['detail'][0][lvl_idx - lvl]
-                std_d2 = self.std_at_level_post['detail'][1][lvl_idx - lvl]
-                std_d3 = self.std_at_level_post['detail'][2][lvl_idx - lvl]
+                s_d1 = self.std_at_level_post['detail'][0][lvl_idx - lvl]
+                s_d2 = self.std_at_level_post['detail'][1][lvl_idx - lvl]
+                s_d3 = self.std_at_level_post['detail'][2][lvl_idx - lvl]
+
+                ok1 = ok2 = ok3 = self.xp.ones_like(s_d1, dtype=bool)
             
             if self.normalise_details:
-                means = self.xp.stack([mean_d1, mean_d2, mean_d3], axis=-1)  # (P,3)
-                stds  = self.xp.stack([std_d1,  std_d2,  std_d3],  axis=-1)  # (P,3)
+                means = self.xp.stack([mu_d1, mu_d2, mu_d3], axis=-1)  # (P,3)
+                stds  = self.xp.stack([s_d1,  s_d2,  s_d3],  axis=-1)  # (P,3)
                 y_details = (y[..., 1:] - means[None, :, :]) / stds[None, :, :]
+
+                # zero out invalid rows so they don’t pollute anything
+                y_details = self.xp.where(msk[..., 1:], y_details, 0.0)
+
                 y = self.xp.concatenate([y[..., :1], y_details], axis=-1)
 
-                abslogdet += - self.xp.log(std_d1).sum(axis=-1)
-                abslogdet += - self.xp.log(std_d2).sum(axis=-1)
-                abslogdet += - self.xp.log(std_d3).sum(axis=-1)
+                # do log det only where it is valid
+                logstd = self.xp.log(stds)[None, :, :]              # (1,P,3)
+                weight = msk[..., 1:].astype(y.dtype)               # (B,P,3)
+                abslogdet += - (weight * logstd).sum(axis=(1, 2))
 
             if self.empty_norm_stats_flag:
-                self.mu_at_level_post['detail'][0][lvl_idx - lvl] = mean_d1
-                self.mu_at_level_post['detail'][1][lvl_idx - lvl] = mean_d2
-                self.mu_at_level_post['detail'][2][lvl_idx - lvl] = mean_d3
+                self.mu_at_level_post['detail'][0][lvl_idx - lvl] = mu_d1
+                self.mu_at_level_post['detail'][1][lvl_idx - lvl] = mu_d2
+                self.mu_at_level_post['detail'][2][lvl_idx - lvl] = mu_d3
 
-                self.std_at_level_post['detail'][0][lvl_idx - lvl] = std_d1
-                self.std_at_level_post['detail'][1][lvl_idx - lvl] = std_d2
-                self.std_at_level_post['detail'][2][lvl_idx - lvl] = std_d3
+                self.std_at_level_post['detail'][0][lvl_idx - lvl] = s_d1
+                self.std_at_level_post['detail'][1][lvl_idx - lvl] = s_d2
+                self.std_at_level_post['detail'][2][lvl_idx - lvl] = s_d3
 
             z_parts.append(y[..., 1:].reshape(batches, -1))
             z_mask_parts.append(msk[..., 1:].reshape(batches, -1))
@@ -497,58 +537,78 @@ class HadamardTransform(InvertibleDataTransform):
         
         # since for each batch the transform jacobian is identical,
         # we only need to extract one scalar (first element) from this 1D array
-        self.logdet = abslogdet[0]
+        self.logdet = abslogdet
 
         return (z, z_mask), abslogdet
 
     def _reverse_cycle_healpix_tree(self,
-        transformed_data: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray]:
+        transformed_data: np.ndarray,
+        transformed_mask: np.ndarray
+    ) -> tuple[tuple[np.ndarray, np.ndarray], np.ndarray]:
         batches, npix = transformed_data.shape
         P_levels = self.parents_at_levels
 
         # z = [a_coarse | d_coarse ... d_fine ]
         offset = self.last_npix
         a = transformed_data[:, :offset] # (B, out_npix)
+        a_mask = transformed_mask[:, :offset].astype(bool)
 
-        a = a * self.std_at_level_post['coarse'] + self.mu_at_level_post['coarse']
+        # only denormalise on valid pixels
+        mu_coarse = self.mu_at_level_post['coarse']
+        std_coarse = self.std_at_level_post['coarse']
+        a = self.xp.where(a_mask, a * std_coarse[None, :] + mu_coarse[None, :], 0.)
 
         # iterate from high resolution to low resolution
         details_coarse2fine = []
+        mask_coarse2fine = []
         for npix, dscale_factor in zip(P_levels[::-1], self.downscale_factors[::-1]):
             dsize = npix * (dscale_factor - 1) # detail coefficients always 1 less 
+
             d = transformed_data[:, offset:offset+dsize].reshape(
                 batches, npix, dscale_factor - 1
             )
+            d_mask = transformed_mask[:, offset:offset+dsize].reshape(
+                batches, npix, dscale_factor - 1
+            ).astype(bool)
+
             offset += dsize
             details_coarse2fine.append(d)
+            mask_coarse2fine.append(d_mask)
+
+        # encoded masks at each level saved from forward pass
+        encoded_fine2coarse = self.encoded_masks_fine2coarse
 
         # reconstruct coarse->fine
         upstream_data = a
 
-        # reconstruct coarse to fine
-        for lvl, d_out in enumerate(details_coarse2fine):
+        for lvl, (d_out, d_out_mask, codes_lvl) in enumerate(
+            zip(details_coarse2fine, mask_coarse2fine, reversed(encoded_fine2coarse))
+        ):
             # y_out is what forward produced after coupling: [a | d_out]
             a_here = upstream_data[..., None]
             a_here = cast(Array, a_here)
-            y_pre = self.xp.concatenate([a_here, d_out], axis=-1) # (B, P_l, n_coefficients)
 
-            lvl_idx = self.n_levels - 1
             if self.normalise_details:
+                lvl_idx = self.n_levels - 1 - lvl
                 means = self.xp.stack([
-                    self.mu_at_level_post['detail'][0][lvl_idx - lvl],
-                    self.mu_at_level_post['detail'][1][lvl_idx - lvl],
-                    self.mu_at_level_post['detail'][2][lvl_idx - lvl],
+                    self.mu_at_level_post['detail'][0][lvl_idx],
+                    self.mu_at_level_post['detail'][1][lvl_idx],
+                    self.mu_at_level_post['detail'][2][lvl_idx],
                 ], axis=-1)  # (P,3)
                 stds = self.xp.stack([
-                    self.std_at_level_post['detail'][0][lvl_idx - lvl],
-                    self.std_at_level_post['detail'][1][lvl_idx - lvl],
-                    self.std_at_level_post['detail'][2][lvl_idx - lvl],
+                    self.std_at_level_post['detail'][0][lvl_idx],
+                    self.std_at_level_post['detail'][1][lvl_idx],
+                    self.std_at_level_post['detail'][2][lvl_idx],
                 ], axis=-1)  # (P,3)
-                y_details = y_pre[..., 1:] * stds[None, :, :] + means[None, :, :]
-                y_pre = self.xp.concatenate([y_pre[..., :1], y_details], axis=-1)
 
-            data = self._inverse_matrix_product(y_pre)
+                d_out = self.xp.where(
+                    d_out_mask, d_out * stds[None, :, :] + means[None, :, :],
+                    0.
+                )
+            
+            y_pre = self.xp.concatenate([a_here, d_out], axis=-1)
+
+            data = self._inverse_matrix_product_masked(y_pre, codes_lvl)
 
             # upsample to next finer 'a'
             upstream_data = data.reshape(batches, -1)
@@ -558,10 +618,24 @@ class HadamardTransform(InvertibleDataTransform):
         # hack slightly and assume forward has been called
         inverse_logdet = -self.logdet * self.xp.ones(batches)
 
-        return x_rec, inverse_logdet
+        # Recover original mask
+        codes_fine = encoded_fine2coarse[0]
+        mask_rec = self._decode_codes(codes_fine).reshape(batches, -1)
+
+        return (x_rec, mask_rec), inverse_logdet
+
+    def _decode_codes(self, codes):
+        # codes: (B, P_level) uint8/int in [0..15]
+        bitw = self.xp.array([1, 2, 4, 8], dtype=self.xp.int32)
+        return ((codes.astype(self.xp.int32)[..., None] & bitw) != 0)  # (B, P_level, 4) bool
 
     def _forward_matrix_product(self, v: NDArray) -> NDArray:
         return v @ self.Q # (B, npix, 4) @ (4,4)
+
+    def _encode_mask(self, mask: NDArray) -> NDArray:
+        bitw = self.xp.array([1, 2, 4, 8], dtype=self.xp.int32)
+        encoded_mask = (mask.astype(self.xp.int32) * bitw).sum(axis=-1)
+        return encoded_mask
 
     def _forward_matrix_product_masked(
             self, 
@@ -569,8 +643,8 @@ class HadamardTransform(InvertibleDataTransform):
             mask: NDArray
     ) -> tuple[NDArray, NDArray]:
         # for each 4-block, encode the mask as a 4-bit integer
-        bitw = self.xp.array([1, 2, 4, 8], dtype=self.xp.int32)
-        encoded_mask = (mask.astype(self.xp.int32) * bitw).sum(axis=-1)
+        encoded_mask = self._encode_mask(mask)
+        self.encoded_masks_fine2coarse.append(encoded_mask.astype(self.xp.uint8))
 
         T = self.subspace.T_TABLE[encoded_mask] # lookup a 4x4 transform mat
         T_T = self.xp.swapaxes(T, -1, -2) # transpose matrix, shape (B, P//4, 4, 4)
@@ -583,6 +657,24 @@ class HadamardTransform(InvertibleDataTransform):
 
     def _inverse_matrix_product(self, z: NDArray) -> NDArray:
         return z @ self.Q_inv
+
+    def _inverse_matrix_product_masked(
+        self,
+        z: NDArray,
+        encoded_mask: NDArray
+    ) -> NDArray:
+        encoded_mask = encoded_mask.astype(self.xp.int32)
+        T = self.subspace.T_TABLE[encoded_mask]
+        k_rows = self.subspace.K_TABLE[encoded_mask] 
+
+        row_mask = (
+            self.xp.arange(4)[None, None, :] < k_rows[..., None]
+        ).astype(z.dtype)  # (B,P,4)
+        z_ok = z * row_mask
+
+        x = self.xp.einsum('bnRq, bnR -> bnq', T, z_ok) # (B, nblocks, 4)
+        return x
+
 
 # Convenience subclass that uses JAX as the backend
 class HadamardTransformJax(HadamardTransform):

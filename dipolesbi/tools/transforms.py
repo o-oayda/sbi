@@ -35,7 +35,11 @@ class InvertibleDataTransform(ABC):
         pass
 
     @abstractmethod
-    def inverse_and_log_det(self, transformed_data: NDArray) -> tuple[NDArray, NDArray]:
+    def inverse_and_log_det(
+            self, 
+            transformed_data: NDArray, 
+            transformed_mask: NDArray
+    ) -> tuple[tuple[NDArray, NDArray], NDArray]:
         pass
 
     @abstractmethod
