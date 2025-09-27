@@ -147,8 +147,12 @@ class TestHaarTransform(unittest.TestCase):
             dmap_transformed, zmask
         )
 
-        np.testing.assert_almost_equal(dmap, dmap_recovered, err_msg='Recovered != original.')
         np.testing.assert_equal(mask, mask_rec)
+        np.testing.assert_almost_equal(
+            dmap * mask, 
+            dmap_recovered * mask, 
+            err_msg='Recovered != original.'
+        )
 
     def test_inverse_low_nside(self):
         nside = 8

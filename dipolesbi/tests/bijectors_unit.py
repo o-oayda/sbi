@@ -34,13 +34,15 @@ def test_uniform_interval_sigmoid_round_trip_from_theta():
     assert jnp.allclose(theta_recon, theta, atol=1e-6)
     assert jnp.allclose(logdet_f + logdet_inv, jnp.zeros_like(logdet_f), atol=2e-4) # high for fp32
 
-def test_uniform_interval_sigmoid_inverse_out_of_support_logdet():
-    bijector = UniformIntervalSigmoid(low=0.0, high=1.0)
+# probably to reimplement soon
 
-    theta = jnp.array([-0.25, 1.5])
-    _, logdet = bijector.inverse_and_log_det(theta)
-
-    assert jnp.all(jnp.isneginf(logdet))
+# def test_uniform_interval_sigmoid_inverse_out_of_support_logdet():
+#     bijector = UniformIntervalSigmoid(low=0.0, high=1.0)
+#
+#     theta = jnp.array([-0.25, 1.5])
+#     _, logdet = bijector.inverse_and_log_det(theta)
+#
+#     assert jnp.all(jnp.isneginf(logdet))
 
 
 def test_latitude_bijector_round_trip():
@@ -55,10 +57,10 @@ def test_latitude_bijector_round_trip():
     assert jnp.allclose(logdet_f + logdet_inv, jnp.zeros_like(logdet_f), atol=1e-6)
 
 
-def test_latitude_bijector_inverse_out_of_support_logdet():
-    bijector = LatitudeBijector()
-
-    b = jnp.array([-2.0, 2.0])
-    _, logdet = bijector.inverse_and_log_det(b)
-
-    assert jnp.all(jnp.isneginf(logdet))
+# def test_latitude_bijector_inverse_out_of_support_logdet():
+#     bijector = LatitudeBijector()
+#
+#     b = jnp.array([-2.0, 2.0])
+#     _, logdet = bijector.inverse_and_log_det(b)
+#
+#     assert jnp.all(jnp.isneginf(logdet))

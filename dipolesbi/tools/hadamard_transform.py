@@ -367,7 +367,7 @@ class HadamardTransform(InvertibleDataTransform):
         # Ensure backend array; remember original dtype for optional cast-back
         orig_dtype = getattr(data, 'dtype', None)
         data = self.xp.asarray(data, dtype=self.dtype)
-        (z, mask), logdet = self._cycle_healpix_tree(data)
+        (z, mask), logdet = self._cycle_healpix_tree(data, mask)
         try:
             if orig_dtype == getattr(self.xp, 'float32'):
                 z = z.astype(self.xp.float32)
@@ -383,7 +383,10 @@ class HadamardTransform(InvertibleDataTransform):
     ) -> tuple[tuple[NDArray, NDArray], NDArray]:
         orig_dtype = getattr(transformed_data, 'dtype', None)
         transformed_data = self.xp.asarray(transformed_data, dtype=self.dtype)
-        (x, mask), logdet = self._reverse_cycle_healpix_tree(transformed_data, transformed_mask)
+        (x, mask), logdet = self._reverse_cycle_healpix_tree(
+            transformed_data, 
+            transformed_mask
+        )
         try:
             if orig_dtype == getattr(self.xp, 'float32'):
                 x = x.astype(self.xp.float32)
