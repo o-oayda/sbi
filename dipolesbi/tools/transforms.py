@@ -1,4 +1,4 @@
-from typing import Literal, cast
+from typing import Literal, Optional, cast
 from numpy.typing import NDArray
 import torch
 from torch.utils.data import Dataset
@@ -15,15 +15,23 @@ class InvertibleDataTransform(ABC):
     def __init__(self) -> None:
         pass
     
-    def __call__(self, data: NDArray) -> tuple[NDArray, NDArray]:
-        return self.forward_and_log_det(data)
+    def __call__(
+            self, 
+            data: NDArray, 
+            mask: Optional[NDArray] = None
+    ) -> tuple[tuple[NDArray, NDArray], NDArray]: # (z, mask), logdet
+        return self.forward_and_log_det(data, mask)
 
     @abstractmethod
     def __repr__(self) -> str:
         pass
 
     @abstractmethod
-    def forward_and_log_det(self, data: NDArray) -> tuple[NDArray, NDArray]:
+    def forward_and_log_det(
+            self, 
+            data: NDArray, 
+            mask: Optional[NDArray] = None
+    ) -> tuple[tuple[NDArray, NDArray], NDArray]:
         pass
 
     @abstractmethod

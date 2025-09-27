@@ -1,13 +1,79 @@
 from blackjax.types import Array
 from dipolesbi.tools.healpix_helpers import split_off_details
 from dipolesbi.tools.transforms import InvertibleDataTransform
-from typing import Literal, Callable, cast
+from typing import Literal, Callable, Optional, cast
 import numpy as np
 from numpy.typing import NDArray
 from jax import numpy as jnp
 import healpy as hp
 import math
 
+
+class MaskedSubspaceTransforms:
+    def __init__(self) -> None:
+        # make lookup table for all mask permutations
+        _T_list, _k_list = zip(*[self._transform_for_mask(m) for m in range(16)])
+        self.T_TABLE = jnp.stack(_T_list, axis=0) # (16, 4, 4), (i, 4, 4) a matrix mask perm
+        self.K_TABLE = jnp.array(_k_list)         # (16,), corresponding n_observed in 4-block
+
+    def _Wk(self, k: int) -> jnp.ndarray:
+        '''
+        For each masked subspace, construct a matrix transform corresponding
+        to a particular orthonormal basis such that log det is zero and the
+        detail vectors correspond to zero sums, among other conditions.
+        Note that k = 2 and k = 4 are just the Hadamard matrices,
+        whereas k = 3 is a 'Helmert' basis basis.
+        '''
+        if k == 1:
+            return jnp.array([[1.0]]) # i.e., get the same pixel out
+        if k == 2:
+            return (1/jnp.sqrt(2)) * jnp.array(
+                [[1,  1],
+                 [1, -1]]
+            ) # H_2
+        if k == 3:
+            # Helmert basis: coarse coefficient, then two zero-sum orthonormal contrasts
+            return jnp.array(
+                [[1/jnp.sqrt(3),  1/jnp.sqrt(3),  1/jnp.sqrt(3)],
+                 [1/jnp.sqrt(2), -1/jnp.sqrt(2),  0.0          ],
+                 [1/jnp.sqrt(6),  1/jnp.sqrt(6), -2/jnp.sqrt(6)]]
+            )
+        if k == 4:
+            return 0.5 * jnp.array(
+                [[ 1,  1,  1,  1],
+                 [ 1,  1, -1, -1],
+                 [ 1, -1,  1, -1],
+                 [ 1, -1, -1,  1]]
+            ) # H_4
+        raise ValueError("k must be 1, 2, 3 or 4.")
+
+    def _selector(self, idx: list) -> jnp.ndarray:
+        # k×4 column selector that picks observed child positions in order
+        k = len(idx)
+        S = jnp.zeros((k, 4))
+        return S.at[jnp.arange(k), jnp.array(idx)].set(1.0)
+
+    def _transform_for_mask(
+            self, 
+            mask_bits: int
+    ) -> tuple[jnp.ndarray, int]:
+        # mask bits is an encoded representation of the 4-bit mask (16 possible values),
+        # so a number between 0 and 15.
+        # bit i (0..3) says child i is observed
+        idx = [i for i in range(4) if (mask_bits >> i) & 1]
+        k = len(idx)
+
+        if k == 0:
+            # Empty block: return all-zero matrix
+            T = jnp.zeros((4, 4))
+            return T, 0
+
+        Wk = self._Wk(k)            # k×k orthonormal
+        S = self._selector(idx)     # k×4 selector of observed columns
+        Tk = Wk @ S                 # k×4, rows = [c0; details], columns = children
+        # pad to 4×4 so we can keep shapes fixed
+        T = jnp.zeros((4, 4)).at[:k, :].set(Tk)
+        return T, k
 
 class HadamardTransform(InvertibleDataTransform):
     def __init__(
@@ -55,6 +121,7 @@ class HadamardTransform(InvertibleDataTransform):
                 # If the check itself fails, raise with context
                 raise
 
+        self.subspace = MaskedSubspaceTransforms()
         self.matrix_type = matrix_type
         self.H = 0.5 * self.xp.asarray(
             [[1., 1. , 1. ,  1.],
@@ -269,18 +336,22 @@ class HadamardTransform(InvertibleDataTransform):
         self._cycle_healpix_tree(data)
         return
 
-    def forward_and_log_det(self, data: NDArray) -> tuple[NDArray, NDArray]:
+    def forward_and_log_det(
+            self, 
+            data: NDArray, 
+            mask: Optional[NDArray] = None
+    ) -> tuple[tuple[NDArray, NDArray], NDArray]:
         # Ensure backend array; remember original dtype for optional cast-back
         orig_dtype = getattr(data, 'dtype', None)
         data = self.xp.asarray(data, dtype=self.dtype)
-        z, logdet = self._cycle_healpix_tree(data)
+        (z, mask), logdet = self._cycle_healpix_tree(data)
         try:
             if orig_dtype == getattr(self.xp, 'float32'):
                 z = z.astype(self.xp.float32)
                 logdet = logdet.astype(self.xp.float32)
         except Exception:
             pass
-        return z, logdet
+        return (z, mask), logdet
 
     def inverse_and_log_det(self, transformed_data: NDArray) -> tuple[NDArray, NDArray]:
         orig_dtype = getattr(transformed_data, 'dtype', None)
@@ -298,14 +369,20 @@ class HadamardTransform(InvertibleDataTransform):
         steps = split_off_details(self.first_nside, self.last_nside)
         return steps
 
-    # TODO: ok you need to verify this function
     def _cycle_healpix_tree(
             self, 
-            y: NDArray
-    ) -> tuple[NDArray, NDArray]:
+            y: NDArray,
+            mask: Optional[NDArray] = None
+    ) -> tuple[tuple[NDArray, NDArray], NDArray]:
+        if mask is None:
+            mask = self.xp.ones_like(y)
+        assert mask is not None # bloody type hinter
+        assert mask.shape == y.shape
+
         batches, npix_fine = y.shape
         cur_npix = npix_fine
         coefficients_fine2coarse: list[NDArray] = [] 
+        mask_fine2coarse: list[NDArray] = []
         a_list: list[NDArray] = []
         logdets_at_each_level: list[NDArray] = []
         abslogdet: NDArray = self.xp.zeros(batches)
@@ -315,25 +392,34 @@ class HadamardTransform(InvertibleDataTransform):
         
         logdet = self.xp.zeros(batches)
         downstream_coefficients = y
+        downstream_mask = mask
 
         for lvl, factor in enumerate(self.downscale_factors):
             per_level_logdet = self.xp.zeros(())
 
             P = cur_npix // factor
             child_pixels = downstream_coefficients.reshape(batches, P, factor)
+            subspace_mask = downstream_mask.reshape(batches, P, factor)
 
             # by construction, coarse coeffs lives in [..., 0] and the detail [..., 1:]
-            z = self._forward_matrix_product(child_pixels) # (n_batches, n_pix // 4, 4)
+            # in the 3 masked 1 valid case, we always get 1 pixel i.e. a downstream coeff
+            z, valid = self._forward_matrix_product_masked(child_pixels, subspace_mask) # (B, P // 4, 4)
+
+            coarse_coeffs = z[..., 0]
+            coarse_mask = valid[..., 0]
 
             logdets_at_each_level.append(per_level_logdet)
             logdet += per_level_logdet
 
             coefficients_fine2coarse.append(z)
-            a_list.append(z[..., 0])
-            downstream_coefficients = z[..., 0]
+            mask_fine2coarse.append(valid)
+            a_list.append(coarse_coeffs)
+            downstream_coefficients = coarse_coeffs
+            downstream_mask = coarse_mask
             cur_npix = P
 
         a_coarse = downstream_coefficients # (batches, out_npix)
+        a_mask = downstream_mask
 
         if self.empty_norm_stats_flag:
             mean_coarse = a_coarse.mean(axis=0) # across the batch axis
@@ -355,12 +441,17 @@ class HadamardTransform(InvertibleDataTransform):
         # Build z: keep a_coarse, then details from coarse->fine
         # (drop the a's there)
         z_parts = [a_coarse.reshape(batches, -1)]  # list[ (B, out_npix) ]
+        z_mask_parts = [a_mask.reshape(batches, -1)]
         lvl_idx = self.n_levels - 1
 
         if self.empty_norm_stats_flag:
             assert self._post_dict_is_empty(check_coarse=False)
 
-        for lvl, y in enumerate(reversed(coefficients_fine2coarse)): # now coarse->fine
+        # I think tje z-scoring is not the best approach now with different
+        # basis vectors depending on the masked subspace
+        for lvl, (y, msk) in enumerate(
+            zip(reversed(coefficients_fine2coarse), reversed(mask_fine2coarse))
+        ): # now coarse->fine
             
             if self.empty_norm_stats_flag:
                 mean_d1 = y[..., 1].mean(axis=0)
@@ -398,7 +489,9 @@ class HadamardTransform(InvertibleDataTransform):
                 self.std_at_level_post['detail'][2][lvl_idx - lvl] = std_d3
 
             z_parts.append(y[..., 1:].reshape(batches, -1))
+            z_mask_parts.append(msk[..., 1:].reshape(batches, -1))
         z = self.xp.concatenate(z_parts, axis=1)
+        z_mask = self.xp.concatenate(z_mask_parts, axis=1)
 
         self.empty_norm_stats_flag = False
         
@@ -406,9 +499,8 @@ class HadamardTransform(InvertibleDataTransform):
         # we only need to extract one scalar (first element) from this 1D array
         self.logdet = abslogdet[0]
 
-        return z, abslogdet
+        return (z, z_mask), abslogdet
 
-    # TODO: this one too
     def _reverse_cycle_healpix_tree(self,
         transformed_data: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -469,7 +561,25 @@ class HadamardTransform(InvertibleDataTransform):
         return x_rec, inverse_logdet
 
     def _forward_matrix_product(self, v: NDArray) -> NDArray:
-        return v @ self.Q
+        return v @ self.Q # (B, npix, 4) @ (4,4)
+
+    def _forward_matrix_product_masked(
+            self, 
+            v: NDArray, 
+            mask: NDArray
+    ) -> tuple[NDArray, NDArray]:
+        # for each 4-block, encode the mask as a 4-bit integer
+        bitw = self.xp.array([1, 2, 4, 8], dtype=self.xp.int32)
+        encoded_mask = (mask.astype(self.xp.int32) * bitw).sum(axis=-1)
+
+        T = self.subspace.T_TABLE[encoded_mask] # lookup a 4x4 transform mat
+        T_T = self.xp.swapaxes(T, -1, -2) # transpose matrix, shape (B, P//4, 4, 4)
+
+        coeffs = self.xp.einsum('bnq, bnqQ -> bnQ', v, T_T) # (B, P//4, 4)
+
+        k_rows = self.subspace.K_TABLE[encoded_mask]
+        valid = self.xp.arange(4)[None, None, :] < k_rows[..., None]
+        return coeffs, valid
 
     def _inverse_matrix_product(self, z: NDArray) -> NDArray:
         return z @ self.Q_inv
