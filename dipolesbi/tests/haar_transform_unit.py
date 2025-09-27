@@ -1,4 +1,5 @@
 import unittest
+from jax.random import PRNGKey
 import numpy as np
 from dipolesbi.tools.healpix_helpers import split_off_details
 from dipolesbi.tools.np_rngkey import prng_key
@@ -151,6 +152,29 @@ class TestHaarTransform(unittest.TestCase):
         np.testing.assert_almost_equal(
             dmap * mask, 
             dmap_recovered * mask, 
+            err_msg='Recovered != original.'
+        )
+
+    def test_inverse_random_mask_jax(self):
+        nside = 32
+        key = PRNGKey(123)
+        npix = 12 * nside**2
+        lam = 50
+        n_batches = 1000
+
+        dmap = jax.random.poisson(key, lam, shape=(n_batches, npix))
+        transform = HadamardTransformJax(first_nside=nside, last_nside=1)
+        mask = jax.random.randint(key, minval=0, maxval=2, shape=dmap.shape)
+
+        (dmap_transformed, zmask), _ = transform(dmap, mask) # type: ignore
+        (dmap_recovered, mask_rec), _ = transform.inverse_and_log_det(
+            dmap_transformed, zmask
+        )
+
+        np.testing.assert_equal(np.asarray(mask), np.asarray(mask_rec))
+        np.testing.assert_almost_equal(
+            np.asarray(dmap * mask), 
+            np.asarray(dmap_recovered * mask), 
             err_msg='Recovered != original.'
         )
 
