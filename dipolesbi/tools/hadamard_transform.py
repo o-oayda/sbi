@@ -542,6 +542,12 @@ class HadamardTransform(InvertibleDataTransform):
         # we only need to extract one scalar (first element) from this 1D array
         self.logdet = abslogdet
 
+        # we have to hack slightly and assume all masks are the same for
+        # all batches, since jax requires me to statically-compute the indexes
+        # I slice the data with; this is ok since the mask shouldn't change
+        # over runs
+        self.keep_idxs = jnp.where(z_mask[0, :])[0]
+
         return (z, z_mask), abslogdet
 
     def _reverse_cycle_healpix_tree(self,

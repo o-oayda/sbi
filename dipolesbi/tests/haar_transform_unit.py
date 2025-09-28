@@ -155,6 +155,41 @@ class TestHaarTransform(unittest.TestCase):
             err_msg='Recovered != original.'
         )
 
+    def test_inverse_random_mask_no_nans(self):
+        nside = 32
+        key = prng_key(123)
+        npix = 12 * nside**2
+        lam = 50
+        n_batches = 1000
+
+        dmap = key.poisson(lam, shape=(n_batches, npix)).astype('float32') # ensure batchwise dim exists
+        transform = HadamardTransform(first_nside=nside, last_nside=1)
+
+        # hardcoded requirement for all masks to be the same
+        mask = np.random.randint(low=0, high=2, size=dmap.shape[1], dtype=np.bool_) 
+        # mask = np.random.randint(low=0, high=2, size=dmap.shape, dtype=np.bool_)
+        mask = mask[None, :].repeat(axis=0, repeats=n_batches)
+        print(mask)
+        print(mask.shape)
+        print()
+        dmap[~mask] = np.nan
+
+        (dmap_transformed, zmask), _ = transform(dmap, mask)
+        (dmap_recovered, mask_rec), _ = transform.inverse_and_log_det(
+            dmap_transformed, zmask
+        )
+
+        # check no nans have propagated through despite being masked
+        assert (~np.isnan(dmap[mask])).all()
+        assert (~np.isnan(dmap_transformed[zmask])).all()
+
+        np.testing.assert_equal(mask, mask_rec)
+        np.testing.assert_almost_equal(
+            dmap[mask], 
+            dmap_recovered[mask], 
+            err_msg='Recovered != original.'
+        )
+
     def test_inverse_random_mask_jax(self):
         nside = 32
         key = PRNGKey(123)
