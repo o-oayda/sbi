@@ -126,8 +126,11 @@ class AbstractNeuralFlow(ABC):
                 data = data._replace(x=transformed_theta)
 
             elif (self.mode == 'NPE') and (self.data_transform is not None):
-                transformed_data, _ = self.data_transform(data.y)
+                (transformed_data, transformed_mask), _ = self.data_transform(
+                    data.y, data.mask
+                )
                 data = data._replace(y=transformed_data)
+                data = data._replace(mask=transformed_mask)
 
             new_data.append(data)
 
@@ -149,8 +152,9 @@ class AbstractNeuralFlow(ABC):
         if self._target_is_pretransformed:
             for data in all_data:
                 if (self.mode == 'NLE') and (self.data_transform is not None):
-                    transformed_data, _ = self.data_transform(data.y)
+                    (transformed_data, transformed_mask), _ = self.data_transform(data.y)
                     data = data._replace(y=transformed_data)
+                    data = data._replace(mask=transformed_mask)
 
                 elif (self.mode == 'NPE') and (self.theta_transform is not None):
                     transformed_theta, _ = self.theta_transform(data.x)
@@ -936,6 +940,7 @@ class NeuralFlow(AbstractNeuralFlow):
             ), 
             layers: list, 
             blocks: list[tuple[int, int]],
+            mask: jnp.ndarray,
             in_dim: int,
             integer_transform: Optional[
                 Callable[
@@ -946,7 +951,10 @@ class NeuralFlow(AbstractNeuralFlow):
             one_and_done: bool = False,
             maf_extension: Optional[int] = None
     ) -> tuple[list, int]:
-        dim = in_dim
+        dim = in_dim # no 
+        mask_r = mask[::-1]
+        n_seen = mask.sum()
+        dim = n_seen
 
         if one_and_done:
             assert maf_extension is None
@@ -960,26 +968,34 @@ class NeuralFlow(AbstractNeuralFlow):
         else:
             maf_extension = 0
 
-        for lvl, (n_keep, n_drop) in enumerate(blocks):
+        mask_start_idx = 0
+        for lvl, (n_keep_full, n_drop_full) in enumerate(blocks):
             # n_keep and n_dropped split data into y_minus and y_plus, as in
             # y_plus, y_minus = y[..., : self.n_keep], y[..., self.n_keep :]
+            # however, we need to be privy to the mask on the data; the data
+            # will be truncated, and we don't want to drop off more pixels
+            # than are valid at that level
+            nd = int(mask_r[mask_start_idx:mask_start_idx+n_drop_full].sum())
+            nk = int(dim - nd)
+
             surjective_layer = surjective_layer_type( # type: ignore
-                n_keep=n_keep,
+                n_keep=n_keep_full,
                 decoder=self._decoder_fn(
-                    n_dimension=n_drop,
+                    n_dimension=nd,
                     decoder_distribution=self.nflow_config.decoder_distribution,
                     integer_transform=(
                         integer_transform(lvl) if integer_transform else None
                     )
                 ),
                 conditioner=self._conditioner_fn(
-                    input_dim=n_keep,
-                    output_dim=2 * n_keep
+                    input_dim=nk,
+                    output_dim=2 * nk
                 )
             )
-            setattr(surjective_layer, 'n_drop', n_drop) # for __repr__
+            setattr(surjective_layer, 'n_drop', nd) # for __repr__
             layers.append(surjective_layer)
-            dim = n_keep
+            dim = nk
+            mask_start_idx += n_drop_full
 
             # bijective extension
             for _ in range(maf_extension):
@@ -995,7 +1011,7 @@ class NeuralFlow(AbstractNeuralFlow):
                 layers = self._reverse_perm(layers, dim)
                 
         out_dim = dim
-        return layers, out_dim
+        return layers, int(out_dim)
 
     def _reverse_perm(self, layers: list, dim: int) -> list:
         order = jnp.arange(dim)
@@ -1022,7 +1038,7 @@ class NeuralFlow(AbstractNeuralFlow):
 
         return layers
 
-    def _maybe_transform_healpy_map(self, **kwargs):
+    def _maybe_transform_healpy_map(self, **kwargs) -> tuple[dict, jnp.ndarray]:
         '''
         If the healpix data is the target (NLE), we want to mask out pixels
         such that these pixels are truncated i.e. never seen by the flow.
@@ -1052,24 +1068,22 @@ class NeuralFlow(AbstractNeuralFlow):
         # y being the data here
         elif self.mode == 'NLE':
             # assume all masks are the same across batches
-            col_mask = mask[0]
+            # col_mask = self.data_transform.z_mask.astype(bool)
             
-            # kick the can down the road --- eventually we have to worry about masks
-            # if col_mask.all():
-            #     pass
-            # else:
-            #     y_sel = kwargs['y'][:, col_mask]
-            #     kwargs['y'] = y_sel
+            keep_idxs = self.data_transform.keep_idxs
+            kwargs['y'] = jnp.take(kwargs['y'], keep_idxs, axis=1)
 
-        return kwargs
+        return kwargs, mask
 
     def _make_flow(self, method: str, **kwargs):
         assert self.nflow_config.architecture is not None
 
-        kwargs = self._maybe_transform_healpy_map(**kwargs)
+        # if NLE, masked pixels are always truncated
+        kwargs, batch_mask = self._maybe_transform_healpy_map(**kwargs)
 
         cur_dim = self.target_ndim
         self.layers = []
+        # TODO: assert don't add transform to layers for hadamard? put in hard guard?
         self.layers = self._maybe_add_transform_to_layers(self.layers)
 
         for layer in self.nflow_config.architecture:
@@ -1096,10 +1110,11 @@ class NeuralFlow(AbstractNeuralFlow):
                 )
                 # add surjective healpix funnel
                 self.layers, cur_dim = self._healpix_funnel(
-                    surjective_layer_type, 
-                    self.layers, 
-                    self.blocks, 
-                    cur_dim, 
+                    surjective_layer_type=surjective_layer_type, 
+                    layers=self.layers, 
+                    blocks=self.blocks, 
+                    mask=batch_mask[0, :], # assuming all masks are the same
+                    in_dim=cur_dim, 
                     integer_transform=None,
                     one_and_done=self.nflow_config.funnel_one_and_done,
                     maf_extension=self.nflow_config.funnel_maf_extension
