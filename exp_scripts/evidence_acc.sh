@@ -11,14 +11,14 @@ done
 # Remove --resume from positional parameters
 set -- $(printf '%s\n' "$@" | grep -v -- '--resume')
 
-# e.g. exp_scripts/evidence_acc.sh 16 'cold_start_only_post_100k' --resume
+# e.g. exp_scripts/evidence_acc.sh 16 'NLE,NPE' 'cold_start_only_post_100k' --resume
 if [ "$#" -ne 3 ]; then
-    echo "Usage: $0 <NSIDE> <DESCRIPTOR> [--resume]"
+    echo "Usage: $0 <NSIDE> <MODE[,MODE...]> <DESCRIPTOR> [--resume]"
     exit 1
 fi
 
 NSIDE=$1
-MODE=$2
+MODE_INPUT=$2
 DESCRIPTOR=$3
 
 # First, check NSIDE is a positive integer
@@ -36,6 +36,24 @@ if [ $((NSIDE & (NSIDE - 1))) -ne 0 ]; then
     echo "Error: NSIDE must be a power of 2."
     exit 1
 fi
+
+# Validate MODE is non-empty and convert comma separated list to canonical form
+if [[ -z "${MODE_INPUT// }" ]]; then
+    echo "Error: MODE must be a non-empty string."
+    exit 1
+fi
+
+IFS=',' read -r -a MODE_ARRAY <<< "$MODE_INPUT"
+VALIDATED_MODES=()
+for raw_mode in "${MODE_ARRAY[@]}"; do
+    trimmed_mode=${raw_mode//[[:space:]]/}
+    if [[ -z "$trimmed_mode" ]]; then
+        echo "Error: MODE entries must be non-empty."
+        exit 1
+    fi
+    VALIDATED_MODES+=("$trimmed_mode")
+done
+MODE=$(IFS=','; echo "${VALIDATED_MODES[*]}")
 
 # Validate DESCRIPTOR is non-empty and not just whitespace
 if [[ -z "${DESCRIPTOR// }" ]]; then

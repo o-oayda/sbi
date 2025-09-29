@@ -49,7 +49,7 @@ def lnZ_plot(inferer: MultiRoundInferer, out_dir: str) -> None:
     latest_folder = max(folders, key=os.path.getctime)
 
     # Save the plot to the latest folder
-    save_path = os.path.join(latest_folder, 'lnZ_evolution.png')
+    save_path = os.path.join(latest_folder, 'lnZ_evolution.pdf')
     plt.savefig(save_path, bbox_inches='tight')
     # plt.show()
 
@@ -67,7 +67,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--mode',
         type=str,
-        help='NLE or NPE.'
+        help='Comma separated list of modes to run (e.g. "NLE" or "NLE,NPE").'
     )
     parser.add_argument(
         '--ssnle_seed',
@@ -86,7 +86,14 @@ if __name__ == '__main__':
     NSIDE = args.nside 
     TOTAL_SOURCES = 1_920_000
     MEAN_DENSITY = np.asarray(TOTAL_SOURCES / hp.nside2npix(NSIDE))
-    MODE = args.mode
+    modes = []
+    if args.mode is not None:
+        for raw_mode in args.mode.split(','):
+            cleaned = raw_mode.strip()
+            if cleaned:
+                modes.append(cleaned.upper())
+    if not modes:
+        raise ValueError('Provide at least one mode via --mode.')
     theta0 = {
         'mean_density': MEAN_DENSITY,
         'observer_speed': np.asarray(2.),
@@ -99,7 +106,7 @@ if __name__ == '__main__':
     x0, mask = model.generate_dipole(npkey_from_jax(x0_rng_key), theta=theta0)
     model.reference_data = x0
     hp.projview(x0.squeeze() * mask.squeeze(), nest=True)
-    plt.savefig('test.png')
+    plt.savefig('example_sample.pdf', bbox_inches='tight')
     plt.show()
 
     prior = DipolePriorNP(
@@ -136,16 +143,21 @@ if __name__ == '__main__':
         'NLE': nside16_scenario_nle,
         'NPE': nside16_scenario_npe
     }
-    cur_cfg = meta_cfg[MODE]
 
-    inferer = MultiRoundInferer(
-        MODE, prior, model.generate_dipole, (x0, mask),
-        multi_round_config=cur_cfg.multiround,
-        transform_config=cur_cfg.transforms,
-        nflow_config=cur_cfg.flow,
-        train_config=cur_cfg.training
-    )
-    inferer.run()
-    
-    if MODE == 'NLE':
-        lnZ_plot(inferer, out_dir=args.out_dir)
+    for MODE in modes:
+        if MODE not in meta_cfg:
+            raise ValueError(f"Mode '{MODE}' not recognised.")
+
+        cur_cfg = meta_cfg[MODE]
+
+        inferer = MultiRoundInferer(
+            MODE, prior, model.generate_dipole, (x0, mask),
+            multi_round_config=cur_cfg.multiround,
+            transform_config=cur_cfg.transforms,
+            nflow_config=cur_cfg.flow,
+            train_config=cur_cfg.training
+        )
+        inferer.run()
+
+        if MODE == 'NLE':
+            lnZ_plot(inferer, out_dir=args.out_dir)
