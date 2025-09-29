@@ -93,6 +93,9 @@ class HadamardTransform(InvertibleDataTransform):
         # backend version of this class
         self.dtype = dtype if dtype is not None else getattr(self.xp, 'float64', float)
 
+        # realistically this should never be part of the flow and always a pre-transform
+        # (1) too slow
+        # (2) only accurate (e.g. recovered Poisson ints) with float64
         # Hard guardrail: if using JAX backend, ensure x64 is enabled and effective
         try:
             is_jax_backend = (self.xp is jnp)
@@ -183,22 +186,32 @@ class HadamardTransform(InvertibleDataTransform):
         """
         x:  (B, P) values
         m:  (B, P) bool mask (True = valid)
-        returns mean:(P,), std:(P,), enough:(P,) bool where count > ddof
+        returns scalar mean, sclalar std, ok where count > ddof
         """
         xp = self.xp
-        mask = mask.astype(x.dtype)
-        n_unmasked = mask.sum(axis=axis)                         # (P,)
-        n_unmasked_safe = xp.maximum(n_unmasked, 1.0)            # stop 0
-        mean = (x * mask).sum(axis=axis) / n_unmasked_safe       # (P,)
 
-        # unbiased sample variance (ddof = 1) over valid entries only
-        xc = x - mean[None, :]
-        var_num = (mask * xc * xc).sum(axis=axis)   # (P,)
-        denom = xp.maximum(n_unmasked - ddof, 1.0)
-        std = xp.sqrt(var_num / denom + eps)        # (P,)
+        # masked (nan) pixels will be caught by the finite flag
+        # we better hope all nans are in the mask else we've got problems
+        finite = xp.isfinite(x)
+        valid = mask.astype(bool) & finite
 
-        enough = n_unmasked > ddof                  # True for >= 2 samples with ddof=1
-        return mean, std, enough
+        w = valid.astype(x.dtype)
+        n_seen = w.sum(axis=axis, keepdims=True)
+        n_seen_safe = xp.maximum(n_seen, 1.)
+
+        # don't do mask * x since nan vals will fuck that up
+        # instead zero masked pixels so they are excluded from the sum
+        x_masked = xp.where(valid, x, 0.)
+        mean = x_masked.sum(axis=axis, keepdims=True) / n_seen_safe
+
+        # same for variance
+        xc = xp.where(valid, x - mean, 0.)
+        var_num = (xc * xc).sum(axis=axis, keepdims=True)
+        denom = xp.maximum(n_seen - ddof, 1.)
+        std = xp.sqrt(var_num / denom + eps)
+
+        ok = n_seen > ddof # enough batches to be meaningful std
+        return mean, std, ok
 
     def _make_post_dict(self) -> dict:
         xp = self.xp
@@ -365,15 +378,8 @@ class HadamardTransform(InvertibleDataTransform):
             mask: Optional[NDArray] = None
     ) -> tuple[tuple[NDArray, NDArray], NDArray]:
         # Ensure backend array; remember original dtype for optional cast-back
-        orig_dtype = getattr(data, 'dtype', None)
         data = self.xp.asarray(data, dtype=self.dtype)
         (z, mask), logdet = self._cycle_healpix_tree(data, mask)
-        try:
-            if orig_dtype == getattr(self.xp, 'float32'):
-                z = z.astype(self.xp.float32)
-                logdet = logdet.astype(self.xp.float32)
-        except Exception:
-            pass
         return (z, mask), logdet
 
     def inverse_and_log_det(
@@ -381,18 +387,11 @@ class HadamardTransform(InvertibleDataTransform):
             transformed_data: NDArray, 
             transformed_mask: NDArray
     ) -> tuple[tuple[NDArray, NDArray], NDArray]:
-        orig_dtype = getattr(transformed_data, 'dtype', None)
         transformed_data = self.xp.asarray(transformed_data, dtype=self.dtype)
         (x, mask), logdet = self._reverse_cycle_healpix_tree(
             transformed_data, 
             transformed_mask
         )
-        try:
-            if orig_dtype == getattr(self.xp, 'float32'):
-                x = x.astype(self.xp.float32)
-                logdet = logdet.astype(self.xp.float32)
-        except Exception:
-            pass
         return (x, mask), logdet
 
     def _build_surjective_blocks(self) -> list[tuple[int, int]]:
@@ -432,6 +431,12 @@ class HadamardTransform(InvertibleDataTransform):
             child_pixels = downstream_coefficients.reshape(batches, P, factor)
             subspace_mask = downstream_mask.reshape(batches, P, factor)
 
+            # since the selector * Hadamard transform matrix is zero-padded to
+            # 4x4, if we didn't do this and had nans in the masked pixels,
+            # despite them being masked thet would still be part of the matrix
+            # product and therey blow up the computation --- we need to zero
+            child_pixels = self.xp.where(subspace_mask, child_pixels, 0.)
+
             # by construction, coarse coeffs lives in [..., 0] and the detail [..., 1:]
             # in the 3 masked 1 valid case, we always get 1 pixel i.e. a downstream coeff
             z, valid = self._forward_matrix_product_masked(child_pixels, subspace_mask) # (B, P // 4, 4)
@@ -455,19 +460,30 @@ class HadamardTransform(InvertibleDataTransform):
         if self.empty_norm_stats_flag:
             mean_coarse, std_coarse, enough_c = self._masked_moments(
                 a_coarse, a_mask, axis=0, ddof=1
-            ) # across the batch axis
-            assert enough_c.all(), 'Somehow there are < 2 detail coefficients at a level...'
+            ) # we get shapes (1, P) out, so squeeze down
+
+            # do a blank transform where the stats are undefined
+            mean_coarse = self.xp.where(
+                self.xp.squeeze(enough_c),
+                self.xp.squeeze(mean_coarse),
+                0.,
+            )
+            std_coarse = self.xp.where(
+                self.xp.squeeze(enough_c),
+                self.xp.squeeze(std_coarse),
+                1.,
+            )
         else:
             mean_coarse = self.mu_at_level_post['coarse']
             std_coarse  = self.std_at_level_post['coarse']
             enough_c    = self.xp.ones_like(std_coarse, dtype=bool)
 
-        # set masked to 0, these should be removed later
-        a_coarse = self.xp.where(a_mask, (a_coarse - mean_coarse) / std_coarse, 0.0)
+        # set masked to 0, these should be removed later, and apply zscore
+        a_coarse = self.xp.where(a_mask, (a_coarse - mean_coarse) / std_coarse, 0.)
 
         # only add the logdet per batch for valid coarse coeffs
         abslogdet += - (
-            a_mask.astype(a_coarse.dtype) * self.xp.log(std_coarse)[None, :]
+            a_mask.astype(a_coarse.dtype) * self.xp.log(std_coarse)
         ).sum(axis=1)
 
         if self.empty_norm_stats_flag:
@@ -492,10 +508,22 @@ class HadamardTransform(InvertibleDataTransform):
         ): # now coarse->fine
             
             if self.empty_norm_stats_flag:
-                mu_d1, s_d1, ok1 = self._masked_moments(y[..., 1], msk[..., 1], axis=0, ddof=1)
-                mu_d2, s_d2, ok2 = self._masked_moments(y[..., 2], msk[..., 2], axis=0, ddof=1)
-                mu_d3, s_d3, ok3 = self._masked_moments(y[..., 3], msk[..., 3], axis=0, ddof=1)
-                assert ok1.all(); assert ok2.all(); assert ok3.all()
+                def _clean_stats(mu_c, std_c, ok_c):
+                    '''Blank transform on undefined stats.'''
+                    ok_c = self.xp.squeeze(ok_c)
+                    mu_c = self.xp.where(ok_c, self.xp.squeeze(mu_c), 0.)
+                    std_c = self.xp.where(ok_c, self.xp.squeeze(std_c), 1.)
+                    return mu_c, std_c
+
+                mu_d1, s_d1 = _clean_stats(
+                    *self._masked_moments(y[..., 1], msk[..., 1], axis=0, ddof=1)
+                )
+                mu_d2, s_d2 = _clean_stats(
+                    *self._masked_moments(y[..., 2], msk[..., 2], axis=0, ddof=1)
+                )
+                mu_d3, s_d3 = _clean_stats(
+                    *self._masked_moments(y[..., 3], msk[..., 3], axis=0, ddof=1)
+                )
             else:
                 mu_d1 = self.mu_at_level_post['detail'][0][lvl_idx - lvl]
                 mu_d2 = self.mu_at_level_post['detail'][1][lvl_idx - lvl]
@@ -504,8 +532,6 @@ class HadamardTransform(InvertibleDataTransform):
                 s_d1 = self.std_at_level_post['detail'][0][lvl_idx - lvl]
                 s_d2 = self.std_at_level_post['detail'][1][lvl_idx - lvl]
                 s_d3 = self.std_at_level_post['detail'][2][lvl_idx - lvl]
-
-                ok1 = ok2 = ok3 = self.xp.ones_like(s_d1, dtype=bool)
             
             if self.normalise_details:
                 means = self.xp.stack([mu_d1, mu_d2, mu_d3], axis=-1)  # (P,3)
@@ -513,14 +539,23 @@ class HadamardTransform(InvertibleDataTransform):
                 y_details = (y[..., 1:] - means[None, :, :]) / stds[None, :, :]
 
                 # zero out invalid rows so they don’t pollute anything
-                y_details = self.xp.where(msk[..., 1:], y_details, 0.0)
+                y_details = self.xp.where(msk[..., 1:], y_details, 0.)
 
-                y = self.xp.concatenate([y[..., :1], y_details], axis=-1)
+                y_details = self.xp.reshape(y_details, (batches, y.shape[1], -1))
+                y_head = self.xp.reshape(y[..., :1], (batches, y.shape[1], 1))
+                y = self.xp.concatenate([y_head, y_details], axis=-1)
 
                 # do log det only where it is valid
                 logstd = self.xp.log(stds)[None, :, :]              # (1,P,3)
                 weight = msk[..., 1:].astype(y.dtype)               # (B,P,3)
-                abslogdet += - (weight * logstd).sum(axis=(1, 2))
+
+                # since we do the same affine transform per batch, this is fine
+                if hasattr(self.xp, 'broadcast_to'):
+                    logstd_b = self.xp.broadcast_to(logstd, weight.shape)
+                else:
+                    logstd_b = self.xp.repeat(logstd, axis=0, repeats=batches)
+
+                abslogdet += - (weight * logstd_b).sum(axis=(1, 2))
 
             if self.empty_norm_stats_flag:
                 self.mu_at_level_post['detail'][0][lvl_idx - lvl] = mu_d1

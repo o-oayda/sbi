@@ -169,9 +169,6 @@ class TestHaarTransform(unittest.TestCase):
         mask = np.random.randint(low=0, high=2, size=dmap.shape[1], dtype=np.bool_) 
         # mask = np.random.randint(low=0, high=2, size=dmap.shape, dtype=np.bool_)
         mask = mask[None, :].repeat(axis=0, repeats=n_batches)
-        print(mask)
-        print(mask.shape)
-        print()
         dmap[~mask] = np.nan
 
         (dmap_transformed, zmask), _ = transform(dmap, mask)
