@@ -11,7 +11,7 @@ done
 # Remove --resume from positional parameters
 set -- $(printf '%s\n' "$@" | grep -v -- '--resume')
 
-# e.g. exp_scripts/evidence_acc.sh 16 'NLE,NPE' 'cold_start_only_post_100k' --resume
+# e.g. exp_scripts/multiround_inferer.sh 16 'NLE,NPE' 'cold_start_only_post_100k' --resume
 if [ "$#" -ne 3 ]; then
     echo "Usage: $0 <NSIDE> <MODE[,MODE...]> <DESCRIPTOR> [--resume]"
     exit 1
