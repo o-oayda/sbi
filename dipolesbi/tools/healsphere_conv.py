@@ -130,9 +130,16 @@ class HealpixDown(hk.Module):
         if mask.ndim != 3:
             raise ValueError("Mask must have shape (batch, npix, 1) or (batch, npix, channels)")
 
+        # grab mask for each subspace / 4-pixel
         mask_gathered = jnp.take(mask, self.groups, axis=1)
+
+        # sum the binary mask in the 4-pixel and compute mean
+        # will either be 0, 0.25, 0.5, 0.75 or 1
         mask_sum = jnp.sum(mask_gathered, axis=2, keepdims=True)
         mask_mean = mask_sum / mask_gathered.shape[2]
+
+        # replace 0 means with 1e-6 to avoid nans below --- these are filtered out
+        # then do a mean dividing only by the number of unmasked pixels
         mask_sum = jnp.maximum(mask_sum, 1e-6)
         pooled = jnp.sum(gathered * mask_gathered, axis=2) / mask_sum.squeeze(-1)
         return pooled, mask_mean.squeeze(-1)

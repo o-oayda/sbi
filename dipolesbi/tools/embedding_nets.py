@@ -120,8 +120,11 @@ class HpCNNEmbedding(hk.Module):
         z_flat = jnp.reshape(z, (z.shape[0], -1))
         if self.dropout_rate > 0.0 and is_training:
             z_flat = hk.dropout(hk.next_rng_key(), self.dropout_rate, z_flat)
-        m_flat = jnp.reshape(m, (m.shape[0], -1))
+
+        # not using mask 'weights'
+        # m_flat = jnp.reshape(m, (m.shape[0], -1))
         # z = jnp.concatenate([z_flat, m_flat], axis=-1)
+
         z = z_flat
 
         hidden_layers = max(self.n_mlp_layers - 1, 0)
