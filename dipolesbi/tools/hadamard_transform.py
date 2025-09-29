@@ -618,7 +618,30 @@ class HadamardTransform(InvertibleDataTransform):
             mask_coarse2fine.append(d_mask)
 
         # encoded masks at each level saved from forward pass
+        # handle broadcasting over arbitrary batch dimension
         encoded_fine2coarse = self.encoded_masks_fine2coarse
+        if encoded_fine2coarse:
+            broadcasted_masks = []
+            for codes in encoded_fine2coarse:
+                if codes.shape[0] == batches:
+                    broadcasted_masks.append(codes)
+                    continue
+
+                base_codes = codes[0:1]
+                can_broadcast = (
+                    codes.shape[0] == 1
+                    or bool(self.xp.all(codes == base_codes))
+                )
+
+                if can_broadcast:
+                    broadcasted_masks.append(
+                        self.xp.broadcast_to(base_codes, (batches,) + codes.shape[1:])
+                    )
+                else:
+                    raise ValueError(
+                        'Encoded mask batch dimension does not match current batch.'
+                    )
+            encoded_fine2coarse = broadcasted_masks
 
         # reconstruct coarse->fine
         upstream_data = a
@@ -658,7 +681,21 @@ class HadamardTransform(InvertibleDataTransform):
         x_rec = upstream_data
 
         # hack slightly and assume forward has been called
-        inverse_logdet = -self.logdet * self.xp.ones(batches)
+        # broadcast over arbitrary batch dimension
+        logdet = self.logdet
+        if logdet.shape == ():  # scalar
+            base_logdet = logdet
+        elif logdet.shape[0] == batches:
+            base_logdet = logdet
+        else:
+            if logdet.shape[0] == 1 or bool(self.xp.all(logdet == logdet[0])):
+                base_logdet = self.xp.broadcast_to(logdet[0], batches)
+            else:
+                raise ValueError(
+                    'Stored logdet does not match requested batch size.'
+                )
+
+        inverse_logdet = -base_logdet * self.xp.ones(batches)
 
         # Recover original mask
         codes_fine = encoded_fine2coarse[0]

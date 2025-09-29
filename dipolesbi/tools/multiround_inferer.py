@@ -314,14 +314,12 @@ class MultiRoundInferer:
         assert self.nflow is not None
 
         ndim = self.data_ndim
-        bytes_per_elem = 4  # float32
-
-        # Heuristic chunk size: keep output under chunk_bytes_gb on device
+        bytes_per_elem = np.dtype(np.float32).itemsize
         max_per_chunk = max(
-            1, 
-            int((chunk_bytes_gb * (1024**3)) // (ndim * bytes_per_elem))
+            1,
+            int((chunk_bytes_gb * (1024 ** 3)) // (ndim * bytes_per_elem))
         )
-        m = min(n_repeats, max_per_chunk)
+        chunk_size = min(n_repeats, max_per_chunk)
         self.ui.begin_progress(total=n_repeats)
 
         out = np.empty((n_repeats, ndim), dtype=np.float32)
@@ -332,11 +330,12 @@ class MultiRoundInferer:
             theta0 = self._to_jnp_array(self.reference_theta_jax)
 
         theta0_ndim = theta0.shape[-1]
+        mask_jax = jax.device_put(self.reference_mask)
 
         start = 0
         while start < n_repeats:
-            end = min(n_repeats, start + m)
-            batch_size = end - start
+            batch_size = min(n_repeats - start, chunk_size)
+            end = start + batch_size
 
             theta_chunk = jnp.broadcast_to(theta0, (batch_size, theta0_ndim))
 
@@ -345,12 +344,12 @@ class MultiRoundInferer:
             samples = self.nflow.sample_likelihood_func(
                 subkey,
                 theta0=theta_chunk,
-                mask=jax.device_put(self.reference_mask), # ???
+                mask=mask_jax,
                 sample_shape=(batch_size,)
             )
 
-            samples_host = jax.device_get(samples)
-            out[start:end] = samples
+            samples_host = jax.device_get(samples).astype(np.float32, copy=False)
+            out[start:end] = samples_host
             del samples, samples_host, theta_chunk
 
             start = end
@@ -365,7 +364,7 @@ class MultiRoundInferer:
         assert self.mr_config.reference_theta is not None
         assert self.nflow is not None
 
-        samples = self._sample_likelihood_stream(rng_key, n_repeats)
+        samples = self._sample_likelihood_stream(rng_key, n_repeats) # (B, P)
         true_mean_likelihood, mask = self.simulator_function(
             simulate_key,
             self.mr_config.reference_theta,
@@ -374,13 +373,19 @@ class MultiRoundInferer:
         true_mean_likelihood = true_mean_likelihood.squeeze()
 
         samples = jax.device_get(samples)
-        mask_samples = np.broadcast_to(
-            np.asarray(self.reference_mask, dtype=bool),
-            samples.shape
+
+        # this is a bit shit --- we need to get the transformed mask (zmask)
+        assert self.nflow.data_transform is not None
+        (_, zmask), _ = self.nflow.data_transform(
+            jax.device_put(self.reference_data), jax.device_put(self.reference_mask)
         )
-        samples_untransformed, _ = self._untransform_data_and_logdet(samples, mask_samples)
+        zmask = zmask.repeat(repeats=samples.shape[0], axis=0)
+
+        (samples_untransformed, mask), _ = self._untransform_data_and_logdet(
+            samples, zmask
+        )
         self.mean_samples = samples_untransformed.mean(axis=0)
-        self.mean_samples[~mask.squeeze()] = np.nan
+        self.mean_samples[~mask[0, :]] = np.nan
 
         plt.figure()
         hp.projview(
@@ -706,10 +711,10 @@ class MultiRoundInferer:
             self,
             z: np.ndarray,
             mask: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[tuple[np.ndarray, np.ndarray], np.ndarray]:
         assert self.data_transform is not None
-        (data, _), log_det_jac = self.data_transform.inverse_and_log_det(z, mask)
-        return data, log_det_jac
+        (data, mask), log_det_jac = self.data_transform.inverse_and_log_det(z, mask)
+        return (data, mask), log_det_jac
 
     def _clear_data_summary_stats(self) -> None:
         if (self.data_transform is not None) and (self.theta_transform is not None):

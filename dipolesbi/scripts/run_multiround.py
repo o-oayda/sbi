@@ -99,6 +99,7 @@ if __name__ == '__main__':
     x0, mask = model.generate_dipole(npkey_from_jax(x0_rng_key), theta=theta0)
     model.reference_data = x0
     hp.projview(x0.squeeze() * mask.squeeze(), nest=True)
+    plt.savefig('test.png')
     plt.show()
 
     prior = DipolePriorNP(
@@ -145,5 +146,6 @@ if __name__ == '__main__':
         train_config=cur_cfg.training
     )
     inferer.run()
-
-    # lnZ_plot(inferer, out_dir=args.out_dir)
+    
+    if MODE == 'NLE':
+        lnZ_plot(inferer, out_dir=args.out_dir)

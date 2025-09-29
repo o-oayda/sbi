@@ -349,6 +349,9 @@ class AbstractNeuralFlow(ABC):
         # a dict with keys 'x' (theta) and 'y' (data)
         initial_iter = train_iter(0)
 
+        if 'mask' in initial_iter:
+            self._ensure_mask_metadata(initial_iter['mask'])
+
         if self.mode == 'NPE':
             params = self.model.init(
                 next(rng_seq), 
@@ -369,6 +372,44 @@ class AbstractNeuralFlow(ABC):
             )
 
         return params
+
+    # TODO: this whole thing needs to be refactored (definitely not a part of neural flows)
+    # we should probably be passing a mask object around with relevant stats
+    def _ensure_mask_metadata(self, mask: jnp.ndarray | np.ndarray) -> None:
+        if self._mask_metadata is not None:
+            return
+
+        mask_arr = jax.device_get(mask)
+        mask_np = np.asarray(mask_arr)
+        if mask_np.ndim == 0:
+            mask_np = np.asarray([mask_np])
+        if mask_np.ndim == 2:
+            mask_np = mask_np[0]
+        mask_np = mask_np.astype(bool, copy=False)
+
+        mask_rev = mask_np[::-1]
+        n_seen = int(mask_np.sum())
+        keep_indices = np.where(mask_np)[0]
+
+        healpix_counts: list[tuple[int, int]] = []
+        if self.blocks is not None:
+            dim = n_seen
+            mask_start_idx = 0
+            for n_keep_full, n_drop_full in self.blocks:
+                drop_mask = mask_rev[mask_start_idx:mask_start_idx + n_drop_full]
+                nd = int(drop_mask.sum())
+                nk = int(dim - nd)
+                healpix_counts.append((nk, nd))
+                dim = nk
+                mask_start_idx += n_drop_full
+
+        self._mask_metadata = {
+            'mask': mask_np,
+            'mask_rev': mask_rev,
+            'n_seen': n_seen,
+            'healpix_counts': tuple(healpix_counts),
+            'keep_indices': keep_indices,
+        }
 
     def _get_step_fn(self, loss_fn, optimiser):
         if self.mode == 'NLE':
@@ -609,7 +650,24 @@ class AbstractNeuralFlow(ABC):
             mask=mask,
             **kwargs
         )
+        if self.mode == 'NLE' and self.data_transform is not None:
+            meta = self.get_mask_metadata(mask)
+            keep_idxs_np = np.asarray(meta['keep_indices'], dtype=np.int32)
+            keep_idxs = jnp.asarray(keep_idxs_np, dtype=jnp.int32)
+            full_dim = mask.shape[-1] if mask.ndim > 1 else mask.shape[0]
+            nan_value = jnp.array(jnp.nan, dtype=samples.dtype)
+            full = jnp.full((samples.shape[0], full_dim), nan_value, dtype=samples.dtype)
+            full = full.at[:, keep_idxs].set(samples)
+            return full
         return samples
+
+    def get_mask_metadata(self, mask: jnp.ndarray | np.ndarray | None = None) -> dict[str, object]:
+        if self._mask_metadata is None:
+            if mask is None:
+                raise ValueError('Mask metadata requested before initialisation.')
+            self._ensure_mask_metadata(mask)
+        assert self._mask_metadata is not None
+        return self._mask_metadata
 
     # props to sbijax _src/npe.py
     def sample_posterior(
@@ -789,6 +847,7 @@ class NeuralFlow(AbstractNeuralFlow):
         else:
             self.blocks = None
 
+        self._mask_metadata: dict[str, object] | None = None
         self.model = self.get_flow()
 
     @property
@@ -947,7 +1006,7 @@ class NeuralFlow(AbstractNeuralFlow):
             ), 
             layers: list, 
             blocks: list[tuple[int, int]],
-            mask: jnp.ndarray,
+            mask_metadata: Optional[dict[str, object]],
             in_dim: int,
             integer_transform: Optional[
                 Callable[
@@ -958,8 +1017,11 @@ class NeuralFlow(AbstractNeuralFlow):
             one_and_done: bool = False,
             maf_extension: Optional[int] = None
     ) -> tuple[list, int]:
-        mask_r = mask[::-1]
-        n_seen = mask.sum()
+        if mask_metadata is None:
+            raise ValueError('Mask metadata must be initialised before building the healpix funnel.')
+
+        mask_r = np.asarray(mask_metadata['mask_rev'])
+        n_seen = int(mask_metadata['n_seen'])
         dim = n_seen
 
         if one_and_done:
@@ -985,7 +1047,7 @@ class NeuralFlow(AbstractNeuralFlow):
             nk = int(dim - nd)
 
             surjective_layer = surjective_layer_type( # type: ignore
-                n_keep=n_keep_full,
+                n_keep=nk,
                 decoder=self._decoder_fn(
                     n_dimension=nd,
                     decoder_distribution=self.nflow_config.decoder_distribution,
@@ -1078,9 +1140,16 @@ class NeuralFlow(AbstractNeuralFlow):
             kwargs['x'] = self.embedding_network(x_in, mask, is_training=is_training)
 
         # y being the data here
-        elif self.mode == 'NLE' and self.data_transform is not None:
+        elif self.mode == 'NLE' and self.data_transform is not None and 'y' in kwargs:
             # assume all masks are the same across batches
-            keep_idxs = self.data_transform.keep_idxs
+            assert self._mask_metadata is not None, (
+                'Mask metadata must be initialised before applying the data transform.'
+            )
+            keep_idxs_np = self._mask_metadata.get('keep_indices') if self._mask_metadata else None
+            if keep_idxs_np is not None:
+                keep_idxs = jnp.asarray(keep_idxs_np, dtype=jnp.int32)
+            else:
+                keep_idxs = self.data_transform.keep_idxs
             kwargs['y'] = jnp.take(kwargs['y'], keep_idxs, axis=1)
 
         return kwargs, mask
@@ -1091,7 +1160,12 @@ class NeuralFlow(AbstractNeuralFlow):
         # if NLE, masked pixels are always truncated
         kwargs, batch_mask = self._maybe_transform_healpy_map(**kwargs)
 
-        cur_dim = self.target_ndim
+        if 'y' in kwargs:
+            cur_dim = kwargs['y'].shape[-1]
+        elif self._mask_metadata is not None:
+            cur_dim = int(self._mask_metadata['n_seen'])
+        else:
+            cur_dim = self.target_ndim
         self.layers = []
         self.layers = self._maybe_add_transform_to_layers(self.layers)
 
@@ -1118,11 +1192,14 @@ class NeuralFlow(AbstractNeuralFlow):
                     self.nflow_config.surjective_layer_type
                 )
                 # add surjective healpix funnel
+                if self._mask_metadata is None:
+                    self._ensure_mask_metadata(batch_mask)
+
                 self.layers, cur_dim = self._healpix_funnel(
                     surjective_layer_type=surjective_layer_type, 
                     layers=self.layers, 
                     blocks=self.blocks, 
-                    mask=batch_mask[0, :], # assuming all masks are the same
+                    mask_metadata=self._mask_metadata,
                     in_dim=cur_dim, 
                     integer_transform=None,
                     one_and_done=self.nflow_config.funnel_one_and_done,
