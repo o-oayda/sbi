@@ -154,7 +154,8 @@ class SimpleDipoleMap:
             nside: int = 64, 
             dtype: DTypeLike = np.float32,
             reference_data: Optional[NDArray] = None,
-            reference_mask: Optional[NDArray[np.bool_]] = None
+            reference_mask: Optional[NDArray[np.bool_]] = None,
+            is_masked_val: float = np.nan
     ) -> None:
         self.nside = nside
         self.dtype = dtype
@@ -162,7 +163,7 @@ class SimpleDipoleMap:
         self.nest = True
         self.mask = Mask(nside=nside)
         self.masked_pixels = set()
-        self.is_masked_val = 0
+        self._data_masked_val = is_masked_val
 
         self.reference_data = reference_data
         self.reference_mask = reference_mask
@@ -193,7 +194,8 @@ class SimpleDipoleMap:
     def dmap_and_mask(self) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
         out_map = self._density_map.copy()
         mask_map = np.ones_like(self._density_map, dtype=np.bool_)
-        mask_map[:, list(self.masked_pixels)] = self.is_masked_val
+        mask_map[:, list(self.masked_pixels)] = False
+        out_map[~mask_map] = self._data_masked_val
         return out_map, mask_map
 
     def dipole_signal(
