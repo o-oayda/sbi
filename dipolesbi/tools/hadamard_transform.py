@@ -1,7 +1,7 @@
 from blackjax.types import Array
 from dipolesbi.tools.healpix_helpers import split_off_details
 from dipolesbi.tools.transforms import InvertibleDataTransform
-from typing import Literal, Callable, Optional, cast
+from typing import Literal, Callable, cast
 import numpy as np
 from numpy.typing import NDArray
 from jax import numpy as jnp
@@ -367,15 +367,15 @@ class HadamardTransform(InvertibleDataTransform):
         self.std_at_level_post = self._make_post_dict()
         self.empty_norm_stats_flag = True
 
-    def compute_mean_and_std(self, data: NDArray) -> None:
+    def compute_mean_and_std(self, data: NDArray, mask: NDArray) -> None:
         # do a forward cycle to compute stats but don't use outputs
-        self._cycle_healpix_tree(data)
+        self._cycle_healpix_tree(data, mask)
         return
 
     def forward_and_log_det(
             self, 
             data: NDArray, 
-            mask: Optional[NDArray] = None
+            mask: NDArray
     ) -> tuple[tuple[NDArray, NDArray], NDArray]:
         # Ensure backend array; remember original dtype for optional cast-back
         data = self.xp.asarray(data, dtype=self.dtype)
@@ -401,11 +401,8 @@ class HadamardTransform(InvertibleDataTransform):
     def _cycle_healpix_tree(
             self, 
             y: NDArray,
-            mask: Optional[NDArray] = None
+            mask: NDArray
     ) -> tuple[tuple[NDArray, NDArray], NDArray]:
-        if mask is None:
-            mask = self.xp.ones_like(y)
-        assert mask is not None # bloody type hinter
         assert mask.shape == y.shape
 
         batches, npix_fine = y.shape

@@ -1,4 +1,4 @@
-from typing import Literal, Optional, cast
+from typing import Literal, cast
 from numpy.typing import NDArray
 import torch
 from torch.utils.data import Dataset
@@ -18,7 +18,7 @@ class InvertibleDataTransform(ABC):
     def __call__(
             self, 
             data: NDArray, 
-            mask: Optional[NDArray] = None
+            mask: NDArray
     ) -> tuple[tuple[NDArray, NDArray], NDArray]: # (z, mask), logdet
         return self.forward_and_log_det(data, mask)
 
@@ -30,7 +30,7 @@ class InvertibleDataTransform(ABC):
     def forward_and_log_det(
             self, 
             data: NDArray, 
-            mask: Optional[NDArray] = None
+            mask: NDArray
     ) -> tuple[tuple[NDArray, NDArray], NDArray]:
         pass
 
@@ -47,7 +47,7 @@ class InvertibleDataTransform(ABC):
         pass
 
     @abstractmethod
-    def compute_mean_and_std(self, data: NDArray) -> None:
+    def compute_mean_and_std(self, data: NDArray, mask: NDArray) -> None:
         pass
 
 class InvertibleThetaTransformJax(ABC):
@@ -116,18 +116,26 @@ class BlankTransform(InvertibleDataTransform):
     def __repr__(self) -> str:
         return 'BlankTransform(No transform to the data.)'
 
-    def forward_and_log_det(self, data: NDArray) -> tuple[NDArray, NDArray]:
+    def forward_and_log_det(
+            self, 
+            data: NDArray, 
+            mask: NDArray
+    ) -> tuple[tuple[NDArray, NDArray], NDArray]:
         n_batches = data.shape[0]
-        return data, np.zeros_like(n_batches)
+        return (data, mask), np.zeros_like(n_batches)
 
-    def inverse_and_log_det(self, transformed_data: NDArray) -> tuple[NDArray, NDArray]:
+    def inverse_and_log_det(
+            self, 
+            transformed_data: NDArray,
+            transformed_mask: NDArray
+    ) -> tuple[tuple[NDArray, NDArray], NDArray]:
         n_batches = transformed_data.shape[0]
-        return transformed_data, np.zeros_like(n_batches)
+        return (transformed_data, transformed_mask), np.zeros_like(n_batches)
 
     def clear(self) -> None:
         pass
 
-    def compute_mean_and_std(self, data: NDArray) -> None:
+    def compute_mean_and_std(self, data: NDArray, mask: NDArray) -> None:
         return 
 
 class ZScore(InvertibleDataTransform):
@@ -152,21 +160,40 @@ class ZScore(InvertibleDataTransform):
             f")"
         )
 
-    def compute_mean_and_std(self, data: NDArray) -> None:
-        return self._compute_mean_and_std(data)
+    def compute_mean_and_std(self, data: NDArray, mask: NDArray) -> None:
+        return self._compute_mean_and_std(data, mask)
 
-    def _compute_mean_and_std_batchwise(self, data: NDArray) -> None:
-        self.mu = np.nanmean(data, axis=0)
-        self.sigma = np.nanstd(data, axis=0)
+    def _compute_mean_and_std_batchwise(self, data: NDArray, mask: NDArray) -> None:
+        mask_bool = mask.astype(bool)
+        masked = np.where(mask_bool, data, np.nan)
 
-    def _compute_mean_and_std_global(self, data: NDArray, min_std=1e-14) -> None:
-        self.mu = np.nanmean(data)
-        std = np.nanstd(data, axis=1)
-        std[std < min_std] = min_std
-        std = std.mean()
-        self.sigma = std
+        with np.errstate(invalid='ignore'):
+            mu = np.nanmean(masked, axis=0)
+            sigma = np.nanstd(masked, axis=0)
 
-    def forward_and_log_det(self, data: NDArray) -> tuple[NDArray, NDArray]:
+        # when we have means of empty slices, replace with default mu=1, sigma=1 stats
+        self.mu = np.where(np.isnan(mu), 0.0, mu)
+        self.sigma = np.where(np.isnan(sigma) | (sigma < 1e-14), 1.0, sigma)
+
+    def _compute_mean_and_std_global(self, data: NDArray, mask: NDArray, min_std=1e-14) -> None:
+        mask_bool = mask.astype(bool)
+        masked = np.where(mask_bool, data, np.nan)
+
+        with np.errstate(invalid='ignore'):
+            mu = np.nanmean(masked)
+            std_rows = np.nanstd(masked, axis=1)
+
+        std_rows = np.where(np.isnan(std_rows), min_std, std_rows)
+        std_rows[std_rows < min_std] = min_std
+
+        self.mu = 0.0 if np.isnan(mu) else mu
+        self.sigma = std_rows.mean()
+
+    def forward_and_log_det(
+            self,
+            data: NDArray,
+            mask: NDArray
+    ) -> tuple[tuple[NDArray, NDArray], NDArray]:
         '''
         Do a batchwise mean per data dimension.
         '''
@@ -174,23 +201,46 @@ class ZScore(InvertibleDataTransform):
         assert self.sigma is not None
         assert self.mu is not None
 
-        log_det_jac = - np.log(self.sigma).sum() * np.ones(n_batches)
-        if np.ndim(self.sigma) == 0:
-            # times by pixel count if we don't do a batchwise per-pixel zscore
-            log_det_jac *= data.shape[1]
-        z = (data - self.mu) / self.sigma
-        return z, log_det_jac
+        mask_bool = mask.astype(bool)
+        sigma = self.sigma
+        mu = self.mu
 
-    def inverse_and_log_det(self, transformed_data: NDArray) -> tuple[NDArray, NDArray]:
+        z = (data - mu) / sigma
+        z = np.where(mask_bool, z, 0.0)
+
+        if np.ndim(sigma) == 0:
+            observed = mask_bool.sum(axis=1)
+            log_det_jac = - np.log(sigma) * observed
+        else:
+            log_sigma = np.log(sigma)
+            log_det_jac = - (mask_bool * log_sigma[np.newaxis, :]).sum(axis=1)
+
+        return (z, mask_bool), log_det_jac
+
+    def inverse_and_log_det(
+            self,
+            transformed_data: NDArray,
+            transformed_mask: NDArray
+    ) -> tuple[tuple[NDArray, NDArray], NDArray]:
         n_batches = transformed_data.shape[0]
         assert self.sigma is not None
         assert self.mu is not None
 
-        data = transformed_data * self.sigma + self.mu
-        log_det_jac = np.log(self.sigma).sum() * np.ones(n_batches) # type: ignore
-        if np.ndim(self.sigma) == 0:
-            log_det_jac *= data.shape[1]
-        return data, log_det_jac
+        mask_bool = transformed_mask.astype(bool)
+        sigma = self.sigma
+        mu = self.mu
+
+        data = transformed_data * sigma + mu
+        data = np.where(mask_bool, data, 0.0)
+
+        if np.ndim(sigma) == 0:
+            observed = mask_bool.sum(axis=1)
+            log_det_jac = np.log(sigma) * observed
+        else:
+            log_sigma = np.log(sigma)
+            log_det_jac = (mask_bool * log_sigma[np.newaxis, :]).sum(axis=1)
+
+        return (data, mask_bool), log_det_jac
 
     def clear(self) -> None:
         self.mu = None

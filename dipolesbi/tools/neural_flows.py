@@ -106,7 +106,7 @@ class AbstractNeuralFlow(ABC):
         # recompute summary stats for new training data
         if self.data_transform is not None:
             self.data_transform.clear()
-            self.data_transform.compute_mean_and_std(training_data.y)
+            self.data_transform.compute_mean_and_std(training_data.y, training_data.mask)
 
         if self.theta_transform is not None:
             self.theta_transform.clear()
@@ -152,7 +152,10 @@ class AbstractNeuralFlow(ABC):
         if self._target_is_pretransformed:
             for data in all_data:
                 if (self.mode == 'NLE') and (self.data_transform is not None):
-                    (transformed_data, transformed_mask), _ = self.data_transform(data.y)
+                    (transformed_data, transformed_mask), _ = self.data_transform(
+                        data.y,
+                        data.mask
+                    )
                     data = data._replace(y=transformed_data)
                     data = data._replace(mask=transformed_mask)
 
@@ -628,8 +631,12 @@ class AbstractNeuralFlow(ABC):
         # this should be the same pointer to the nflow data_transform stats
         if self.mode == 'NPE' and self.data_transform is not None:
             # Bring to host for numpy-based transform, then back to jax
-            obs_np, _ = self.data_transform(np.asarray(jax.device_get(observable)))
+            (obs_np, obs_mask_np), _ = self.data_transform(
+                np.asarray(jax.device_get(observable)),
+                np.asarray(jax.device_get(data_mask))
+            )
             observable = jnp.asarray(obs_np)
+            data_mask = jnp.asarray(obs_mask_np)
 
         collected = []
         remaining_samples = int(n_samples)
@@ -951,7 +958,6 @@ class NeuralFlow(AbstractNeuralFlow):
             one_and_done: bool = False,
             maf_extension: Optional[int] = None
     ) -> tuple[list, int]:
-        dim = in_dim # no 
         mask_r = mask[::-1]
         n_seen = mask.sum()
         dim = n_seen
@@ -1065,15 +1071,15 @@ class NeuralFlow(AbstractNeuralFlow):
                 # we flatten over this axis to get around the problem and repeat
                 # the mask too
                 x_in = x_in.reshape((x_in.shape[0] * x_in.shape[1], x_in.shape[2]))
+                jax.debug.print('{mask}', mask=mask)
                 mask = jnp.repeat(mask, repeats=2, axis=0)
+                jax.debug.print('{mask}', mask=mask)
 
             kwargs['x'] = self.embedding_network(x_in, mask, is_training=is_training)
 
         # y being the data here
-        elif self.mode == 'NLE':
+        elif self.mode == 'NLE' and self.data_transform is not None:
             # assume all masks are the same across batches
-            # col_mask = self.data_transform.z_mask.astype(bool)
-            
             keep_idxs = self.data_transform.keep_idxs
             kwargs['y'] = jnp.take(kwargs['y'], keep_idxs, axis=1)
 

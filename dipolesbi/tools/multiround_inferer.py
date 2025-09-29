@@ -374,7 +374,11 @@ class MultiRoundInferer:
         true_mean_likelihood = true_mean_likelihood.squeeze()
 
         samples = jax.device_get(samples)
-        samples_untransformed, _ = self._untransform_data_and_logdet(samples)
+        mask_samples = np.broadcast_to(
+            np.asarray(self.reference_mask, dtype=bool),
+            samples.shape
+        )
+        samples_untransformed, _ = self._untransform_data_and_logdet(samples, mask_samples)
         self.mean_samples = samples_untransformed.mean(axis=0)
         self.mean_samples[~mask.squeeze()] = np.nan
 
@@ -570,9 +574,16 @@ class MultiRoundInferer:
             if x0.ndim == 1:
                 x0 = x0[None, :]
 
-        z0, log_det_jac = self._transform_data_and_logdet(np.asarray(x0))
-        z0 = jax.device_put(z0)
-        log_det_jac = jax.device_put(log_det_jac)
+        mask0 = np.asarray(self.reference_mask, dtype=bool)
+        mask0 = np.broadcast_to(mask0, np.asarray(x0).shape)
+
+        z0_np, zmask0_np, log_det_jac_np = self._transform_data_and_logdet(
+            np.asarray(x0),
+            mask0
+        )
+        z0 = jax.device_put(z0_np)
+        zmask0 = jax.device_put(zmask0_np)
+        log_det_jac = jax.device_put(log_det_jac_np)
 
         # log_det_jac will be of length n_requantisations, and since we
         # only add a scalar to each dim, the log_det_jac is the same for
@@ -590,14 +601,14 @@ class MultiRoundInferer:
                 log_like = self.nflow.evaluate_lnlike( # type: ignore
                     theta[None, :], 
                     z0, 
-                    mask=jax.device_put(self.reference_mask)
+                    mask=zmask0
                 )
             else:
                 log_like_by_permbatch = jax.vmap(
                     lambda zi: self.nflow.evaluate_lnlike( # type: ignore
                         theta[None, :],
                         zi[None, :],
-                        mask=jnp.atleast_2d(jax.device_put(self.reference_mask))
+                        mask=jnp.atleast_2d(zmask0)
                     )
                 )(z0)
                 log_like = (
@@ -639,9 +650,9 @@ class MultiRoundInferer:
             split_key=split_key
         )
 
-        assert not jnp.any(jnp.isnan(trn_data))
+        assert not jnp.any(jnp.isnan(trn_data[trn_mask])) # no nans in unmasked data
         assert not any(jnp.isnan(arr).any() for arr in trn_theta.values())
-        assert not jnp.any(jnp.isnan(val_data))
+        assert not jnp.any(jnp.isnan(val_data[val_mask]))
         assert not any(jnp.isnan(arr).any() for arr in val_theta.values())
         assert not jnp.any(rnd_idx == self.round_idx_badval)
 
@@ -679,15 +690,26 @@ class MultiRoundInferer:
             validation_fraction=self.train_config.validation_fraction
         )
 
-    def _transform_data_and_logdet(self, data: NDArray) -> tuple[NDArray, NDArray]:
+    def _transform_data_and_logdet(
+            self,
+            data: NDArray,
+            mask: NDArray
+    ) -> tuple[NDArray, NDArray, NDArray]:
         '''
         Normalise only using stats computed from the training data.
         '''
-        return self.data_transform(data) # type: ignore
-
-    def _untransform_data_and_logdet(self, z: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         assert self.data_transform is not None
-        return self.data_transform.inverse_and_log_det(z)
+        (transformed_data, transformed_mask), log_det_jac = self.data_transform(data, mask)
+        return transformed_data, transformed_mask, log_det_jac
+
+    def _untransform_data_and_logdet(
+            self,
+            z: np.ndarray,
+            mask: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        assert self.data_transform is not None
+        (data, _), log_det_jac = self.data_transform.inverse_and_log_det(z, mask)
+        return data, log_det_jac
 
     def _clear_data_summary_stats(self) -> None:
         if (self.data_transform is not None) and (self.theta_transform is not None):
