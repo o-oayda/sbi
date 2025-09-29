@@ -1027,6 +1027,10 @@ class NeuralFlow(AbstractNeuralFlow):
         if not self.target_is_pretransformed:
             if self.mode == 'NLE':
                 if self.data_transform is not None:
+                    assert not isinstance(self.data_transform, HadamardTransform), (
+                        'Hadamard transform will not work as a flow layer. '
+                        'Use as a pre-transform instead.'
+                    )
                     layers.append(self.data_transform)
 
             elif self.mode == 'NPE':
@@ -1083,7 +1087,6 @@ class NeuralFlow(AbstractNeuralFlow):
 
         cur_dim = self.target_ndim
         self.layers = []
-        # TODO: assert don't add transform to layers for hadamard? put in hard guard?
         self.layers = self._maybe_add_transform_to_layers(self.layers)
 
         for layer in self.nflow_config.architecture:
