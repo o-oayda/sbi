@@ -1,6 +1,6 @@
 from typing import Callable, Literal, cast
+from blackjax.types import Array
 from jax import numpy as jnp
-from jax._src.util import Array
 from numpy.typing import NDArray
 from dipolesbi.tools.healpix_helpers import split_off_details
 import numpy as np

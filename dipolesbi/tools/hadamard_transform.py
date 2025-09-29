@@ -459,7 +459,7 @@ class HadamardTransform(InvertibleDataTransform):
 
         if self.empty_norm_stats_flag:
             mean_coarse, std_coarse, enough_c = self._masked_moments(
-                a_coarse, a_mask, axis=0, ddof=1
+                a_coarse, a_mask, axis=0, ddof=0
             ) # we get shapes (1, P) out, so squeeze down
 
             # do a blank transform where the stats are undefined
@@ -515,14 +515,15 @@ class HadamardTransform(InvertibleDataTransform):
                     std_c = self.xp.where(ok_c, self.xp.squeeze(std_c), 1.)
                     return mu_c, std_c
 
+                # ddof=0 for population std
                 mu_d1, s_d1 = _clean_stats(
-                    *self._masked_moments(y[..., 1], msk[..., 1], axis=0, ddof=1)
+                    *self._masked_moments(y[..., 1], msk[..., 1], axis=0, ddof=0)
                 )
                 mu_d2, s_d2 = _clean_stats(
-                    *self._masked_moments(y[..., 2], msk[..., 2], axis=0, ddof=1)
+                    *self._masked_moments(y[..., 2], msk[..., 2], axis=0, ddof=0)
                 )
                 mu_d3, s_d3 = _clean_stats(
-                    *self._masked_moments(y[..., 3], msk[..., 3], axis=0, ddof=1)
+                    *self._masked_moments(y[..., 3], msk[..., 3], axis=0, ddof=0)
                 )
             else:
                 mu_d1 = self.mu_at_level_post['detail'][0][lvl_idx - lvl]
