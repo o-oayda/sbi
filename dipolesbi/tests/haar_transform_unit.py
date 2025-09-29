@@ -1,6 +1,7 @@
 import unittest
 from jax.random import PRNGKey
 import numpy as np
+from dipolesbi.lib.allsky_hadamard import ArchiveHadamardTransform
 from dipolesbi.tools.healpix_helpers import split_off_details
 from dipolesbi.tools.np_rngkey import prng_key
 from dipolesbi.tools.hadamard_transform import HadamardTransform, HadamardTransformJax
@@ -288,6 +289,29 @@ class TestHaarTransform(unittest.TestCase):
 
         np.testing.assert_almost_equal(dmap, dmap_recovered, err_msg='Recovered != original.')
         np.testing.assert_equal(mask, mask_rec)
+
+    def test_equals_unmasked_legacy_implementation(self):
+        nside = 32
+        key = prng_key(123)
+        npix = 12 * nside**2
+        lam = 50
+        n_batches = 1000
+
+        dmap = key.poisson(lam, shape=(n_batches, npix)) # ensure batchwise dim exists
+
+        transform_new = HadamardTransform(first_nside=nside, last_nside=1)
+        mask = np.ones_like(dmap)
+        
+        transform_old = ArchiveHadamardTransform(first_nside=nside, last_nside=1)
+
+        (zmap_new, zmask), _ = transform_new(dmap, mask)
+        zmap_old, _ = transform_old(dmap)
+
+        np.testing.assert_almost_equal(
+            zmap_new,
+            zmap_old, 
+            err_msg='New masked implementation (all sky) != legacy unmasked code.'
+        )
 
 # not implemented for now
 
