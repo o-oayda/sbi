@@ -398,7 +398,7 @@ class MultiRoundInferer:
         )
         plt.savefig(
             self.mr_config.plot_save_dir
-          + f'/likelihood_{self.current_round}.png',
+          + f'/likelihood_{self.current_round}.pdf',
             bbox_inches='tight'
         )
 
@@ -493,9 +493,8 @@ class MultiRoundInferer:
             )
         plt.savefig(
             self.mr_config.plot_save_dir
-          + f'/corner_final.png',
-            bbox_inches='tight',
-            dpi=300
+          + f'/corner_final.pdf',
+            bbox_inches='tight'
         )
 
     def _add_to_simulation_pool(
@@ -552,9 +551,8 @@ class MultiRoundInferer:
         )
         plt.savefig(
             self.mr_config.plot_save_dir
-          + f'/corner_{self.current_round}.png',
-            bbox_inches='tight',
-            dpi=300
+          + f'/corner_{self.current_round}.pdf',
+            bbox_inches='tight'
         )
         return posterior_samples
 
@@ -640,7 +638,7 @@ class MultiRoundInferer:
         )
         plt.savefig(
             self.mr_config.plot_save_dir
-          + f'/jax_samples_{self.current_round}.png',
+          + f'/jax_samples_{self.current_round}.pdf',
             bbox_inches='tight'
         )
 
