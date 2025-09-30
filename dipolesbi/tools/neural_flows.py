@@ -1162,7 +1162,7 @@ class NeuralFlow(AbstractNeuralFlow):
 
         if 'y' in kwargs:
             cur_dim = kwargs['y'].shape[-1]
-        elif self._mask_metadata is not None:
+        elif self.mode == 'NLE' and self._mask_metadata is not None:
             cur_dim = int(self._mask_metadata['n_seen'])
         else:
             cur_dim = self.target_ndim
