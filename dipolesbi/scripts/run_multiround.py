@@ -135,8 +135,14 @@ if __name__ == '__main__':
         theta_prior=prior_jax,
         multiround_overrides={
             'prng_integer_seed': args.ssnle_seed,
-            'plot_save_dir': args.out_dir
+            'plot_save_dir': args.out_dir,
+            'simulation_budget': 100_000,
+            'n_rounds': 20
         },
+        flow_overrides={
+            'decoder_n_neurons': 128,
+            'decoder_n_layers': 4
+        }
     )
 
     meta_cfg = {
