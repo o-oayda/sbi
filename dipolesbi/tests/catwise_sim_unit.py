@@ -88,7 +88,8 @@ def test_add_error_statistical_properties():
     n_samples = 200_000
     base_sigma = 0.05
 
-    np.random.seed(rng_seed)
+    rng = np.random.default_rng(rng_seed)
+    sim.rng = np.random.default_rng(rng_seed)
     w1 = np.full(n_samples, 13.5, dtype=np.float32)
     w2 = np.full(n_samples, 12.8, dtype=np.float32)
 
@@ -99,7 +100,8 @@ def test_add_error_statistical_properties():
     noisy_w1, noisy_w2 = sim.add_error(
         w1=(w1, w1_error),
         w2=(w2, w2_error),
-        error_dist='gaussian'
+        error_dist='gaussian',
+        rng=rng
     )
     residual_w1 = noisy_w1 - w1
     residual_w2 = noisy_w2 - w2
@@ -116,13 +118,14 @@ def test_add_error_statistical_properties():
     # Gaussian with extra error (added in quadrature)
     w1_extra = 0.5
     w2_extra = 0.25
-    np.random.seed(rng_seed)
+    rng = np.random.default_rng(rng_seed)
     noisy_w1_extra, noisy_w2_extra = sim.add_error(
         w1=(w1, w1_error),
         w2=(w2, w2_error),
         w1_extra_error=w1_extra,
         w2_extra_error=w2_extra,
-        error_dist='gaussian'
+        error_dist='gaussian',
+        rng=rng
     )
 
     residual_w1_extra = noisy_w1_extra - w1
@@ -138,12 +141,13 @@ def test_add_error_statistical_properties():
     log10_shape_param = np.log10(8.0)
     nu = 10 ** log10_shape_param
 
-    np.random.seed(rng_seed)
+    rng = np.random.default_rng(rng_seed)
     noisy_w1_t, noisy_w2_t = sim.add_error(
         w1=(w1, w1_error),
         w2=(w2, w2_error),
         error_dist='students-t',
-        log10_shape_param=log10_shape_param
+        log10_shape_param=log10_shape_param,
+        rng=rng
     )
 
     residual_w1_t = noisy_w1_t - w1

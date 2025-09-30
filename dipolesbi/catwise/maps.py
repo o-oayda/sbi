@@ -58,6 +58,7 @@ class Catwise:
         self.real_file_path = (
             'dipolesbi/catwise/catwise_agns_masked_final_w1lt16p5_alpha.fits'
         )
+        self.rng = np.random.default_rng()
     
     def _get_cut_path(self,
             cat_w1_max: float,
@@ -148,6 +149,8 @@ class Catwise:
         self.final_pixel_indices = None
 
         coverage_query_buffer = np.empty((chunk_size, 2), dtype=self.dtype)
+        noise_buffer_w1 = np.empty(chunk_size, dtype=np.float64)
+        noise_buffer_w2 = np.empty(chunk_size, dtype=np.float64)
 
         for start in range(0, self.n_samples, chunk_size):
             current_chunk = min(chunk_size, self.n_samples - start)
@@ -212,13 +215,20 @@ class Catwise:
                 coverage_query
             ).astype(np.float32)
 
+            current_noise_buffers = (
+                noise_buffer_w1[:boosted_w1_samples.size],
+                noise_buffer_w2[:boosted_w2_samples.size]
+            )
+
             boosted_w1_samples, boosted_w2_samples = self.add_error(
                 w1=(boosted_w1_samples, w1_error),
                 w2=(boosted_w2_samples, w2_error),
                 w1_extra_error=w1_extra_error,
                 w2_extra_error=w2_extra_error,
                 error_dist=self.magnitude_error_dist,
-                log10_shape_param=log10_magnitude_error_shape_param
+                log10_shape_param=log10_magnitude_error_shape_param,
+                rng=self.rng,
+                noise_buffers=current_noise_buffers
             )
 
             boosted_w12_samples = boosted_w1_samples - boosted_w2_samples
@@ -359,7 +369,9 @@ class Catwise:
             w1_extra_error: Optional[float] = None,
             w2_extra_error: Optional[float] = None,
             error_dist: Literal['gaussian', 'students-t'] = 'gaussian',
-            log10_shape_param: float = 0.
+            log10_shape_param: float = 0.,
+            rng: Optional[np.random.Generator] = None,
+            noise_buffers: Optional[tuple[NDArray[np.float64], NDArray[np.float64]]] = None
     ) -> tuple[NDArray, NDArray]:
         """
         Adds random photometric errors to W1 and W2 magnitudes.
@@ -380,23 +392,54 @@ class Catwise:
         w1_dtype = w1_magnitudes.dtype
         w2_dtype = w2_magnitudes.dtype
 
-        w1_sigma = np.array(w1_error, dtype=w1_dtype, copy=False)
-        if w1_extra_error is not None:
-            w1_sigma = w1_sigma * np.sqrt(np.array(1.0 + w1_extra_error, dtype=w1_dtype))
+        w1_sigma = np.array(w1_error, dtype=w1_dtype, copy=True)
+        w2_sigma = np.array(w2_error, dtype=w2_dtype, copy=True)
 
-        w2_sigma = np.array(w2_error, dtype=w2_dtype, copy=False)
+        # sigma^2 = sigma_b^2 + extra * sigma_b^2 => sigma = sigma_b sqrt( 1 + extra )
+        if w1_extra_error is not None:
+            np.multiply(
+                w1_sigma,
+                np.sqrt(np.array(1.0 + w1_extra_error, dtype=w1_dtype)),
+                out=w1_sigma,
+                casting='unsafe'
+            )
+
         if w2_extra_error is not None:
-            w2_sigma = w2_sigma * np.sqrt(np.array(1.0 + w2_extra_error, dtype=w2_dtype))
+            np.multiply(
+                w2_sigma,
+                np.sqrt(np.array(1.0 + w2_extra_error, dtype=w2_dtype)),
+                out=w2_sigma,
+                casting='unsafe'
+            )
+
+        if rng is None:
+            rng = np.random.default_rng()
+
+        if noise_buffers is not None:
+            noise_w1_buf, noise_w2_buf = noise_buffers
+            noise_w1 = noise_w1_buf[:w1_sigma.size]
+            noise_w2 = noise_w2_buf[:w2_sigma.size]
+        else:
+            noise_w1 = None
+            noise_w2 = None
 
         if error_dist == 'gaussian':
-            noise_w1 = np.random.standard_normal(size=w1_sigma.shape)
-            noise_w2 = np.random.standard_normal(size=w2_sigma.shape)
+            if noise_w1 is not None and noise_w2 is not None:
+                rng.standard_normal(out=noise_w1)
+                rng.standard_normal(out=noise_w2)
+            else:
+                noise_w1 = rng.standard_normal(size=w1_sigma.shape)
+                noise_w2 = rng.standard_normal(size=w2_sigma.shape)
         else:
             shape_param = float(10 ** log10_shape_param)
             if shape_param <= 0:
-                raise ValueError('Student\'s t shape parameter must be positive.')
-            noise_w1 = np.random.standard_t(df=shape_param, size=w1_sigma.shape)
-            noise_w2 = np.random.standard_t(df=shape_param, size=w2_sigma.shape)
+                raise ValueError("Student's t shape parameter must be positive.")
+            if noise_w1 is not None and noise_w2 is not None:
+                noise_w1[:] = rng.standard_t(df=shape_param, size=w1_sigma.shape)
+                noise_w2[:] = rng.standard_t(df=shape_param, size=w2_sigma.shape)
+            else:
+                noise_w1 = rng.standard_t(df=shape_param, size=w1_sigma.shape)
+                noise_w2 = rng.standard_t(df=shape_param, size=w2_sigma.shape)
 
         calc_dtype_w1 = np.float64 if w1_dtype == np.float64 else np.float32
         calc_dtype_w2 = np.float64 if w2_dtype == np.float64 else np.float32
