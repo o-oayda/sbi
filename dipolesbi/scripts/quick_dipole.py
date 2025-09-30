@@ -15,9 +15,9 @@ from dipolesbi.tools.priors_np import DipolePriorNP
 
 def batch_simulate(
         theta: dict[str, NDArray],
-        model_callable: Callable[..., NDArray],
+        model_callable: Callable[..., tuple[NDArray, NDArray]],
         n_workers: int
-) -> NDArray:
+) -> tuple[NDArray, NDArray]:
     simulation_batch_size = 1
     n_simulations = list(theta.values())[0].shape[0]
     n_batches = n_simulations // simulation_batch_size # batch size of 1 by default in simulate_for_sbi
@@ -30,7 +30,7 @@ def batch_simulate(
         ])
     ]
 
-    simulation_outputs: list[NDArray] = [ # type: ignore
+    simulation_outputs: list[tuple[NDArray, NDArray]] = [ # type: ignore
         xx
         for xx in tqdm(
             Parallel(return_as='generator', n_jobs=n_workers)(
@@ -41,8 +41,9 @@ def batch_simulate(
         )
     ]
 
-    x = np.vstack(simulation_outputs)
-    return x
+    x = np.vstack([output[0] for output in simulation_outputs])
+    mask = np.vstack([output[1] for output in simulation_outputs])
+    return x, mask
 
 
 parser = argparse.ArgumentParser()
@@ -66,7 +67,7 @@ prior = DipolePriorNP(mean_count_range=[30e6, 40e6])
 theta = prior.sample(key, n_samples=args.sims)
 
 t0 = time.time()
-sims = batch_simulate(theta, sim.generate_dipole, n_workers=args.workers)
+sims, masks = batch_simulate(theta, sim.generate_dipole, n_workers=args.workers)
 t1 = time.time()
 
 dt = t1 - t0
@@ -74,5 +75,5 @@ dt_per_sim = dt / args.sims
 print(f'Time (total): {dt:.3g} s')
 print(f'Time (per sim): {dt_per_sim:.3g} s')
 
-smooth_map(sims[0, :])
+smooth_map(sims[0, :] * masks[0, :])
 plt.savefig('memtest_out.png')

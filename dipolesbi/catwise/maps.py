@@ -89,6 +89,8 @@ class Catwise:
             w1_extra_error: float = 1.,
             w2_extra_error: float = 1.,
             log10_magnitude_error_shape_param: float = 0.,
+            chunk_size: Optional[int] = None,
+            store_final_samples: bool = False,
         ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
         '''
         :param observer_speed: Observer speed in units of CMB-derived speed.
@@ -98,132 +100,170 @@ class Catwise:
         and Doppler boosting calculations, the arrays will be cast to float64
         for those computations and then returned back to float32. The final
         colour and magnitude cut will be on float32 arrays.
+        :param chunk_size: Optional batch size used to stream the simulation.
+        :param store_final_samples: If True, retain the post-cut samples on the
+            instance; otherwise they are discarded for memory efficiency.
         '''
         self.observer_speed = observer_speed * CMB_BETA
         self.dipole_longitude = dipole_longitude
         self.dipole_latitude = dipole_latitude
 
         self.n_samples = int(n_initial_samples)
-        rest_w1_samples, rest_w2_samples = self.sample_magnitudes(
-            self.n_samples, dtype=self.dtype
-        )
+        if self.n_samples < 0:
+            raise ValueError('n_initial_samples must be non-negative.')
 
-        rest_source_lon_deg, rest_source_lat_deg = self.sample_points(
-            self.n_samples,
-        )
+        if self.n_samples == 0:
+            n_pix = hp.nside2npix(self.nside)
+            self._density_map = np.zeros(n_pix, dtype=np.float32)
+            if store_final_samples:
+                self.final_w1_samples = np.empty(0, dtype=np.float32)
+                self.final_w2_samples = np.empty(0, dtype=np.float32)
+                self.final_w12_samples = np.empty(0, dtype=np.float32)
+                self.final_pixel_indices = np.empty(0, dtype=np.int32)
+            else:
+                self.final_w1_samples = None
+                self.final_w2_samples = None
+                self.final_w12_samples = None
+                self.final_pixel_indices = None
+            return self.density_map, self.binary_mask
 
-        boosted_source_lon_deg, boosted_source_lat_deg,\
-        rest_source_to_dipole_angle_deg = self.aberrate_points(
-            rest_source_lon_deg, rest_source_lat_deg, dtype=self.dtype
-        )
-        del rest_source_lon_deg, rest_source_lat_deg
+        if chunk_size is None:
+            chunk_size = min(self.n_samples, 200_000)
+        elif chunk_size <= 0:
+            raise ValueError('chunk_size must be a positive integer.')
+        else:
+            chunk_size = min(chunk_size, self.n_samples)
 
-        # mask now for efficiency
-        mask_slice, source_pixel_indices = self._source_isin_mask(
-            boosted_source_lon_deg, 
-            boosted_source_lat_deg
-        )
-        rest_w1_samples = rest_w1_samples[mask_slice]
-        rest_w2_samples = rest_w2_samples[mask_slice]
-        boosted_source_lon_deg = boosted_source_lon_deg[mask_slice]
-        boosted_source_lat_deg = boosted_source_lat_deg[mask_slice]
-        rest_source_to_dipole_angle_deg = rest_source_to_dipole_angle_deg[mask_slice]
-        source_pixel_indices = source_pixel_indices[mask_slice]
+        n_pix = hp.nside2npix(self.nside)
+        density_accumulator = np.zeros(n_pix, dtype=np.float64)
 
-        rest_w12_samples = rest_w1_samples - rest_w2_samples
-        spectral_indices = self.spectral_lookup.fit_alpha(
-            w12_colour=rest_w12_samples
-        )
-        del rest_w12_samples
+        final_w1_list: list[NDArray[np.float32]] = []
+        final_w2_list: list[NDArray[np.float32]] = []
+        final_w12_list: list[NDArray[np.float32]] = []
+        final_indices_list: list[NDArray[np.int32]] = []
 
-        # oops... needs a -ve sign
-        spectral_indices = -spectral_indices
+        self.final_w1_samples = None
+        self.final_w2_samples = None
+        self.final_w12_samples = None
+        self.final_pixel_indices = None
 
-        boosted_w1_samples = self.boost_magnitudes(
-            rest_w1_samples, rest_source_to_dipole_angle_deg, spectral_indices,
-            dtype=self.dtype
-        )
-        boosted_w2_samples = self.boost_magnitudes(
-            rest_w2_samples, rest_source_to_dipole_angle_deg, spectral_indices,
-            dtype=self.dtype
-        )
-        del rest_w1_samples, rest_w2_samples
-        
-        source_logw1_cov = np.log10(self.w1cov_map[source_pixel_indices])
-        source_logw2_cov = np.log10(self.w2cov_map[source_pixel_indices])
+        coverage_query_buffer = np.empty((chunk_size, 2), dtype=self.dtype)
 
-        self.w1_error = self.w1mag_coverage_rgi(
-            np.column_stack(
-                [boosted_w1_samples, source_logw1_cov]
+        for start in range(0, self.n_samples, chunk_size):
+            current_chunk = min(chunk_size, self.n_samples - start)
+
+            rest_w1_samples, rest_w2_samples = self.sample_magnitudes(
+                current_chunk, dtype=self.dtype
             )
-        ).astype(np.float32)
-        self.w2_error = self.w2mag_coverage_rgi(
-            np.column_stack(
-                [boosted_w2_samples, source_logw2_cov]
+            rest_source_lon_deg, rest_source_lat_deg = self.sample_points(
+                current_chunk,
             )
-        ).astype(np.float32)
-        del source_logw1_cov, source_logw2_cov
 
-        boosted_w1_samples, boosted_w2_samples = self.add_error(
-            w1=(boosted_w1_samples, self.w1_error),
-            w2=(boosted_w2_samples, self.w2_error),
-            w1_extra_error=w1_extra_error,
-            w2_extra_error=w2_extra_error,
-            error_dist=self.magnitude_error_dist,
-            log10_shape_param=log10_magnitude_error_shape_param
-        )
+            boosted_source_lon_deg, boosted_source_lat_deg, \
+                rest_source_to_dipole_angle_deg = self.aberrate_points(
+                    rest_source_lon_deg, rest_source_lat_deg, dtype=self.dtype
+                )
 
-        # should be identical to rest_w12_samples since colour is invariant;
-        # TODO: check this
-        # with warnings.catch_warnings(record=True) as w:
-        #     warnings.simplefilter('always')
-        #     boosted_w12_samples = boosted_w1_samples - boosted_w2_samples
-        #
-        #     if w:
-        #         print(f"Caught {len(w)} warnings:")
-        #         for warning_item in w:
-        #             print(
-        #                 f"- Category: {warning_item.category.__name__}\n"
-        #                 f"- Message: {warning_item.message}"
-        #                 f"  W1: {boosted_w1_samples[:5]}\n"
-        #                 f"  W2: {boosted_w2_samples[:5]}\n"
-        #                 f"  nu: {10**log10_magnitude_error_shape_param}\n"
-        #                 f"  etaW1: {w1_extra_error}\n"
-        #                 f"  etaW2: {w2_extra_error}\n"
-        #         )
-        boosted_w12_samples = boosted_w1_samples - boosted_w2_samples
-    # boosted_w12_errors = np.sqrt( self.w1_error**2 + self.w2_error**2 )
-        
-        cut = self.magnitude_cut_boolean(
-            w1_magnitudes=boosted_w1_samples,
-            w12_magnitudes=boosted_w12_samples,
-            w1_max=w1_max,
-            w1_min=w1_min,
-            w12_min=w12_min
-        )
+            mask_slice, source_pixel_indices = self._source_isin_mask(
+                boosted_source_lon_deg,
+                boosted_source_lat_deg
+            )
 
-        cut_boosted_source_longitudes_deg = boosted_source_lon_deg[cut]
-        cut_boosted_source_latitudes_deg = boosted_source_lat_deg[cut]
-        cut_boosted_w1_samples = boosted_w1_samples[cut]
-        cut_boosted_w2_samples = boosted_w2_samples[cut]
-        cut_boosted_w12_samples = boosted_w12_samples[cut]
-        # cut_boosted_w12_errors = boosted_w12_errors[cut]
-        cut_source_pixel_indices = source_pixel_indices[cut]
+            if not mask_slice.any():
+                continue
 
-        del boosted_w1_samples, boosted_w2_samples, boosted_w12_samples
-        del boosted_source_lon_deg, boosted_source_lat_deg
-        del source_pixel_indices
+            rest_w1_samples = rest_w1_samples[mask_slice]
+            rest_w2_samples = rest_w2_samples[mask_slice]
+            boosted_source_lon_deg = boosted_source_lon_deg[mask_slice]
+            boosted_source_lat_deg = boosted_source_lat_deg[mask_slice]
+            rest_source_to_dipole_angle_deg = rest_source_to_dipole_angle_deg[mask_slice]
+            source_pixel_indices = source_pixel_indices[mask_slice]
 
-        self._density_map = self.make_density_map(
-            longitudes=cut_boosted_source_longitudes_deg,
-            latitudes=cut_boosted_source_latitudes_deg
-        )
+            if rest_w1_samples.size == 0:
+                continue
 
-        self.final_w1_samples = cut_boosted_w1_samples
-        self.final_w2_samples = cut_boosted_w2_samples
-        self.final_w12_samples = cut_boosted_w12_samples
-        # self.final_w12_frac_errors = cut_boosted_w12_errors / self.final_w12_samples
-        self.final_pixel_indices = cut_source_pixel_indices
+            rest_w12_samples = rest_w1_samples - rest_w2_samples
+            spectral_indices = -self.spectral_lookup.fit_alpha(
+                w12_colour=rest_w12_samples
+            )
+
+            boosted_w1_samples = self.boost_magnitudes(
+                rest_w1_samples, rest_source_to_dipole_angle_deg, spectral_indices,
+                dtype=self.dtype
+            )
+            boosted_w2_samples = self.boost_magnitudes(
+                rest_w2_samples, rest_source_to_dipole_angle_deg, spectral_indices,
+                dtype=self.dtype
+            )
+
+            source_logw1_cov = self.log_w1cov_map[source_pixel_indices]
+            source_logw2_cov = self.log_w2cov_map[source_pixel_indices]
+
+            coverage_query = coverage_query_buffer[:boosted_w1_samples.size]
+            coverage_query[:, 0] = boosted_w1_samples
+            coverage_query[:, 1] = source_logw1_cov
+            w1_error = self.w1mag_coverage_rgi(
+                coverage_query
+            ).astype(np.float32)
+
+            coverage_query[:, 0] = boosted_w2_samples
+            coverage_query[:, 1] = source_logw2_cov
+            w2_error = self.w2mag_coverage_rgi(
+                coverage_query
+            ).astype(np.float32)
+
+            boosted_w1_samples, boosted_w2_samples = self.add_error(
+                w1=(boosted_w1_samples, w1_error),
+                w2=(boosted_w2_samples, w2_error),
+                w1_extra_error=w1_extra_error,
+                w2_extra_error=w2_extra_error,
+                error_dist=self.magnitude_error_dist,
+                log10_shape_param=log10_magnitude_error_shape_param
+            )
+
+            boosted_w12_samples = boosted_w1_samples - boosted_w2_samples
+
+            cut = self.magnitude_cut_boolean(
+                w1_magnitudes=boosted_w1_samples,
+                w12_magnitudes=boosted_w12_samples,
+                w1_max=w1_max,
+                w1_min=w1_min,
+                w12_min=w12_min
+            )
+
+            if not cut.any():
+                continue
+
+            cut_boosted_w1_samples = boosted_w1_samples[cut]
+            cut_boosted_w2_samples = boosted_w2_samples[cut]
+            cut_boosted_w12_samples = boosted_w12_samples[cut]
+            cut_source_pixel_indices = source_pixel_indices[cut].astype(np.int32, copy=False)
+
+            chunk_density = np.bincount(
+                cut_source_pixel_indices,
+                minlength=n_pix
+            )
+            density_accumulator += chunk_density
+
+            if store_final_samples:
+                final_w1_list.append(cut_boosted_w1_samples.astype(np.float32)) 
+                final_w2_list.append(cut_boosted_w2_samples.astype(np.float32))
+                final_w12_list.append(cut_boosted_w12_samples.astype(np.float32))
+                final_indices_list.append(cut_source_pixel_indices)
+
+        self._density_map = density_accumulator.astype(np.float32)
+
+        if store_final_samples:
+            if final_w1_list:
+                self.final_w1_samples = np.concatenate(final_w1_list)
+                self.final_w2_samples = np.concatenate(final_w2_list)
+                self.final_w12_samples = np.concatenate(final_w12_list)
+                self.final_pixel_indices = np.concatenate(final_indices_list)
+            else:
+                self.final_w1_samples = np.empty(0, dtype=np.float32)
+                self.final_w2_samples = np.empty(0, dtype=np.float32)
+                self.final_w12_samples = np.empty(0, dtype=np.float32)
+                self.final_pixel_indices = np.empty(0, dtype=np.int32)
 
         return self.density_map, self.binary_mask
     
@@ -310,9 +350,7 @@ class Catwise:
             lonlat=True,
             nest=True
         ).astype(np.uint16) # unsigned 16-bit can represent all pixels in nside=64 map
-        is_masked = self.mask_map == 1
-        masked_pixel_indices = np.squeeze(np.nonzero(is_masked))
-        mask_slice = ~np.isin(source_pixel_indices, masked_pixel_indices)
+        mask_slice = self.mask_map[source_pixel_indices] == 0
         return mask_slice, source_pixel_indices
 
     def add_error(self,
@@ -641,6 +679,9 @@ class Catwise:
         self.w2cov_map: NDArray[np.float32] = torch.load(
             f'{path}w2_coverage_map.pt'
         ).numpy().astype(np.float32)
+
+        self.log_w1cov_map = np.log10(self.w1cov_map).astype(self.dtype)
+        self.log_w2cov_map = np.log10(self.w2cov_map).astype(self.dtype)
 
         # initialise AlphaLookup so table is not read in at each simulation
         self.spectral_lookup = AlphaLookup(no_check=True)
