@@ -25,6 +25,7 @@ from scipy.interpolate import RegularGridInterpolator
 from numpy.typing import NDArray
 from datetime import datetime
 import matplotlib.pyplot as plt
+from memory_profiler import profile
 
 
 class Catwise:
@@ -76,6 +77,7 @@ class Catwise:
         print('Finished loading CatWISE2020.')
         self.catalogue_is_loaded = True
     
+    # @profile
     def generate_dipole(self,
             n_initial_samples: int,
             w1_max: float = 16.4,
@@ -87,7 +89,7 @@ class Catwise:
             w1_extra_error: float = 1.,
             w2_extra_error: float = 1.,
             log10_magnitude_error_shape_param: float = 0.,
-        ) -> NDArray[np.float32]:
+        ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
         '''
         :param observer_speed: Observer speed in units of CMB-derived speed.
         :param use_float32: If True, cast all arrays to float32 when sampling
@@ -223,7 +225,7 @@ class Catwise:
         # self.final_w12_frac_errors = cut_boosted_w12_errors / self.final_w12_samples
         self.final_pixel_indices = cut_source_pixel_indices
 
-        return self.density_map
+        return self.density_map, self.binary_mask
     
     def make_real_sample(self) -> NDArray[np.float32]:
         print(f'Reading in CatWISE2020 from {self.real_file_path}...')
@@ -259,6 +261,12 @@ class Catwise:
     def density_map(self) -> NDArray[np.float32]:
         out = self._density_map
         out[self.mask_map == 1] = self.fill_value
+        return out
+
+    @property
+    def binary_mask(self) -> NDArray[np.bool_]:
+        out = np.ones_like(self.density_map, dtype=np.bool_)
+        out[self.masked_pixel_indices_list] = False
         return out
 
     @property
