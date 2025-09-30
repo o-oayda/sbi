@@ -628,7 +628,7 @@ class Scenario:
         train_defaults = {
             'patience': 20,
             'learning_rate': 5e-5,
-            'restore_from_previous': True,
+            'restore_from_previous': False,
             'weight_by_round': False,
         }
         train_defaults.update(training_overrides or {})
@@ -639,8 +639,8 @@ class Scenario:
             'n_rounds': 15,
             'reference_theta': reference_theta,
             'dequantise_data': False,
-            'initial_fraction': 0.5,
-            'n_likelihood_samples': 25_000,
+            'initial_fraction': 0.,
+            'n_likelihood_samples': 20_000,
         }
         mr_defaults.update(multiround_overrides or {})
         mr_cfg = MultiRoundInfererConfig(**mr_defaults)
