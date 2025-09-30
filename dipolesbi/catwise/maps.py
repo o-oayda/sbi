@@ -377,34 +377,43 @@ class Catwise:
         w1_magnitudes, w1_error = w1
         w2_magnitudes, w2_error = w2
 
-        if w1_extra_error is None:
-            w1_sigma = w1_error
-        else:
-            w1_sigma = np.sqrt(w1_error**2 + w1_extra_error * w1_error**2)
+        w1_dtype = w1_magnitudes.dtype
+        w2_dtype = w2_magnitudes.dtype
 
-        if w2_extra_error is None:
-            w2_sigma = w2_error
-        else:
-            w2_sigma = np.sqrt(w2_error**2 + w2_extra_error * w2_error**2)
+        w1_sigma = np.array(w1_error, dtype=w1_dtype, copy=False)
+        if w1_extra_error is not None:
+            w1_sigma = w1_sigma * np.sqrt(np.array(1.0 + w1_extra_error, dtype=w1_dtype))
 
-        rand_sampler = {
-            'gaussian': lambda mu, sigma: np.random.normal(mu, sigma),
-            'students-t': lambda mu, sigma, nu: scipy.stats.t.rvs(
-                nu, loc=mu, scale=sigma
-            )
-        }
+        w2_sigma = np.array(w2_error, dtype=w2_dtype, copy=False)
+        if w2_extra_error is not None:
+            w2_sigma = w2_sigma * np.sqrt(np.array(1.0 + w2_extra_error, dtype=w2_dtype))
 
         if error_dist == 'gaussian':
-            return (
-                rand_sampler[error_dist](w1_magnitudes, w1_sigma),
-                rand_sampler[error_dist](w2_magnitudes, w2_sigma)
-            )
+            noise_w1 = np.random.standard_normal(size=w1_sigma.shape)
+            noise_w2 = np.random.standard_normal(size=w2_sigma.shape)
         else:
-            shape_param = 10 ** log10_shape_param
-            return (
-                rand_sampler[error_dist](w1_magnitudes, w1_sigma, shape_param),
-                rand_sampler[error_dist](w2_magnitudes, w2_sigma, shape_param)
-            )
+            shape_param = float(10 ** log10_shape_param)
+            if shape_param <= 0:
+                raise ValueError('Student\'s t shape parameter must be positive.')
+            noise_w1 = np.random.standard_t(df=shape_param, size=w1_sigma.shape)
+            noise_w2 = np.random.standard_t(df=shape_param, size=w2_sigma.shape)
+
+        calc_dtype_w1 = np.float64 if w1_dtype == np.float64 else np.float32
+        calc_dtype_w2 = np.float64 if w2_dtype == np.float64 else np.float32
+
+        noisy_w1 = (
+            np.asarray(w1_magnitudes, dtype=calc_dtype_w1)
+          + noise_w1.astype(calc_dtype_w1, copy=False)
+          * np.asarray(w1_sigma, dtype=calc_dtype_w1)
+        ).astype(w1_dtype, copy=False)
+
+        noisy_w2 = (
+            np.asarray(w2_magnitudes, dtype=calc_dtype_w2)
+          + noise_w2.astype(calc_dtype_w2, copy=False)
+          * np.asarray(w2_sigma, dtype=calc_dtype_w2)
+        ).astype(w2_dtype, copy=False)
+
+        return noisy_w1, noisy_w2
     
     def magnitude_cut_boolean(self,
             w1_magnitudes: NDArray,
