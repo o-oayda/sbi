@@ -1,49 +1,11 @@
 import argparse
-from typing import Callable
-
-from joblib import Parallel, delayed
 from dipolesbi.catwise.maps import Catwise
 import time
 from dipolesbi.tools.np_rngkey import prng_key
 from dipolesbi.tools.plotting import smooth_map
 import matplotlib.pyplot as plt
-from numpy.typing import NDArray
-import numpy as np
-from tqdm import tqdm
 from dipolesbi.tools.priors_np import DipolePriorNP
-
-
-def batch_simulate(
-        theta: dict[str, NDArray],
-        model_callable: Callable[..., tuple[NDArray, NDArray]],
-        n_workers: int
-) -> tuple[NDArray, NDArray]:
-    simulation_batch_size = 1
-    n_simulations = list(theta.values())[0].shape[0]
-    n_batches = n_simulations // simulation_batch_size # batch size of 1 by default in simulate_for_sbi
-
-    theta_batches = [
-        {key: arr_batch for key, arr_batch in zip(theta.keys(), batch)}
-        for batch in zip(*[
-            np.array_split(arr, n_batches, axis=0)
-            for arr in theta.values()
-        ])
-    ]
-
-    simulation_outputs: list[tuple[NDArray, NDArray]] = [ # type: ignore
-        xx
-        for xx in tqdm(
-            Parallel(return_as='generator', n_jobs=n_workers)(
-                delayed(model_callable)(**batch)
-                for batch in theta_batches
-            ),
-            total=n_simulations
-        )
-    ]
-
-    x = np.vstack([output[0] for output in simulation_outputs])
-    mask = np.vstack([output[1] for output in simulation_outputs])
-    return x, mask
+from dipolesbi.tools.utils import batch_simulate
 
 
 parser = argparse.ArgumentParser()
@@ -69,6 +31,7 @@ theta = prior.sample(key, n_samples=args.sims)
 t0 = time.time()
 sims, masks = batch_simulate(theta, sim.generate_dipole, n_workers=args.workers)
 t1 = time.time()
+print(sims.dtype)
 
 dt = t1 - t0
 dt_per_sim = dt / args.sims

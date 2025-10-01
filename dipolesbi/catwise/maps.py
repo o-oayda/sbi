@@ -294,7 +294,7 @@ class Catwise:
 
         return self.density_map, self.binary_mask
     
-    def make_real_sample(self) -> NDArray[np.float32]:
+    def make_real_sample(self) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
         print(f'Reading in CatWISE2020 from {self.real_file_path}...')
         self.real_catalogue = Table.read(self.real_file_path)
         print(f'Loaded CatWISE2020.')
@@ -310,7 +310,7 @@ class Catwise:
             longitudes=self.real_catalogue['l'].data,
             latitudes=self.real_catalogue['b'].data
         )
-        return self.real_density_map
+        return self.real_density_map, self.binary_mask
 
     def make_density_map(self,
         longitudes: NDArray,
