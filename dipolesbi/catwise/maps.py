@@ -149,6 +149,8 @@ class Catwise:
         self.final_pixel_indices = None
 
         coverage_query_buffer = np.empty((chunk_size, 2), dtype=self.dtype)
+        colour_buffer = np.empty(chunk_size, dtype=self.dtype)
+        spectral_buffer = np.empty(chunk_size, dtype=np.float32)
         noise_buffer_w1 = np.empty(chunk_size, dtype=np.float64)
         noise_buffer_w2 = np.empty(chunk_size, dtype=np.float64)
 
@@ -185,10 +187,16 @@ class Catwise:
             if rest_w1_samples.size == 0:
                 continue
 
-            rest_w12_samples = rest_w1_samples - rest_w2_samples
-            spectral_indices = -self.spectral_lookup.fit_alpha(
-                w12_colour=rest_w12_samples
+            current_colour = colour_buffer[:rest_w1_samples.size]
+            np.subtract(rest_w1_samples, rest_w2_samples, out=current_colour)
+
+            spectral_indices = spectral_buffer[:current_colour.size]
+            self.spectral_lookup.fit_alpha(
+                w12_colour=current_colour,
+                out=spectral_indices
             )
+            # do not drop -ve sign
+            np.negative(spectral_indices, out=spectral_indices)
 
             boosted_w1_samples = self.boost_magnitudes(
                 rest_w1_samples, rest_source_to_dipole_angle_deg, spectral_indices,

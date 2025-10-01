@@ -8,6 +8,7 @@ import numpy as np
 import healpy as hp
 
 from dipolesbi.catwise.maps import Catwise
+from dipolesbi.catwise.utils import AlphaLookup
 
 
 @lru_cache(maxsize=1)
@@ -158,3 +159,19 @@ def test_add_error_statistical_properties():
     assert abs(np.mean(residual_w2_t)) < 5e-3
     assert np.isclose(np.var(residual_w1_t, ddof=1), t_variance, rtol=0.2)
     assert np.isclose(np.var(residual_w2_t, ddof=1), t_variance, rtol=0.2)
+
+
+def test_alpha_lookup_buffered_vs_default():
+    lookup = AlphaLookup(no_check=True)
+
+    colours = np.linspace(-1.0, 2.0, 1_000, dtype=np.float32)
+    out_buffer = np.empty_like(colours)
+
+    buffered = lookup.fit_alpha(colours, out=out_buffer)
+
+    # Recompute using a fresh lookup to avoid buffer reuse
+    lookup_fresh = AlphaLookup(no_check=True)
+    reference = lookup_fresh.p_W12(colours).astype(np.float32)
+
+    assert buffered is out_buffer
+    assert np.allclose(buffered, reference, rtol=1e-6, atol=1e-7)

@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 from astropy.table import Table
 import numpy as np
 from scipy.constants import speed_of_light
@@ -35,8 +36,28 @@ class AlphaLookup:
         polynomial_fit = np.polyfit(self.lookup_W1_W2, self.lookup_alpha, deg=order)
         self.p_W12 = np.poly1d(polynomial_fit)
 
-    def fit_alpha(self, w12_colour: NDArray) -> NDArray[np.float32]:
-        return self.p_W12(w12_colour).astype('float32')
+    def fit_alpha(
+            self,
+            w12_colour: NDArray,
+            out: Optional[NDArray[np.float32]] = None
+        ) -> NDArray[np.float32]:
+        coeffs = self.p_W12.c.astype(np.float32)
+        colour = np.asarray(w12_colour, dtype=np.float32)
+
+        if out is None:
+            result = np.empty_like(colour, dtype=np.float32)
+        else:
+            if out.shape != colour.shape:
+                raise ValueError('Output buffer must match input shape.')
+            result = out
+
+        # Horner's method
+        result[:] = coeffs[0] # highest order coefficient
+        for coefficient in coeffs[1:]:
+            np.multiply(result, colour, out=result)
+            result += coefficient
+
+        return result
     
     def make_alpha(self,
             w1_magnitude: NDArray,
