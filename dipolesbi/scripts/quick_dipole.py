@@ -6,6 +6,7 @@ from dipolesbi.tools.plotting import smooth_map
 import matplotlib.pyplot as plt
 from dipolesbi.tools.priors_np import DipolePriorNP
 from dipolesbi.tools.utils import batch_simulate
+import numpy as np
 
 
 parser = argparse.ArgumentParser()
@@ -25,7 +26,11 @@ sim = Catwise(cat_w1_max=17.0, cat_w12_min=0.5)
 sim.initialise_data()
 
 key = prng_key(42)
-prior = DipolePriorNP(mean_count_range=[30e6, 40e6])
+prior = DipolePriorNP(mean_count_range=[np.log10(30e6), np.log10(40e6)])
+prior.change_kwarg(
+    param_short_name='N',
+    new_kwarg='log10_n_initial_samples'
+)
 theta = prior.sample(key, n_samples=args.sims)
 
 t0 = time.time()

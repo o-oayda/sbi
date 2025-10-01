@@ -80,7 +80,7 @@ class Catwise:
     
     # @profile
     def generate_dipole(self,
-            n_initial_samples: int,
+            log10_n_initial_samples: float,
             w1_max: float = 16.4,
             w1_min: float = 9.,
             w12_min: float = 0.8,
@@ -113,7 +113,7 @@ class Catwise:
             dipole_latitude=self.dipole_latitude
         )
 
-        self.n_samples = int(n_initial_samples)
+        self.n_samples = int(10 ** log10_n_initial_samples)
         if self.n_samples < 0:
             raise ValueError('n_initial_samples must be non-negative.')
 

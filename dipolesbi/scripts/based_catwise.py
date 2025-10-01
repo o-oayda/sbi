@@ -63,9 +63,14 @@ if __name__ == '__main__':
     )
     model.initialise_data()
     prior = DipolePriorNP(
-        mean_count_range=[30_000_000, 40_000_000],
+        mean_count_range=[np.log10(30_000_000), np.log10(40_000_000)],
         speed_range=[0, 8]
     )
+    prior.change_kwarg(
+        param_short_name='N',
+        new_kwarg='log10_n_initial_samples'
+    )
+    
     prior.add_prior(
         short_name='etaW1',
         simulator_kwarg='w1_extra_error',
