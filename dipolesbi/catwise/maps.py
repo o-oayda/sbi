@@ -134,7 +134,11 @@ class Catwise:
             return self.density_map, self.binary_mask
 
         if chunk_size is None:
-            chunk_size = min(self.n_samples, 200_000)
+            # 100k : 0.742 s / sim
+            # 50k  : 0.668 s / sim
+            # 25k  : 0.653 s / sim
+            # 12.5k: 0.645 s / sim
+            chunk_size = min(self.n_samples, 25_000)
         elif chunk_size <= 0:
             raise ValueError('chunk_size must be a positive integer.')
         else:
