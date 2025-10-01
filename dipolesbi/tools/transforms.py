@@ -249,21 +249,24 @@ class ZScore(InvertibleDataTransform):
 class DipoleBijectorWrapper(InvertibleThetaTransformJax):
     def __init__(self, prior: DipolePriorJax) -> None:
         super().__init__(prior)
-        self.bijectors = {
-            'mean_density': UniformIntervalSigmoid(
-                self.prior.low_ranges[0], 
-                self.prior.high_ranges[0]
-            ),
-            'observer_speed': UniformIntervalSigmoid(
-                self.prior.low_ranges[1], 
-                self.prior.high_ranges[1]
-            ),
-            'dipole_longitude': UniformIntervalSigmoid(
-                self.prior.low_ranges[2], 
-                self.prior.high_ranges[2]
-            ),
-            'dipole_latitude': LatitudeBijector() # assume -90, 90 for now
+        distribution_bijection_map = {
+            'uniform': UniformIntervalSigmoid,
+            'polar': LatitudeBijector
         }
+
+        self.bijectors = {}
+        for prior_key in self.prior.prior_names:
+            dict_entry = self.prior.prior_dict[prior_key]
+            dist_type = dict_entry['dist_type']
+            kwarg = dict_entry['simulator_kwarg']
+            low = dict_entry['low_range']
+            high = dict_entry['high_range']
+
+            bijection = distribution_bijection_map[dist_type]
+            if bijection == LatitudeBijector:
+                self.bijectors[kwarg] = bijection() # assume -90, 90 for now
+            else:
+                self.bijectors[kwarg] = bijection(low, high)
 
     def __repr__(self) -> str:
         return 'DipoleBijectorWrapper()'
