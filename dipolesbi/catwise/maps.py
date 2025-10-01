@@ -1,5 +1,4 @@
 from dill.session import Optional
-import scipy
 from typing_extensions import Literal
 from astropy.table import Table
 from dipolesbi.tools.utils import (
@@ -332,7 +331,7 @@ class Catwise:
 
     @property
     def binary_mask(self) -> NDArray[np.bool_]:
-        out = np.ones_like(self.density_map, dtype=np.bool_)
+        out = np.ones(hp.nside2npix(self.nside), dtype=np.bool_)
         out[self.masked_pixel_indices_list] = False
         return out
 
