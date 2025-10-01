@@ -1,5 +1,6 @@
-from typing import Optional, cast
+from typing import Callable, Optional, cast
 import healpy as hp
+from joblib import Parallel, delayed
 import numpy as np
 import torch
 from torch import poisson
@@ -18,7 +19,40 @@ from jax import numpy as jnp
 import jax
 from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.dataloader import healpix_map_dataset_idx, healpix_map_dataset
+from tqdm import tqdm
 
+
+def batch_simulate(
+        theta: dict[str, NDArray],
+        model_callable: Callable[..., tuple[NDArray, NDArray]],
+        n_workers: int
+) -> tuple[NDArray, NDArray]:
+    simulation_batch_size = 1
+    n_simulations = list(theta.values())[0].shape[0]
+    n_batches = n_simulations // simulation_batch_size # batch size of 1 by default in simulate_for_sbi
+
+    theta_batches = [
+        {key: arr_batch for key, arr_batch in zip(theta.keys(), batch)}
+        for batch in zip(*[
+            np.array_split(arr, n_batches, axis=0)
+            for arr in theta.values()
+        ])
+    ]
+
+    simulation_outputs: list[tuple[NDArray, NDArray]] = [ # type: ignore
+        xx
+        for xx in tqdm(
+            Parallel(return_as='generator', n_jobs=n_workers)(
+                delayed(model_callable)(**batch)
+                for batch in theta_batches
+            ),
+            total=n_simulations
+        )
+    ]
+
+    x = np.vstack([output[0] for output in simulation_outputs])
+    mask = np.vstack([output[1] for output in simulation_outputs])
+    return x, mask
 
 class PytreeAdapter:
     """Converts between a batch of pytrees and a 2-D (B, D) array."""
