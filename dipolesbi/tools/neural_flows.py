@@ -705,6 +705,9 @@ class AbstractNeuralFlow(ABC):
         )
         batch_size = 200
 
+        if ui is not None:
+            ui.begin_progress(total=n_samples)
+
         while remaining_samples > 0:
             current_batch_size = min(batch_size, remaining_samples)
             n_total_simulations_round += current_batch_size
@@ -732,14 +735,9 @@ class AbstractNeuralFlow(ABC):
                 mask = jnp.isfinite(proposal_probs)
                 proposal_tree = jax.tree_map(lambda a: a[mask], proposal_tree)
                 n_accepted = int(mask.sum())
-                if ui is not None:
-                    discarded = current_batch_size - n_accepted
-                    ui.log(
-                        f"Posterior batch: accepted {n_accepted}/{current_batch_size}"
-                        f" (discarded {discarded})")
-                    if discarded == batch_size:
-                        ui.log('All proposed samples discarded... breaking.')
-                        return None
+                if (ui is not None) and (current_batch_size - n_accepted == batch_size):
+                    ui.log('All proposed samples discarded... breaking.')
+                    return None
             else:
                 n_accepted = current_batch_size
 
@@ -747,12 +745,17 @@ class AbstractNeuralFlow(ABC):
                 collected.append(proposal_tree)
                 remaining_samples -= n_accepted
 
+            if ui is not None:
+                ui.update_progress(n_accepted)
+
         concatenated_post_samples = jax.tree_map(
             lambda *xs: jnp.concatenate(xs, axis=0), *collected
         )
         concatenated_post_samples = jax.tree_map(
             lambda a: a[:n_samples], concatenated_post_samples
         )
+        if ui is not None:
+            ui.end_progress()
         return concatenated_post_samples
 
     def evaluate_lnlike(

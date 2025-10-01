@@ -1,9 +1,11 @@
+from typing import Optional
 from numpy.typing import NDArray
 from dipolesbi.catwise.maps import Catwise
 from dipolesbi.tools.configs import Scenario
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
 from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.priors_np import DipolePriorNP
+from dipolesbi.tools.ui import MultiRoundInfererUI
 import argparse
 import numpy as np
 from dipolesbi.tools.utils import batch_simulate
@@ -127,11 +129,17 @@ if __name__ == '__main__':
     cur_cfg = meta_cfg[MODE]
 
     def model_sim_wrapper(
-            npkey: NPKey, 
-            params: dict[str, NDArray], 
-            noise: bool = True
+            npkey: NPKey,
+            params: dict[str, NDArray],
+            noise: bool = True,
+            ui: Optional[MultiRoundInfererUI] = None
     ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
-        return batch_simulate(params, model.generate_dipole, n_workers=N_WORKERS)
+        return batch_simulate(
+            params,
+            model.generate_dipole,
+            n_workers=N_WORKERS,
+            ui=ui
+        )
 
     x0, mask = model.make_real_sample()
         

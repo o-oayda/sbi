@@ -18,6 +18,7 @@ import torch.nn.functional as F
 from jax import numpy as jnp
 import jax
 from dipolesbi.tools.np_rngkey import NPKey
+from dipolesbi.tools.ui import MultiRoundInfererUI
 from dipolesbi.tools.dataloader import healpix_map_dataset_idx, healpix_map_dataset
 from tqdm import tqdm
 
@@ -25,30 +26,46 @@ from tqdm import tqdm
 def batch_simulate(
         theta: dict[str, NDArray],
         model_callable: Callable[..., tuple[NDArray, NDArray]],
-        n_workers: int
+        n_workers: int,
+        ui: Optional[MultiRoundInfererUI] = None
 ) -> tuple[NDArray, NDArray]:
     simulation_batch_size = 1
-    n_simulations = list(theta.values())[0].shape[0]
+    theta_np = {key: np.asarray(val) for key, val in theta.items()}
+    n_simulations = list(theta_np.values())[0].shape[0]
     n_batches = n_simulations // simulation_batch_size # batch size of 1 by default in simulate_for_sbi
 
     theta_batches = [
         {key: arr_batch for key, arr_batch in zip(theta.keys(), batch)}
         for batch in zip(*[
             np.array_split(arr, n_batches, axis=0)
-            for arr in theta.values()
+            for arr in theta_np.values()
         ])
     ]
 
-    simulation_outputs: list[tuple[NDArray, NDArray]] = [ # type: ignore
-        xx
-        for xx in tqdm(
-            Parallel(return_as='generator', n_jobs=n_workers)(
-                delayed(model_callable)(**batch)
-                for batch in theta_batches
-            ),
-            total=n_simulations
-        )
-    ]
+    iterator = Parallel(return_as='generator', n_jobs=n_workers)(
+        delayed(model_callable)(**batch) for batch in theta_batches
+    )
+
+    progress = None
+    if ui is not None:
+        pass
+        # if ui._global_prog is not None:
+        #     ui.begin_global_progress(total=n_simulations)
+    else:
+        progress = tqdm(total=n_simulations)
+
+    simulation_outputs: list[tuple[NDArray, NDArray]] = []
+    for idx, result in enumerate(iterator, start=1):
+        simulation_outputs.append(result)
+        if ui is not None:
+            ui.set_global_completed(idx)
+        else:
+            progress.update(1)
+
+    if ui is not None:
+        ui.end_global_progress()
+    elif progress is not None:
+        progress.close()
 
     x = np.vstack([output[0] for output in simulation_outputs])
     mask = np.vstack([output[1] for output in simulation_outputs])

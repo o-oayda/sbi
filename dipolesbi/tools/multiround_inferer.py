@@ -9,6 +9,7 @@ import jax
 import numpy as np
 from numpy.typing import NDArray
 from jax import numpy as jnp
+import matplotlib; matplotlib.use('Agg') # stop async errors when calling plots in pipeline
 from matplotlib import pyplot as plt
 import healpy as hp
 from dipolesbi.tools.configs import (
@@ -36,7 +37,7 @@ class MultiRoundInferer:
             mode: Literal['NLE'] | Literal['NPE'],
             initial_proposal: DipolePriorNP,
             simulator_function: Callable[
-                [NPKey, dict[str, NDArray[np.float32]], bool],
+                [NPKey, dict[str, NDArray[np.float32]], bool, Optional[MultiRoundInfererUI]],
                 tuple[NDArray[np.float32], NDArray[np.bool_]]
             ],
             reference_observation: tuple[NDArray, NDArray[np.bool_]],
@@ -824,7 +825,7 @@ class MultiRoundInferer:
             key: NPKey,
             theta: dict[str, NDArray]
     ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
-        return self.simulator_function(key, theta, True)
+        return self.simulator_function(key, theta, True, self.ui)
 
     def _instantiate_nflow(self) -> NeuralFlow:
         if (not self.train_config.restore_from_previous) or (self.nflow is None):
