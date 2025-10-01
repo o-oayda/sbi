@@ -9,6 +9,13 @@ import healpy as hp
 
 from dipolesbi.catwise.maps import Catwise
 from dipolesbi.catwise.utils import AlphaLookup
+from dipolesbi.tools.physics import (
+    aberrate_points as fast_aberrate,
+    rotation_matrices_for_dipole,
+    native_to_dipole_frame,
+    dipole_to_native_frame,
+    compute_boosted_angles
+)
 
 
 @lru_cache(maxsize=1)
@@ -175,3 +182,44 @@ def test_alpha_lookup_buffered_vs_default():
 
     assert buffered is out_buffer
     assert np.allclose(buffered, reference, rtol=1e-6, atol=1e-7)
+
+
+def test_aberrate_points_matches_astropy_reference():
+    rng = np.random.default_rng(123)
+    longitudes = rng.uniform(0, 360, size=10_000)
+    latitudes = np.degrees(np.arcsin(rng.uniform(-1, 1, size=10_000))) # (-90, 90)
+
+    observer_direction = (123.4, -27.5)
+    observer_speed = 1.23e-3
+
+    rotation_matrices = rotation_matrices_for_dipole(*observer_direction)
+    fast_lon, fast_lat, fast_theta = fast_aberrate(
+        rest_longitudes=longitudes,
+        rest_latitudes=latitudes,
+        observer_direction=observer_direction,
+        observer_speed=observer_speed,
+        rotation_matrices=rotation_matrices
+    )
+
+    ref_lon_dp, ref_lat_dp = native_to_dipole_frame(
+        point_longitudes=longitudes,
+        point_latitudes=latitudes,
+        dipole_longitude=observer_direction[0],
+        dipole_latitude=observer_direction[1]
+    )
+    ref_theta = 90.0 - ref_lat_dp
+    boosted_theta = compute_boosted_angles(
+        source_frame_angles=ref_theta,
+        observer_speed=observer_speed
+    )
+    boosted_lat_dp = 90.0 - boosted_theta
+    ref_lon, ref_lat = dipole_to_native_frame(
+        point_longitudes=ref_lon_dp,
+        point_latitudes=boosted_lat_dp,
+        dipole_longitude=observer_direction[0],
+        dipole_latitude=observer_direction[1]
+    )
+
+    assert np.allclose(fast_lon, ref_lon, atol=1e-9)
+    assert np.allclose(fast_lat, ref_lat, atol=1e-9)
+    assert np.allclose(fast_theta, ref_theta, atol=1e-9)

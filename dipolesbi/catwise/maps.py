@@ -8,7 +8,8 @@ from dipolesbi.tools.utils import (
 from torch.types import Tensor
 import torch
 from dipolesbi.tools.physics import (
-    sample_spherical_points, aberrate_points, boost_magnitudes
+    sample_spherical_points, aberrate_points, boost_magnitudes,
+    rotation_matrices_for_dipole
 )
 from dipolesbi.tools.constants import *
 from dipolesbi.catwise.utils import AlphaLookup
@@ -108,6 +109,10 @@ class Catwise:
         self.observer_speed = observer_speed * CMB_BETA
         self.dipole_longitude = dipole_longitude
         self.dipole_latitude = dipole_latitude
+        self._rotation_matrices = rotation_matrices_for_dipole(
+            dipole_longitude=self.dipole_longitude,
+            dipole_latitude=self.dipole_latitude
+        )
 
         self.n_samples = int(n_initial_samples)
         if self.n_samples < 0:
@@ -918,7 +923,8 @@ class Catwise:
             rest_longitudes=calc_lon,
             rest_latitudes=calc_lat,
             observer_direction=(self.dipole_longitude, self.dipole_latitude),
-            observer_speed=self.observer_speed
+            observer_speed=self.observer_speed,
+            rotation_matrices=self._rotation_matrices
         )
         
         # Convert back to requested dtype

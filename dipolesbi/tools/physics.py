@@ -8,6 +8,53 @@ import numpy as np
 from numpy.typing import NDArray
 
 
+def _spherical_to_cart_deg(
+        longitudes_deg: NDArray[np.float64],
+        latitudes_deg: NDArray[np.float64]
+    ) -> NDArray[np.float64]:
+    """Convert lon/lat (deg) to Cartesian unit vectors.
+
+    Notes
+    -----
+    This uses the astronomical convention: longitude ``λ`` and latitude ``β``
+    measured from the equatorial plane (β = 0° on the equator, +90° at the
+    north pole). It therefore differs from the convention where
+    ``θ`` is the colatitude. The trigonometric identities reduce to::
+
+        x = cos β · cos λ
+        y = cos β · sin λ
+        z = sin β
+    """
+    lon_rad = np.deg2rad(longitudes_deg)
+    lat_rad = np.deg2rad(latitudes_deg)
+    cos_lat = np.cos(lat_rad)
+    x = cos_lat * np.cos(lon_rad)
+    y = cos_lat * np.sin(lon_rad)
+    z = np.sin(lat_rad)
+    return np.stack((x, y, z), axis=-1).astype(np.float64)
+
+
+def rotation_matrices_for_dipole(
+        dipole_longitude: float,
+        dipole_latitude: float
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    rot_forward = RotateCelestial2Native(
+        lon=dipole_longitude * u.degree,
+        lat=dipole_latitude * u.degree,
+        lon_pole=0.0 * u.degree
+    )
+
+    basis_lon = np.array([0.0, 90.0, 0.0])
+    basis_lat = np.array([0.0, 0.0, 90.0])
+
+    rot_lon, rot_lat = rot_forward(basis_lon, basis_lat)
+    rotated_vectors = _spherical_to_cart_deg(rot_lon, rot_lat)
+
+    forward = rotated_vectors.T
+    inverse = forward.T
+    return forward.astype(np.float64), inverse.astype(np.float64)
+
+
 def sample_spherical_points(n_points) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     longitudes_deg = 360 * np.random.rand(n_points)
     latitudes_deg = np.rad2deg(
@@ -116,7 +163,8 @@ def aberrate_points(
         rest_longitudes: NDArray,
         rest_latitudes: NDArray,
         observer_direction: tuple[float, float],
-        observer_speed: float
+        observer_speed: float,
+        rotation_matrices: tuple[NDArray[np.float64], NDArray[np.float64]] | None = None
     ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
     '''
     Aberrate points by transforming into a frame with the dipole vector as the
@@ -129,15 +177,42 @@ def aberrate_points(
     '''
     dipole_longitude, dipole_latitude = observer_direction
     
-    dipole_frame_longitudes, dipole_frame_latitudes = native_to_dipole_frame(
-        point_longitudes=rest_longitudes,
-        point_latitudes=rest_latitudes,
-        dipole_longitude=dipole_longitude,
-        dipole_latitude=dipole_latitude
+    if rotation_matrices is None:
+        forward_matrix, inverse_matrix = rotation_matrices_for_dipole(
+            dipole_longitude=dipole_longitude,
+            dipole_latitude=dipole_latitude
+        )
+    else:
+        forward_matrix, inverse_matrix = rotation_matrices
+
+    lon_rad = np.deg2rad(rest_longitudes)
+    lat_rad = np.deg2rad(rest_latitudes)
+
+    cos_lat = np.cos(lat_rad)
+    x = cos_lat * np.cos(lon_rad)
+    y = cos_lat * np.sin(lon_rad)
+    z = np.sin(lat_rad)
+
+    dipole_x = (
+        forward_matrix[0, 0] * x
+      + forward_matrix[0, 1] * y
+      + forward_matrix[0, 2] * z
+    )
+    dipole_y = (
+        forward_matrix[1, 0] * x
+      + forward_matrix[1, 1] * y
+      + forward_matrix[1, 2] * z
+    )
+    dipole_z = (
+        forward_matrix[2, 0] * x
+      + forward_matrix[2, 1] * y
+      + forward_matrix[2, 2] * z
     )
 
-    source_to_dipole_angle = 90. - dipole_frame_latitudes
-    del dipole_frame_latitudes
+    dipole_frame_longitudes = (np.degrees(np.arctan2(dipole_y, dipole_x)) + 360.0) % 360.0
+
+    # i.e. the polar angle theta
+    source_to_dipole_angle = np.degrees(np.arccos(np.clip(dipole_z, -1.0, 1.0)))
     
     boosted_source_to_dipole_angle = compute_boosted_angles(
         source_frame_angles=source_to_dipole_angle,
@@ -146,12 +221,31 @@ def aberrate_points(
     boosted_dipole_frame_latitudes = 90. - boosted_source_to_dipole_angle
     del boosted_source_to_dipole_angle
 
-    boosted_longitudes, boosted_latitudes = dipole_to_native_frame(
-        point_longitudes=dipole_frame_longitudes,
-        point_latitudes=boosted_dipole_frame_latitudes,
-        dipole_longitude=dipole_longitude,
-        dipole_latitude=dipole_latitude
+    boosted_lat_rad = np.deg2rad(boosted_dipole_frame_latitudes)
+    cos_boosted_lat = np.cos(boosted_lat_rad)
+
+    boosted_x = cos_boosted_lat * np.cos(np.deg2rad(dipole_frame_longitudes))
+    boosted_y = cos_boosted_lat * np.sin(np.deg2rad(dipole_frame_longitudes))
+    boosted_z = np.sin(boosted_lat_rad)
+
+    native_x = (
+        inverse_matrix[0, 0] * boosted_x
+      + inverse_matrix[0, 1] * boosted_y
+      + inverse_matrix[0, 2] * boosted_z
     )
+    native_y = (
+        inverse_matrix[1, 0] * boosted_x
+      + inverse_matrix[1, 1] * boosted_y
+      + inverse_matrix[1, 2] * boosted_z
+    )
+    native_z = (
+        inverse_matrix[2, 0] * boosted_x
+      + inverse_matrix[2, 1] * boosted_y
+      + inverse_matrix[2, 2] * boosted_z
+    )
+
+    boosted_longitudes = (np.degrees(np.arctan2(native_y, native_x)) + 360.0) % 360.0
+    boosted_latitudes = np.degrees(np.arcsin(np.clip(native_z, -1.0, 1.0)))
 
     return boosted_longitudes, boosted_latitudes, source_to_dipole_angle
 
