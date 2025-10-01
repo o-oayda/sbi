@@ -615,9 +615,9 @@ class Scenario:
     def anynside_nle(
         cls,
         nside: int,
-        reference_theta: dict[str, NDArray],
         theta_prior: DipolePriorJax,
         *,
+        reference_theta: Optional[dict[str, NDArray]] = None,
         training_overrides: Optional[dict] = None,
         multiround_overrides: Optional[dict] = None,
         flow_overrides: Optional[dict] = None,
@@ -690,9 +690,9 @@ class Scenario:
     def anynside_npe(
         cls,
         nside: int,
-        reference_theta: dict[str, NDArray],
         theta_prior: DipolePriorJax,
         *,
+        reference_theta: Optional[dict[str, NDArray]] = None,
         training_overrides: Optional[dict] = None,
         multiround_overrides: Optional[dict] = None,
         flow_overrides: Optional[dict] = None,
