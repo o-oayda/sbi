@@ -1,4 +1,4 @@
-from blackjax.types import PRNGKey
+import typing
 import jax
 import numpy as np
 from numpy.typing import DTypeLike, NDArray
@@ -105,7 +105,7 @@ class SimpleDipoleMapJax:
 
     def generate_dipole(
             self,
-            rng_key: PRNGKey, 
+            rng_key: typing.Any, # fix issues with jax when using batch_simulate 
             theta: dict[str, jnp.ndarray],
             make_poisson_draws: bool = True
     ) -> jnp.ndarray:
