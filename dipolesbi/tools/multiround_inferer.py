@@ -8,20 +8,23 @@ import haiku as hk
 import jax
 import numpy as np
 from numpy.typing import NDArray
-from jax import device_put, numpy as jnp
+from jax import numpy as jnp
 from matplotlib import pyplot as plt
 import healpy as hp
-from dipolesbi.tools.configs import MultiRoundInfererConfig, NeuralFlowConfig, TrainingConfig, TransformConfig
+from dipolesbi.tools.configs import (
+    MultiRoundInfererConfig, 
+    NeuralFlowConfig, 
+    TrainingConfig, 
+    TransformConfig
+)
 from dipolesbi.tools.dataloader import split_train_val_dict
 from dipolesbi.tools.inference import JaxNestedSampler
-from dipolesbi.tools.maps import SimpleDipoleMapJax
 from dipolesbi.tools.dataloader import healpix_map_dataset, healpix_map_dataset_idx
 from dipolesbi.tools.neural_flows import NeuralFlow
 from dipolesbi.tools.np_rngkey import NPKey, npkey_from_jax
 from dipolesbi.tools.priors_np import DipolePriorNP
-from dipolesbi.tools.transforms import BlankTransform
 from dipolesbi.tools.ui import MultiRoundInfererUI
-from dipolesbi.tools.utils import HidePrints, jax_sph2cart, load_dict_npz, np_sph2cart_unitsphere, save_dict_npz
+from dipolesbi.tools.utils import HidePrints, load_dict_npz, save_dict_npz
 from jax import lax
 import datetime
 from corner import corner
@@ -41,6 +44,7 @@ class MultiRoundInferer:
             nflow_config: NeuralFlowConfig,
             transform_config: TransformConfig,
             train_config: TrainingConfig = TrainingConfig(),
+            true_logl: Optional[Callable[[dict[str, jnp.ndarray]], jnp.ndarray]] = None
     ) -> None:
         self.mode = mode
         self.mr_config = multi_round_config
@@ -49,11 +53,11 @@ class MultiRoundInferer:
 
         self.initial_proposal = initial_proposal
         self.initial_proposal_jax = initial_proposal.to_jax()
-        self.initial_proposal_jax.change_kwarg('N', 'mean_density')
 
         self.simulator_function = simulator_function
         self.reference_data = reference_observation[0]
         self.reference_mask = reference_observation[1]
+        self.true_logl = true_logl
         self.data_ndim = self.reference_data.shape[-1]
         self.theta_ndim = initial_proposal.ndim
         self.nside = hp.npix2nside(self.data_ndim)
@@ -110,6 +114,7 @@ class MultiRoundInferer:
         self.lnZ_per_round = []
         self.lnZerr_per_round = []
         self.final_nested_samples = None
+        self.classic_nested_samples = None
 
     @property
     def target_ndim(self) -> int:
@@ -190,10 +195,11 @@ class MultiRoundInferer:
                 self.ui.advance_global(n=self.mr_config.simulations_per_round)
 
         self.ui.start_step(5, 'benchmarking')
-        self._benchmark_classic(current_key)
-        self.final_posterior_samples = self.nested_samples
-        self.final_classic_samples = self.classic_nested_samples
+        if self.true_logl is not None: self._benchmark_classic(current_key)
         self.ui.finish_step('benchmarked')
+
+        if self.mr_config.write_results_to_disk: self._write_results_to_disk()
+        self._lnZ_plot()
 
     def _npe_pipeline(self):
         current_key = self.rng_key
@@ -252,10 +258,10 @@ class MultiRoundInferer:
                 self.ui.advance_global(n=self.mr_config.simulations_per_round)
 
         self.ui.start_step(5, 'benchmarking')
-        self._benchmark_classic(current_key)
-        self.final_posterior_samples = self.posterior_samples
-        self.final_classic_samples = self.classic_nested_samples
+        if self.true_logl is not None: self._benchmark_classic(current_key)
         self.ui.finish_step('benchmarked')
+
+        if self.mr_config.write_results_to_disk: self._write_results_to_disk()
 
     def _train_nflow(self, train_key: PRNGKey) -> None:
         assert self.nflow is not None
@@ -275,6 +281,24 @@ class MultiRoundInferer:
               + f'/loss_curve_{self.current_round}.png'
             )
         )
+
+    def _write_results_to_disk(self):
+        if self.mode == 'NLE':
+            self.final_posterior_samples = self.nested_samples
+            self.final_posterior_samples.to_csv(
+                path_or_buf=os.path.join(self.mr_config.plot_save_dir, 'samples.csv')
+            )
+        else:
+            self.final_posterior_samples = self.posterior_samples
+            np_samples = {
+                k: np.array(v) for k, v in self.posterior_samples.items()
+            }
+            np.savez(
+                os.path.join(self.mr_config.plot_save_dir, 'samples.npz'),
+                **np_samples
+            )
+
+        self.final_classic_samples = self.classic_nested_samples
 
     def save_simulations(self) -> None:
         data_path = self.mr_config.plot_save_dir + '/data'
@@ -406,17 +430,10 @@ class MultiRoundInferer:
             self, 
             rng_key: PRNGKey
     ) -> tuple[float, float, NestedSamples]:
-        classic_model = SimpleDipoleMapJax(
-            self.nside,
-            reference_data=jnp.asarray(self.reference_data).squeeze(),
-            reference_mask=jnp.asarray(self.reference_mask).squeeze()
-        )
-
-        def lnlike_jax(params: dict[str, jnp.ndarray]) -> jnp.ndarray:
-            return classic_model.log_likelihood(params)
+        assert self.true_logl is not None
 
         self.classic_jax_ns = JaxNestedSampler(
-            lnlike_jax, 
+            self.true_logl, 
             self.initial_proposal_jax,
             ui=self.ui
         )
@@ -814,3 +831,41 @@ class MultiRoundInferer:
         else:
             nflow = self.nflow
         return nflow
+
+    def _lnZ_plot(self) -> None:
+        true_lnZ = self.true_lnZ
+        true_lnZ_err = self.true_lnZerr
+        lnZ_estimates = self.lnZ_per_round
+        lnZ_estimates_err = self.lnZerr_per_round
+
+        epochs = range(len(lnZ_estimates))
+        _, ax = plt.subplots()
+
+        ax.axhspan(
+            true_lnZ - true_lnZ_err, # type: ignore
+            true_lnZ + true_lnZ_err, # type: ignore
+            color='gray', alpha=0.3, label='True lnZ ± err'
+        )
+
+        ax.errorbar(
+            epochs, lnZ_estimates, yerr=lnZ_estimates_err,
+            fmt='o-', capsize=4, label='Estimated lnZ'
+        )
+
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('lnZ')
+        ax.legend()
+        plt.tight_layout()
+
+        save_path = os.path.join(
+            self.mr_config.plot_save_dir,
+            'lnZ_evolution.pdf'
+        )
+        plt.savefig(save_path, bbox_inches='tight')
+
+        # save epoch vs lnz
+        array_save_path = os.path.join(
+            self.mr_config.plot_save_dir,
+            'epoch_lnZ.npy'
+        )
+        np.save(array_save_path, [lnZ_estimates, lnZ_estimates_err])

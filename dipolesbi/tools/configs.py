@@ -154,6 +154,7 @@ class MultiRoundInfererConfig:
     n_likelihood_samples: int = 50_000
     n_posterior_samples: int = 10_000 # for NPE after training
     check_proposal_probs: bool = True
+    write_results_to_disk: bool = True
 
     def __post_init__(self) -> None:
         self.simulations_per_round = self.simulation_budget // self.n_rounds
