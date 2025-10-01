@@ -1,9 +1,18 @@
 from abc import ABC, abstractmethod
-from typing import Callable
+from typing import Callable, Optional
 import scipy
+import jax
+import jax.numpy as jnp
+import jax.scipy.stats as jsp_stats
 from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.priors_jax import DipolePriorJax
-from dipolesbi.tools.utils import polar_logpdf_np, sample_polar_np, sample_unif_np
+from dipolesbi.tools.utils import (
+    polar_logpdf_np,
+    polar_logpdf_jax,
+    sample_polar_np,
+    sample_polar_jax,
+    sample_unif_np,
+)
 import numpy as np
 from numpy.typing import NDArray, DTypeLike
 
@@ -34,14 +43,14 @@ class NPPrior(ABC):
 
     @property
     def low_ranges(self) -> NDArray:
-        low_ranges = np.empty(self.ndim)
+        low_ranges = np.empty(self.ndim, dtype=self.dtype)
         for i, name in enumerate(self.prior_names):
             low_ranges[i] = self.prior_dict[name]['low_range']
         return low_ranges 
 
     @property
     def high_ranges(self) -> NDArray:
-        high_ranges = np.empty(self.ndim)
+        high_ranges = np.empty(self.ndim, dtype=self.dtype)
         for i, name in enumerate(self.prior_names):
             high_ranges[i] = self.prior_dict[name]['high_range']
         return high_ranges 
@@ -62,7 +71,8 @@ class NPPrior(ABC):
             ranges: list[list[float]],
             sample_funcs: list[Callable],
             logpdf_funcs: list[Callable],
-            tform_funcs: list[Callable]
+            tform_funcs: list[Callable],
+            dist_types: list[str]
             
     ) -> dict[str, dict]:
         '''
@@ -84,9 +94,84 @@ class NPPrior(ABC):
                 'high_range': np.asarray(ranges[i][1], dtype=self.dtype),
                 'sample_func':  sample_funcs[i],
                 'logpdf_func': logpdf_funcs[i],
-                'tform_func': tform_funcs[i]
+                'tform_func': tform_funcs[i],
+                'dist_type': dist_types[i].lower()
             }
         return prior_dict
+
+    def _np_distribution_funcs(self, dist_type: str) -> tuple[Callable, Callable, Callable]:
+        dist = dist_type.lower()
+        if dist == 'uniform':
+            def sample(key: NPKey, n: int, a, b):
+                return key.uniform((n,), low=a, high=b, dtype=self.dtype)
+
+            def logpdf(x, a, b):
+                return scipy.stats.uniform.logpdf(x, loc=a, scale=b - a)
+
+            def transform(u, a, b):
+                return sample_unif_np(u, low=a, high=b)
+
+            return sample, logpdf, transform
+
+        elif dist == 'polar':
+            def sample(key: NPKey, n: int, a, b):
+                return sample_polar_np(key, n_samples=n, low=a, high=b, dtype=self.dtype)
+
+            def logpdf(x, a, b):
+                return polar_logpdf_np(x, low=a, high=b)
+
+            def transform(u, a, b):
+                return sample_polar_np(u, low=a, high=b, dtype=self.dtype)  # type: ignore[arg-type]
+
+            return sample, logpdf, transform
+
+        raise ValueError(f"Unknown distribution type '{dist_type}'.")
+
+    def _jax_distribution_funcs(self, dist_type: str) -> tuple[Callable, Callable]:
+        dist = dist_type.lower()
+        if dist == 'uniform':
+            def sample(key, a, b):
+                return jax.random.uniform(key, minval=a, maxval=b)
+
+            def logpdf(x, a, b):
+                return jsp_stats.uniform.logpdf(x, loc=a, scale=b - a)
+
+            return sample, logpdf
+
+        if dist == 'polar':
+            return sample_polar_jax, polar_logpdf_jax
+
+        raise ValueError(f"Unknown distribution type '{dist_type}'.")
+
+    def add_prior(
+            self,
+            short_name: str,
+            simulator_kwarg: str,
+            low: float,
+            high: float,
+            dist_type: str = 'uniform',
+            index: Optional[int] = None
+    ) -> None:
+        if short_name in self.prior_dict:
+            raise ValueError(f"Prior '{short_name}' already exists.")
+
+        if index is None:
+            index = len(self.prior_names)
+
+        np_sample, np_logpdf, np_tform = self._np_distribution_funcs(dist_type)
+
+        entry = {
+            'simulator_kwarg': simulator_kwarg,
+            'low_range': np.asarray(low, dtype=self.dtype),
+            'high_range': np.asarray(high, dtype=self.dtype),
+            'sample_func': np_sample,
+            'logpdf_func': np_logpdf,
+            'tform_func': np_tform,
+            'dist_type': dist_type.lower()
+        }
+
+        self.prior_dict[short_name] = entry
+        self.prior_names.insert(index, short_name)
 
     def sample(self, rng_key: NPKey, n_samples: int) -> dict[str, NDArray]:
         init_keys = rng_key.split(self.ndim)
@@ -154,16 +239,15 @@ class DipolePriorNP(NPPrior):
             'n_initial_samples', 'observer_speed',
             'dipole_longitude', 'dipole_latitude'
         ]
-        unif_func = lambda key, n, a, b: key.uniform((n,), low=a, high=b)
-        polar_func = lambda key, n, a, b: sample_polar_np(key, n_samples=n, low=a, high=b)
-        unif_logpdf = lambda x, a, b: scipy.stats.uniform.logpdf(x, a, b - a)
-        polar_logpdf = lambda x, a, b: polar_logpdf_np(x, low=a, high=b)
-        unif_transform = lambda u, a, b: sample_unif_np(u, low=a, high=b)
-        polar_transform = lambda u, a, b: sample_polar_np(u, low=a, high=b)
-
-        sample_func = 3 * [unif_func] + [polar_func]
-        logpdf_func = 3 * [unif_logpdf] + [polar_logpdf]
-        tform_func  = 3 * [unif_transform] + [polar_transform]
+        dist_types = ['uniform', 'uniform', 'uniform', 'polar']
+        sample_func = []
+        logpdf_func = []
+        tform_func = []
+        for dist in dist_types:
+            sample, logpdf, transform = self._np_distribution_funcs(dist)
+            sample_func.append(sample)
+            logpdf_func.append(logpdf)
+            tform_func.append(transform)
 
         self._prior_dict = self._construct_prior_dict(
             self._prior_names,
@@ -171,7 +255,8 @@ class DipolePriorNP(NPPrior):
             ranges,
             sample_func,
             logpdf_func,
-            tform_func
+            tform_func,
+            dist_types
         )
     
     @property
@@ -183,18 +268,21 @@ class DipolePriorNP(NPPrior):
         return self._prior_dict
 
     def to_jax(self) -> DipolePriorJax:
-        # this is shit
-        jax_prior = DipolePriorJax(
-            mean_count_range=[self.low_ranges[0], self.high_ranges[0]],
-            speed_range=[self.low_ranges[1], self.high_ranges[1]],
-            longitude_range=[self.low_ranges[2], self.high_ranges[2]],
-            latitude_range=[self.low_ranges[3], self.high_ranges[3]],
-        )
-        np_kwargs = self.simulator_kwargs
-        jax_kwargs = jax_prior.simulator_kwargs
+        jax_prior = DipolePriorJax()
+        jax_prior._prior_dict = {}
+        jax_prior._prior_names = []
 
-        for i, short_name in enumerate(self.prior_names):
-            if np_kwargs[i] != jax_kwargs[i]:
-                jax_prior.change_kwarg(short_name, np_kwargs[i])
+        for name in self.prior_names:
+            entry = self.prior_dict[name]
+            sample_func, logpdf_func = self._jax_distribution_funcs(entry['dist_type'])
+            jax_prior._prior_dict[name] = {
+                'simulator_kwarg': entry['simulator_kwarg'],
+                'low_range': jnp.asarray(entry['low_range'], dtype=jnp.float32),
+                'high_range': jnp.asarray(entry['high_range'], dtype=jnp.float32),
+                'sample_func': sample_func,
+                'logpdf_func': logpdf_func,
+                'dist_type': entry['dist_type']
+            }
+            jax_prior._prior_names.append(name)
 
         return jax_prior

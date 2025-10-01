@@ -53,7 +53,8 @@ class JaxPrior(ABC):
             simulator_kwargs: list[str],
             ranges: list[list[float]],
             sample_funcs: list[Callable],
-            logpdf_funcs: list[Callable]
+            logpdf_funcs: list[Callable],
+            dist_types: list[str]
             
     ) -> dict[str, dict]:
         '''
@@ -74,7 +75,8 @@ class JaxPrior(ABC):
                 'low_range': jnp.asarray(ranges[i][0]),
                 'high_range': jnp.asarray(ranges[i][1]),
                 'sample_func':  sample_funcs[i],
-                'logpdf_func': logpdf_funcs[i]
+                'logpdf_func': logpdf_funcs[i],
+                'dist_type': dist_types[i].lower()
             }
         return prior_dict
 
@@ -173,13 +175,15 @@ class DipolePriorJax(JaxPrior):
 
         sample_func = 3 * [unif_func] + [polar_func]
         logpdf_func = 3 * [unif_logpdf] + [polar_logpdf]
+        dist_types = 3 * ['uniform'] + ['polar']
 
         self._prior_dict = self._construct_prior_dict(
             self._prior_names,
             kwargs,
             ranges,
             sample_func,
-            logpdf_func
+            logpdf_func,
+            dist_types
         )
     
     @property
