@@ -23,3 +23,7 @@ benchmark/*
 
 *.png
 *.pdf
+*.log
+*.txt
+*.npz
+*.csv
