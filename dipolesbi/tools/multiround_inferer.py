@@ -181,10 +181,11 @@ class MultiRoundInferer:
                 if round_idx == 0:
                     self._dump_configs() # dump after training
 
-                n_samps = self.mr_config.n_likelihood_samples
-                self.ui.start_step(3, 'inspecting', total=n_samps)
-                self._inspect_learned_likelihood(inspect_key, n_samps)
-                self.ui.finish_step('inspected')
+                if self.mr_config.reference_theta is not None:
+                    n_samps = self.mr_config.n_likelihood_samples
+                    self.ui.start_step(3, 'inspecting', total=n_samps)
+                    self._inspect_learned_likelihood(inspect_key, n_samps)
+                    self.ui.finish_step('inspected')
 
                 self.ui.start_step(4, 'computing')
                 self._compute_posterior(posterior_key)
@@ -500,11 +501,17 @@ class MultiRoundInferer:
                 names=self.initial_proposal.prior_names,
                 labels=self.initial_proposal.prior_names
             )
+            
+            if self.mr_config.reference_theta is not None:
+                markers = list(self.mr_config.reference_theta.values()) # type: ignore
+            else:
+                markers = None
+
             g = plots.get_subplot_plotter()
             g.triangle_plot(
                 [nle_samples, classic_samples],
                 filled=True,
-                markers=list(self.mr_config.reference_theta.values()), # type: ignore
+                markers=markers, # type: ignore
                 marker_args={'lw': 1}, # type: ignore
                 legend_labels=[self.mode, 'Truth']
             )
