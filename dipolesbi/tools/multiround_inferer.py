@@ -777,7 +777,7 @@ class MultiRoundInferer:
                     n_available = next(iter(tree.values())).shape[0]
                     idx = np.random.choice(n_available, size=n_posterior, replace=True)
                     posterior_samples = {
-                        key: value[idx] for key, value in tree.items()
+                        key: np.asarray(value[idx]) for key, value in tree.items()
                     }
             else:
                 posterior_samples = None
