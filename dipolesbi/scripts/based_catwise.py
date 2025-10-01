@@ -32,6 +32,12 @@ if __name__ == '__main__':
         help='Name of directory in simulations to save into (automatically created).'
     )
     parser.add_argument(
+        '--ssnle_seed',
+        type=int,
+        default=0,
+        help='Seed used for sequential neural estimators.'
+    )
+    parser.add_argument(
         '--error_dist',
         type=str,
         default='gaussian',
@@ -42,15 +48,16 @@ if __name__ == '__main__':
     MODE = args.mode
     N_SIM = args.n_simulations
     N_WORKERS = args.n_workers
-    SAVE_DIR = args.save_dir
+    SAVE_DIR = args.out_dir
     ERROR_DIST = args.error_dist
-    USE_FLOAT32 = args.use_float32
+    USE_FLOAT32 = False
     NSIDE = 64
 
     model = Catwise(
         cat_w1_max=17.0, 
         cat_w12_min=0.5,
-        magnitude_error_dist=ERROR_DIST
+        magnitude_error_dist=ERROR_DIST,
+        use_float32=USE_FLOAT32
     )
     model.initialise_data()
     prior = DipolePriorNP(
@@ -91,9 +98,10 @@ if __name__ == '__main__':
         theta_spec_overrides={'embed_transform_in_flow': True},
         multiround_overrides={
             'prng_integer_seed': args.ssnle_seed,
-            'plot_save_dir': args.out_dir,
+            'plot_save_dir': SAVE_DIR,
             'n_rounds': 10,
-            'check_proposal_probs': True
+            'check_proposal_probs': True,
+            'simulation_budget': N_SIM
         },
         training_overrides={'learning_rate': 0.001}
     )
@@ -102,7 +110,7 @@ if __name__ == '__main__':
         theta_prior=prior_jax,
         multiround_overrides={
             'prng_integer_seed': args.ssnle_seed,
-            'plot_save_dir': args.out_dir,
+            'plot_save_dir': SAVE_DIR,
             'simulation_budget': 100_000,
             'n_rounds': 20
         },
