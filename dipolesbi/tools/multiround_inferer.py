@@ -13,6 +13,7 @@ import matplotlib; matplotlib.use('Agg') # stop async errors when calling plots 
 from matplotlib import pyplot as plt
 import healpy as hp
 from dipolesbi.tools.configs import (
+    ModelConfig,
     MultiRoundInfererConfig, 
     NeuralFlowConfig, 
     TrainingConfig, 
@@ -45,6 +46,7 @@ class MultiRoundInferer:
             nflow_config: NeuralFlowConfig,
             transform_config: TransformConfig,
             train_config: TrainingConfig = TrainingConfig(),
+            model_config: Optional[ModelConfig] = None,
             true_logl: Optional[Callable[[dict[str, jnp.ndarray]], jnp.ndarray]] = None,
             use_ui: bool = True
     ) -> None:
@@ -94,6 +96,7 @@ class MultiRoundInferer:
         self.theta_transform = transform_config.theta_transform_config.theta_transform
         self.transform_config = transform_config
         self.embedding_net_config = self.transform_config.data_transform_config.embedding_net_config
+        self.model_config = model_config
 
         self.all_data = np.full(
             (self.mr_config.simulation_budget, self.data_ndim), np.nan,
@@ -326,7 +329,11 @@ class MultiRoundInferer:
             f.write("TrainingConfig:\n")
             f.write(str(self.train_config) + "\n\n")
             f.write("TransformConfig:\n")
-            f.write(str(self.transform_config) + "\n")
+            f.write(str(self.transform_config) + "\n\n")
+            f.write("ModelConfig:\n")
+            f.write(str(self.model_config) + "\n\n")
+            f.write("PriorConfig:\n")
+            f.write(str(self.initial_proposal) + "\n")
 
     def _to_jnp_array(self, theta: dict[str, jnp.ndarray]) -> jnp.ndarray:
         arrays = [theta[k] for k in theta.keys()]
