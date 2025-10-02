@@ -1,5 +1,4 @@
-from dill.session import Optional
-from typing_extensions import Literal
+from typing import Optional, Literal
 from astropy.table import Table
 from dipolesbi.tools.configs import CatwiseConfig
 from dipolesbi.tools.utils import (
