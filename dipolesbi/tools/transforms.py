@@ -373,25 +373,22 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
         return jnp.mod(longitude_deg, 360.0)
 
     def compute_mean_and_std(self, theta: dict[str, jnp.ndarray]) -> None:
-        assert len(theta.keys()) == 4
-
         if not self.stats_are_none():
             raise Exception('Stats should be empty before making new ones.')
+
+        assert 'dipole_longitude' in self.adapter.keys
+        assert 'dipole_latitude' in self.adapter.keys
 
         means = []
         stds = []
         for key in self.adapter.keys:
-            if key == 'mean_density':
-                means.append(jnp.nanmean(theta[key]))
-                stds.append(jnp.nanstd(theta[key]))
-            elif key == 'observer_speed':
-                means.append(jnp.nanmean(theta[key]))
-                stds.append(jnp.nanstd(theta[key]))
-            elif key in ('dipole_longitude', 'dipole_latitude'):
+            if key in ['dipole_longitude', 'dipole_latitude']:
+                # dont't zscore due to Cartesian transform
                 means.append(jnp.array(0.0))
                 stds.append(jnp.array(1.0))
             else:
-                raise KeyError(f'Unexpected theta key {key} in adapter.')
+                means.append(jnp.nanmean(theta[key]))
+                stds.append(jnp.nanstd(theta[key]))
 
         self._theta_mean = jnp.asarray(means)
         self._theta_std = jnp.asarray(stds)
@@ -440,27 +437,36 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
             theta = theta[None, :] # make sure at least 2D, (ndim,) -> (1, ndim)
             squeezed_input = True
 
-        lon = jnp.deg2rad(self.adapter.flat_view(theta, 'dipole_longitude'))
-        colat = jnp.pi / 2 - jnp.deg2rad(self.adapter.flat_view(theta, 'dipole_latitude'))
-
-        x, y, z = jax_sph2cart(lon, colat)
-
-        mean_density_norm = (
-            self.adapter.flat_view(theta, 'mean_density') - self.theta_mean[0]
-        ) / self.theta_std[0]
-        observer_speed_norm = (
-            self.adapter.flat_view(theta, 'observer_speed') - self.theta_mean[1]
-        ) / self.theta_std[1]
-
-        t_transformed = jnp.stack(
-            [mean_density_norm, observer_speed_norm, x, y, z],
-            axis=-1
-        )
-
+        components = []
         abslogdet = jnp.zeros(theta.shape[0], dtype=theta.dtype)
-        abslogdet += jnp.log(jnp.pi) - np.log(180)
-        abslogdet += jnp.log(jnp.pi) - np.log(180)
-        abslogdet += jnp.sin(colat)
+
+        lon_rad = None; colat_rad = None
+        for key in self.adapter.keys:
+            idx = self.adapter.key_index(key)
+            view = self.adapter.flat_view(theta, key)
+
+            if key == 'dipole_longitude':
+                lon_rad = jnp.deg2rad(view)
+                abslogdet += jnp.log(jnp.pi) - np.log(180)
+
+            elif key == 'dipole_latitude':
+                colat_rad = jnp.pi / 2 - jnp.deg2rad(view)
+                abslogdet += jnp.log(jnp.pi) - np.log(180)
+
+            else:
+                normed = (view - self.theta_mean[idx]) / self.theta_std[idx]
+                components.append(normed)
+                abslogdet += -jnp.log(self.theta_std[idx])
+
+        assert lon_rad is not None
+        assert colat_rad is not None
+
+        # append cartesian components at the end
+        x, y, z = jax_sph2cart(lon_rad, colat_rad)
+        components.extend([x, y, z])
+        abslogdet += jnp.sin(colat_rad)
+
+        t_transformed = jnp.stack(components, axis=-1)
 
         # make sure to output as (ndim,) if this was passed in
         if squeezed_input or in_ns:
@@ -469,7 +475,6 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
 
         return t_transformed, abslogdet
 
-    # TODO: we probably need to integrate the adapter here; this could be a liability
     def _inverse_and_log_det_cartesian(
         self,
         transformed_theta: jnp.ndarray
@@ -484,35 +489,39 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
             transformed_theta = transformed_theta[None, :]
             squeezed_input = True
 
-        mean_density_norm = transformed_theta[..., 0]
-        observer_speed_norm = transformed_theta[..., 1]
-        x = transformed_theta[..., 2]
-        y = transformed_theta[..., 3]
-        z = transformed_theta[..., 4]
+        components = []
+        abslogdet = jnp.zeros(transformed_theta.shape[0], dtype=transformed_theta.dtype)
 
-        mean_density = mean_density_norm * self.theta_std[0] + self.theta_mean[0]
-        observer_speed = observer_speed_norm * self.theta_std[1] + self.theta_mean[1]
-
+        # these are appended to the end in forward, so should be ok
+        x = transformed_theta[..., -3]
+        y = transformed_theta[..., -2]
+        z = transformed_theta[..., -1]
         colat = jnp.arccos(jnp.clip(z, -1.0, 1.0))
         lon = jnp.arctan2(y, x)
 
-        dipole_longitude = jnp.rad2deg(lon)
-        if self.wrap_longitude:
-            dipole_longitude = self._wrap_longitude(dipole_longitude)
+        for key in self.adapter.keys:
+            if key == 'dipole_longitude':
+                lon_deg = jnp.rad2deg(lon)
+                if self.wrap_longitude:
+                    lon_deg = self._wrap_longitude(lon_deg)
+                components.append(lon_deg)
+                abslogdet -= jnp.log(jnp.pi) - np.log(180)
 
-        dipole_latitude = jnp.rad2deg(jnp.pi / 2 - colat)
-        if self.reflect_latitude:
-            dipole_latitude = self._reflect_latitude(dipole_latitude)
+            elif key == 'dipole_latitude':
+                lat_deg = jnp.rad2deg(jnp.pi / 2 - colat)
+                if self.reflect_latitude:
+                    lat_deg = self._reflect_latitude(lat_deg)
+                components.append(lat_deg)
+                abslogdet -= jnp.log(jnp.pi) - np.log(180)
 
-        abslogdet = jnp.zeros(transformed_theta.shape[0], dtype=transformed_theta.dtype)
-        abslogdet -= jnp.log(jnp.pi) - np.log(180)
-        abslogdet -= jnp.log(jnp.pi) - np.log(180)
-        abslogdet -= jnp.sin(colat)
+            else:
+                idx = self.adapter.key_index(key)
+                normed = transformed_theta[..., idx]
+                unscaled = normed * self.theta_std[idx] + self.theta_mean[idx]
+                components.append(unscaled)
+                abslogdet += jnp.log(self.theta_std[idx])
 
-        theta = jnp.stack(
-            [mean_density, observer_speed, dipole_longitude, dipole_latitude],
-            axis=-1
-        )
+        theta = jnp.stack(components, axis=-1)
 
         if squeezed_input:
             theta = jnp.squeeze(theta, axis=0)
@@ -542,47 +551,28 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
             theta = theta[None, :]
             squeezed_input = True
 
-        lon = jnp.deg2rad(self.adapter.flat_view(theta, 'dipole_longitude'))
-        colat = jnp.pi / 2 - jnp.deg2rad(self.adapter.flat_view(theta, 'dipole_latitude'))
-
-        mean_density_norm = (
-            self.adapter.flat_view(theta, 'mean_density')
-            - self.theta_mean[self.adapter.key_index('mean_density')]
-        ) / self.theta_std[self.adapter.key_index('mean_density')]
-        observer_speed_norm = (
-            self.adapter.flat_view(theta, 'observer_speed')
-            - self.theta_mean[self.adapter.key_index('observer_speed')]
-        ) / self.theta_std[self.adapter.key_index('observer_speed')]
-
         components = []
+        abslogdet = jnp.zeros(theta.shape[0], dtype=theta.dtype)
+
         for key in self.adapter.keys:
-            if key == 'mean_density':
-                components.append(mean_density_norm)
-            elif key == 'observer_speed':
-                components.append(observer_speed_norm)
-            elif key == 'dipole_longitude':
-                components.append(lon)
+            idx = self.adapter.key_index(key)
+            view = self.adapter.flat_view(theta, key)
+
+            if key == 'dipole_longitude':
+                components.append(jnp.deg2rad(view))
+                abslogdet += jnp.log(jnp.pi) - np.log(180)
+
             elif key == 'dipole_latitude':
-                components.append(colat)
+                components.append(jnp.pi / 2 - jnp.deg2rad(view))
+                abslogdet += jnp.log(jnp.pi) - np.log(180)
+
             else:
-                raise KeyError(f'Unexpected theta key {key} in adapter.')
+                normed = (view - self.theta_mean[idx]) / self.theta_std[idx]
+                components.append(normed)
+                abslogdet += -jnp.log(self.theta_std[idx])
 
         t_transformed = jnp.stack(components, axis=-1)
-
-        idx_mean = self.adapter.key_index('mean_density')
-        idx_speed = self.adapter.key_index('observer_speed')
-
-        abslogdet_scalar = (
-              (jnp.log(jnp.pi) - np.log(180))
-            + (jnp.log(jnp.pi) - np.log(180))
-            - jnp.log(self.theta_std[idx_mean])
-            - jnp.log(self.theta_std[idx_speed])
-        )
-        abslogdet_per_batch = jnp.full(
-            (t_transformed.shape[0],), 
-            abslogdet_scalar, 
-            dtype=theta.dtype
-        )
+        abslogdet_per_batch = abslogdet
 
         if squeezed_input:
             t_transformed = jnp.squeeze(t_transformed, axis=0)
@@ -603,55 +593,34 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
             transformed_theta = transformed_theta[None, :]
             squeezed_input = True
 
-        idx_mean = self.adapter.key_index('mean_density')
-        idx_speed = self.adapter.key_index('observer_speed')
-        idx_lon = self.adapter.key_index('dipole_longitude')
-        idx_lat = self.adapter.key_index('dipole_latitude')
-
-        mean_density_norm = transformed_theta[..., idx_mean]
-        observer_speed_norm = transformed_theta[..., idx_speed]
-        lon = transformed_theta[..., idx_lon]
-        colat = transformed_theta[..., idx_lat]
-
-        mean_density = (
-            mean_density_norm * self.theta_std[idx_mean]
-            + self.theta_mean[idx_mean]
-        )
-        observer_speed = (
-            observer_speed_norm * self.theta_std[idx_speed]
-            + self.theta_mean[idx_speed]
-        )
-
-        dipole_longitude = jnp.rad2deg(lon)
-        if self.wrap_longitude:
-            dipole_longitude = self._wrap_longitude(dipole_longitude)
-
-        dipole_latitude = jnp.rad2deg(jnp.pi / 2 - colat)
-        if self.reflect_latitude:
-            dipole_latitude = self._reflect_latitude(dipole_latitude)
-
-        abslogdet_scalar = (
-            - (jnp.log(jnp.pi) - np.log(180))
-            - (jnp.log(jnp.pi) - np.log(180))
-            + jnp.log(self.theta_std[idx_mean])
-            + jnp.log(self.theta_std[idx_speed])
-        )
-
         components = []
+        abslogdet = jnp.zeros(transformed_theta.shape[0], dtype=transformed_theta.dtype)
+
         for key in self.adapter.keys:
-            if key == 'mean_density':
-                components.append(mean_density)
-            elif key == 'observer_speed':
-                components.append(observer_speed)
-            elif key == 'dipole_longitude':
-                components.append(dipole_longitude)
+            idx = self.adapter.key_index(key)
+            value = transformed_theta[..., idx]
+
+            if key == 'dipole_longitude':
+                lon = jnp.rad2deg(value)
+                if self.wrap_longitude:
+                    lon = self._wrap_longitude(lon)
+                components.append(lon)
+                abslogdet -= jnp.log(jnp.pi) - np.log(180)
+
             elif key == 'dipole_latitude':
-                components.append(dipole_latitude)
+                lat = jnp.rad2deg(jnp.pi / 2 - value)
+                if self.reflect_latitude:
+                    lat = self._reflect_latitude(lat)
+                components.append(lat)
+                abslogdet -= jnp.log(jnp.pi) - np.log(180)
+
             else:
-                raise KeyError(f'Unexpected theta key {key} in adapter.')
+                unscaled = value * self.theta_std[idx] + self.theta_mean[idx]
+                components.append(unscaled)
+                abslogdet += jnp.log(self.theta_std[idx])
 
         theta = jnp.stack(components, axis=-1)
-        abslogdet_per_batch = jnp.full((theta.shape[0],), abslogdet_scalar, dtype=theta.dtype)
+        abslogdet_per_batch = abslogdet
 
         if squeezed_input:
             theta = jnp.squeeze(theta, axis=0)
