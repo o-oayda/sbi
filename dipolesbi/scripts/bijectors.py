@@ -1,6 +1,6 @@
-from blackjax.types import Array
 from jax import numpy as jnp
 from jax.nn import sigmoid
+from typing import Any
 
 
 def logit(p):
@@ -13,7 +13,8 @@ class UniformIntervalSigmoid:
     '''
     _eps = 1e-6
 
-    def __init__(self, low: float | Array, high: float | Array) -> None:
+    # Any: type hint blackjax import issue
+    def __init__(self, low: Any, high: Any) -> None:
         self.low = low
         self.high = high
         self.span = high - low

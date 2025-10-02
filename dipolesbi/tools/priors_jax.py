@@ -1,9 +1,9 @@
 from abc import ABC, abstractmethod
 from typing import Callable
 import jax
-from blackjax.types import PRNGKey
 from dipolesbi.tools.utils import PytreeAdapter, polar_logpdf_jax, sample_polar_jax
 from jax import numpy as jnp
+from typing import Any
 
 
 class JaxPrior(ABC):
@@ -92,7 +92,7 @@ class JaxPrior(ABC):
 
     def get_initial_live_samples(
             self, 
-            rng_key: PRNGKey, 
+            rng_key: Any, # blackjax import issue
             num_live: int
     ) -> dict[str, jnp.ndarray]:
         init_keys = jax.random.split(rng_key, num_live)

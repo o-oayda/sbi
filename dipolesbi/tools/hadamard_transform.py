@@ -1,7 +1,6 @@
-from blackjax.types import Array
 from dipolesbi.tools.healpix_helpers import split_off_details
 from dipolesbi.tools.transforms import InvertibleDataTransform
-from typing import Literal, Callable, cast
+from typing import Literal, Callable
 import numpy as np
 from numpy.typing import NDArray
 from jax import numpy as jnp
@@ -651,7 +650,6 @@ class HadamardTransform(InvertibleDataTransform):
         ):
             # y_out is what forward produced after coupling: [a | d_out]
             a_here = upstream_data[..., None]
-            a_here = cast(Array, a_here)
 
             if self.normalise_details:
                 lvl_idx = self.n_levels - 1 - lvl
