@@ -3,6 +3,7 @@ import jax
 import numpy as np
 from numpy.typing import DTypeLike, NDArray
 import scipy as sp
+from dipolesbi.tools.healpix_helpers import downgrade_ignore_nan
 from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.points import (
     sample_points_with_flux, boost_points_with_flux, flux_cut,
@@ -155,15 +156,22 @@ class SimpleDipoleMap:
             dtype: DTypeLike = np.float32,
             reference_data: Optional[NDArray] = None,
             reference_mask: Optional[NDArray[np.bool_]] = None,
-            is_masked_val: float = np.nan
+            is_masked_val: float = np.nan,
+            downscale_nside: Optional[int] = None
     ) -> None:
+        '''
+        If downscale_nside has been set, expect reference_data and reference_mask
+        to also be downscaled versions.
+        '''
         self.nside = nside
+        self.npix = 12 * nside * nside
         self.dtype = dtype
         self.fiducial_amplitude = 0.005
         self.nest = True
         self.mask = Mask(nside=nside)
         self.masked_pixels = set()
         self._data_masked_val = is_masked_val
+        self.downscale_nside = downscale_nside
 
         self.reference_data = reference_data
         self.reference_mask = reference_mask
@@ -179,24 +187,42 @@ class SimpleDipoleMap:
         for key in theta.keys():
             if theta[key].shape == ():
                 theta[key] = theta[key].reshape((1,))
+
         poisson_mean = self.dipole_signal(**theta)
+        poisson_mean[:, ~self.binary_mask] = np.nan
+
+        if self.downscale_nside:
+            poisson_mean, mask = downgrade_ignore_nan(
+                poisson_mean, 
+                self.binary_mask,
+                self.downscale_nside
+            )
+        else:
+            mask = self.binary_mask
+
+        self._density_map = np.nan * np.ones_like(poisson_mean)
+
         if make_poisson_draws:
-            self._density_map = poisson(
+            self._density_map[:, mask] = poisson(
                 rng_key, 
-                lam=poisson_mean, 
-                shape=poisson_mean.shape
+                lam=poisson_mean[:, mask], 
+                shape=poisson_mean[:, mask].shape
             ).astype(self.dtype)
         else:
             self._density_map = poisson_mean.astype(self.dtype)
-        return self.dmap_and_mask
+        return self._density_map, mask
+
+    # @property
+    # def density_map(self) -> NDArray[np.float32]:
+    #     out_map = self._density_map.copy()
+    #     out_map[~self.binary_mask] = self._data_masked_val
+    #     return out_map
 
     @property
-    def dmap_and_mask(self) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
-        out_map = self._density_map.copy()
-        mask_map = np.ones_like(self._density_map, dtype=np.bool_)
-        mask_map[:, list(self.masked_pixels)] = False
-        out_map[~mask_map] = self._data_masked_val
-        return out_map, mask_map
+    def binary_mask(self) -> NDArray[np.bool_]:
+        mask_map = np.ones((self.npix,), dtype=np.bool_)
+        mask_map[list(self.masked_pixels)] = False
+        return mask_map
 
     def dipole_signal(
             self,
@@ -228,15 +254,28 @@ class SimpleDipoleMap:
 
     def log_likelihood(self, theta: dict[str, NDArray]) -> NDArray:
         assert self.reference_data is not None
-        dipole_signal = self.dipole_signal(**theta)
+        poisson_mean = self.dipole_signal(**theta)
+        
+        # the sum of poisson deviates is a another poisson deviate with rate
+        # parameter equal to the sum of that of the deviates, so this downgrade
+        # operation will be accounted for in the log likelihood
+        if self.downscale_nside:
+            poisson_mean, mask = downgrade_ignore_nan(
+                poisson_mean, 
+                self.binary_mask, 
+                self.downscale_nside
+            )
+        else:
+            mask = self.binary_mask
+
         logl = lambda k, mu: np.sum(sp.stats.poisson.logpmf(k=k, mu=mu), axis=1)
 
         if self.reference_mask is not None:
-            mask = np.repeat(self.reference_mask, dipole_signal.shape[0], axis=1)
+            mask = np.repeat(self.reference_mask, poisson_mean.shape[0], axis=1)
             assert mask.shape == self.reference_data.shape, (
                 f'Mask: {mask.shape}, x0: {self.reference_data.shape}'
             )
-            return logl(self.reference_data[mask], dipole_signal[mask])
+            return logl(self.reference_data[mask], poisson_mean[mask])
         else:
             return logl(self.reference_data, self.dipole_signal)
 
