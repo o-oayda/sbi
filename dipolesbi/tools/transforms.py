@@ -464,7 +464,13 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
         # append cartesian components at the end
         x, y, z = jax_sph2cart(lon_rad, colat_rad)
         components.extend([x, y, z])
-        abslogdet += jnp.sin(colat_rad)
+
+        # Guard the spherical Jacobian against sin(colat)=0 at the poles
+        safe_sin = jnp.maximum(
+            jnp.sin(colat_rad),
+            jnp.array(jnp.finfo(colat_rad.dtype).tiny, dtype=colat_rad.dtype)
+        )
+        abslogdet += jnp.log(safe_sin)
 
         t_transformed = jnp.stack(components, axis=-1)
 
@@ -498,6 +504,11 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
         z = transformed_theta[..., -1]
         colat = jnp.arccos(jnp.clip(z, -1.0, 1.0))
         lon = jnp.arctan2(y, x)
+        # Use the same lower bound when undoing the transform to keep logdet finite
+        safe_sin = jnp.maximum(
+            jnp.sin(colat),
+            jnp.array(jnp.finfo(colat.dtype).tiny, dtype=colat.dtype)
+        )
 
         for key in self.adapter.keys:
             if key == 'dipole_longitude':
@@ -520,6 +531,8 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
                 unscaled = normed * self.theta_std[idx] + self.theta_mean[idx]
                 components.append(unscaled)
                 abslogdet += jnp.log(self.theta_std[idx])
+
+        abslogdet -= jnp.log(safe_sin)
 
         theta = jnp.stack(components, axis=-1)
 
