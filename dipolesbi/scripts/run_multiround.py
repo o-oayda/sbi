@@ -1,4 +1,5 @@
 from jax.random import PRNGKey
+from dipolesbi.tools.healpix_helpers import downgrade_ignore_nan
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
 from dipolesbi.tools.configs import Scenario
 from dipolesbi.tools.np_rngkey import npkey_from_jax
@@ -59,6 +60,17 @@ if __name__ == '__main__':
     model.equatorial_plane_mask(angle=30)
     x0, mask = model.generate_dipole(npkey_from_jax(x0_rng_key), theta=theta0)
     model.reference_data = x0
+
+    # this will be a bit how you going until I can work out an explicit likelihood
+    # function for the downgraded data --- in principle doable since we know
+    # the likelihood of the constituent pixels and how they are used to form the
+    # coarser map
+    # x0, mask = downgrade_ignore_nan(x0, mask, nside_out=8)
+    # def model_sim_wrapper(key, theta, make_poisson_draws):
+    #     x, m = model.generate_dipole(key, theta, make_poisson_draws)
+    #     x, m = downgrade_ignore_nan(x, m, nside_out=8)
+    #     return x, m
+
     hp.projview(x0.squeeze() * mask.squeeze(), nest=True)
     plt.savefig('example_sample.pdf', bbox_inches='tight')
     plt.show()
@@ -97,7 +109,9 @@ if __name__ == '__main__':
             'prng_integer_seed': args.ssnle_seed,
             'plot_save_dir': args.out_dir,
             'simulation_budget': 100_000,
-            'n_rounds': 20
+            'n_rounds': 20,
+            'likelihood_chunk_size_gb': 0.5,
+            'n_likelihood_samples': 5_000
         },
         flow_overrides={
             'decoder_n_neurons': 128,

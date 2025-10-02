@@ -1,7 +1,85 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
+from numpy.typing import NDArray
+import healpy as hp
 
+
+def downgrade_ignore_nan(
+    map_in: NDArray,
+    mask_in: NDArray,
+    nside_out: int
+) -> tuple[NDArray, NDArray]:
+    """Downgrade NEST-ordered maps/masks, ignoring masked pixels.
+
+    Args:
+        map_in: Array of shape ``(npix,)`` or ``(batch, npix)``.
+        mask_in: Boolean array matching ``map_in``; ``False`` marks masked pixels.
+        nside_out: Target HEALPix nside (must be a power-of-two divisor).
+    Returns:
+        Tuple ``(map_out, mask_out)`` matching the input batch shape.
+    """
+
+    map_arr = np.asarray(map_in)
+    mask_arr = np.asarray(mask_in)
+
+    squeezed_input = map_arr.ndim == 1
+
+    if map_arr.ndim == 2 and mask_arr.ndim == 1:
+        assert mask_arr.size == map_arr.shape[1]
+        mask_arr = np.broadcast_to(mask_arr, map_arr.shape)
+
+    if squeezed_input and mask_arr.ndim == 2:
+        assert mask_arr.shape[0] == 1 and mask_arr.shape[1] == map_arr.size
+        mask_arr = mask_arr[0]
+
+    assert map_arr.shape == mask_arr.shape
+
+    if squeezed_input:
+        map_arr = map_arr[None, :]
+        mask_arr = mask_arr[None, :]
+
+    assert map_arr.ndim == 2, 'map_in must be 1D or 2D (batch, npix).'
+
+    orig_dtype = map_arr.dtype
+    work_map = map_arr.astype(np.float64, copy=False)
+    work_mask = mask_arr.astype(bool, copy=False)
+
+    work_map = np.where(work_mask, work_map, np.nan)
+
+    npix = work_map.shape[-1]
+    cur_nside = hp.npix2nside(npix)
+    assert cur_nside >= nside_out, 'Output nside must be lower than input nside.'
+    ratio = cur_nside // nside_out
+    assert (cur_nside % nside_out) == 0 and (ratio & (ratio - 1)) == 0
+
+    out_map = work_map
+    out_mask = work_mask
+
+    while cur_nside > nside_out:
+        cur_npix = hp.nside2npix(cur_nside)
+        cur_npix //= 4
+
+        out_map = out_map.reshape(out_map.shape[0], cur_npix, 4)
+        out_mask = out_mask.reshape(out_mask.shape[0], cur_npix, 4)
+
+        valid_counts = out_mask.sum(axis=-1)
+        summed = np.where(out_mask, out_map, 0.0).sum(axis=-1)
+
+        out_mask = valid_counts > 0
+        out_map = summed
+        out_map[~out_mask] = np.nan
+
+        cur_nside //= 2
+
+    if np.issubdtype(orig_dtype, np.floating) and orig_dtype != np.float64:
+        out_map = out_map.astype(orig_dtype, copy=False)
+
+    if squeezed_input:
+        out_map = out_map[0]
+        out_mask = out_mask[0]
+
+    return out_map, out_mask
 
 def _split_len(L: int, n: int) -> list[int]:
     """Split length L into n near-equal positive chunks that sum to L."""

@@ -126,7 +126,9 @@ if __name__ == '__main__':
             'prng_integer_seed': args.ssnle_seed,
             'plot_save_dir': SAVE_DIR,
             'simulation_budget': N_SIM,
-            'n_rounds': N_ROUNDS
+            'n_rounds': N_ROUNDS,
+            'likelihood_chunk_size_gb': 0.5,
+            'n_likelihood_samples':  10_000
         },
         flow_overrides={
             'decoder_n_neurons': 128,
@@ -154,6 +156,15 @@ if __name__ == '__main__':
         )
 
     x0, mask = model.make_real_sample()
+    # add a reference theta for diagnosing learned P(D | theta_0)
+    theta_0 = {
+        'log10_n_initial_samples': 7.552,
+        'etaW1': 4.,
+        'etaW2': 3.2,
+        'observer_speed': 2.,
+        'dipole_longitude': 220,
+        'dipole_latitude': 45
+    }
         
     inferer = MultiRoundInferer(
         MODE, prior, model_sim_wrapper, (x0, mask),
