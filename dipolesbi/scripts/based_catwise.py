@@ -1,7 +1,7 @@
 from typing import Optional
 from numpy.typing import NDArray
 from dipolesbi.catwise.maps import Catwise
-from dipolesbi.tools.configs import Scenario
+from dipolesbi.tools.configs import CatwiseConfig, Scenario
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
 from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.priors_np import DipolePriorNP
@@ -60,12 +60,14 @@ if __name__ == '__main__':
     USE_FLOAT32 = False
     NSIDE = 64
 
-    model = Catwise(
+    config = CatwiseConfig(
         cat_w1_max=17.0, 
         cat_w12_min=0.5,
         magnitude_error_dist=ERROR_DIST,
         use_float32=USE_FLOAT32
     )
+
+    model = Catwise(config)
     model.initialise_data()
     prior = DipolePriorNP(
         mean_count_range=[np.log10(30_000_000), np.log10(40_000_000)],

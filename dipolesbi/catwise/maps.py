@@ -1,6 +1,7 @@
 from dill.session import Optional
 from typing_extensions import Literal
 from astropy.table import Table
+from dipolesbi.tools.configs import CatwiseConfig
 from dipolesbi.tools.utils import (
     Sample1DHistogram, ParameterMap, MultinomialSample2DHistogram
 )
@@ -29,28 +30,32 @@ from memory_profiler import profile
 
 
 class Catwise:
-    def __init__(self,
-            cat_w1_max: float,
-            cat_w12_min: float,
-            magnitude_error_dist: Literal['gaussian', 'students-t'] = 'gaussian',
-            use_float32: bool = False
-        ):
+    def __init__(self, config: CatwiseConfig):
+        '''
+        :param chunk_size: Optional batch size used to stream the simulation.
+        :param store_final_samples: If True, retain the post-cut samples on the
+            instance; otherwise they are discarded for memory efficiency.
+        '''
         self.nside = 64
-        self.dtype = np.float32 if use_float32 else np.float64
+        self.cfg = config
+
+        self.dtype = np.float32 if self.cfg.use_float32 else np.float64
         print(f'Using {self.dtype} for intermediate variables...')
 
-        if magnitude_error_dist not in ('gaussian', 'students-t'):
-            raise ValueError("magnitude_error_dist must be 'gaussian' or 'students-t'")
+        self.magnitude_error_dist: Literal['gaussian', 'students-t'] = (
+            self.cfg.magnitude_error_dist
+        )
+        print(f'Using {self.magnitude_error_dist} distribution for mag errors...')
+        
+        self.store_final_samples = self.cfg.store_final_samples
+        self.chunk_size = self.cfg.chunk_size
 
-        self.magnitude_error_dist: Literal['gaussian', 'students-t'] = magnitude_error_dist
-        self.magnitude_error_dist = magnitude_error_dist
-        print(f'Using {magnitude_error_dist} distribution for mag errors...')
         self.dipole_longitude = CMB_L
         self.dipole_latitude = CMB_B
         self.observer_speed = CMB_BETA
-        self.cat_w1_max = cat_w1_max
-        self.cat_w12_min = cat_w12_min
-        self.cut_path = self._get_cut_path(cat_w1_max, cat_w12_min)
+        self.cat_w1_max = self.cfg.cat_w1_max
+        self.cat_w12_min = self.cfg.cat_w12_min
+        self.cut_path = self._get_cut_path(self.cat_w1_max, self.cat_w12_min)
         self.file_name = (
             f'catwise2020_corr_w12{self.cat_w12_min_str}_w1{self.cat_w1_max_str}.fits'
         )
@@ -90,8 +95,6 @@ class Catwise:
             w1_extra_error: float = 1.,
             w2_extra_error: float = 1.,
             log10_magnitude_error_shape_param: float = 0.,
-            chunk_size: Optional[int] = None,
-            store_final_samples: bool = False,
         ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
         '''
         :param observer_speed: Observer speed in units of CMB-derived speed.
@@ -101,9 +104,6 @@ class Catwise:
         and Doppler boosting calculations, the arrays will be cast to float64
         for those computations and then returned back to float32. The final
         colour and magnitude cut will be on float32 arrays.
-        :param chunk_size: Optional batch size used to stream the simulation.
-        :param store_final_samples: If True, retain the post-cut samples on the
-            instance; otherwise they are discarded for memory efficiency.
         '''
         self.observer_speed = observer_speed * CMB_BETA
         self.dipole_longitude = dipole_longitude
@@ -116,6 +116,10 @@ class Catwise:
         self.n_samples = int(10 ** log10_n_initial_samples)
         if self.n_samples < 0:
             raise ValueError('n_initial_samples must be non-negative.')
+
+        chunk_size = self.chunk_size
+        store_final_samples = self.store_final_samples
+        magnitude_error_dist = self.magnitude_error_dist
 
         if self.n_samples == 0:
             n_pix = hp.nside2npix(self.nside)
@@ -132,16 +136,6 @@ class Catwise:
                 self.final_pixel_indices = None
             return self.density_map, self.binary_mask
 
-        if chunk_size is None:
-            # 100k : 0.742 s / sim
-            # 50k  : 0.668 s / sim
-            # 25k  : 0.653 s / sim
-            # 12.5k: 0.645 s / sim
-            chunk_size = min(self.n_samples, 25_000)
-        elif chunk_size <= 0:
-            raise ValueError('chunk_size must be a positive integer.')
-        else:
-            chunk_size = min(chunk_size, self.n_samples)
 
         n_pix = hp.nside2npix(self.nside)
         density_accumulator = np.zeros(n_pix, dtype=np.float64)
@@ -241,7 +235,7 @@ class Catwise:
                 w2=(boosted_w2_samples, w2_error),
                 w1_extra_error=w1_extra_error,
                 w2_extra_error=w2_extra_error,
-                error_dist=self.magnitude_error_dist,
+                error_dist=magnitude_error_dist,
                 log10_shape_param=log10_magnitude_error_shape_param,
                 rng=self.rng,
                 noise_buffers=current_noise_buffers

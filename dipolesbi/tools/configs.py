@@ -1,3 +1,4 @@
+from abc import ABC
 from dataclasses import dataclass, field, fields, make_dataclass, replace
 from typing import Optional, Literal
 from numpy.typing import NDArray
@@ -35,6 +36,25 @@ def _make_override_class(base_cls):
 
     override_cls.to_dict = to_dict
     return override_cls
+
+@dataclass
+class ModelConfig(ABC):
+    pass
+
+@dataclass
+class CatwiseConfig(ModelConfig):
+    cat_w1_max: float
+    cat_w12_min: float
+    magnitude_error_dist: Literal['gaussian', 'students-t']
+    use_float32: bool = False
+    chunk_size: int = 25_000
+    store_final_samples: bool = False
+
+    def __post_init__(self) -> None:
+        if self.magnitude_error_dist not in ('gaussian', 'students-t'):
+            raise ValueError(
+                "Magnitude_error_dist must be 'gaussian' or 'students-t'."
+            )
 
 @dataclass
 class TrainingConfig:
