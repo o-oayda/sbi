@@ -22,15 +22,19 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-sim = Catwise(cat_w1_max=17.0, cat_w12_min=0.5)
+from dipolesbi.tools.configs import CatwiseConfig
+
+sim_cfg = CatwiseConfig(
+    cat_w1_max=17.0,
+    cat_w12_min=0.5,
+    magnitude_error_dist='gaussian'
+)
+sim = Catwise(sim_cfg)
 sim.initialise_data()
 
 key = prng_key(42)
 prior = DipolePriorNP(mean_count_range=[np.log10(30e6), np.log10(40e6)])
-prior.change_kwarg(
-    param_short_name='N',
-    new_kwarg='log10_n_initial_samples'
-)
+prior.change_kwarg('N', 'log10_n_initial_samples')
 theta = prior.sample(key, n_samples=args.sims)
 
 t0 = time.time()

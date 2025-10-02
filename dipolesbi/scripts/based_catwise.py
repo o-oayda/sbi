@@ -59,6 +59,7 @@ if __name__ == '__main__':
     ERROR_DIST = args.error_dist
     USE_FLOAT32 = False
     NSIDE = 64
+    N_ROUNDS = 10
 
     config = CatwiseConfig(
         cat_w1_max=17.0, 
@@ -113,8 +114,7 @@ if __name__ == '__main__':
         multiround_overrides={
             'prng_integer_seed': args.ssnle_seed,
             'plot_save_dir': SAVE_DIR,
-            'n_rounds': 10,
-            'check_proposal_probs': True,
+            'n_rounds': N_ROUNDS,
             'simulation_budget': N_SIM
         },
         training_overrides={'learning_rate': 0.001}
@@ -125,8 +125,8 @@ if __name__ == '__main__':
         multiround_overrides={
             'prng_integer_seed': args.ssnle_seed,
             'plot_save_dir': SAVE_DIR,
-            'simulation_budget': 100_000,
-            'n_rounds': 20
+            'simulation_budget': N_SIM,
+            'n_rounds': N_ROUNDS
         },
         flow_overrides={
             'decoder_n_neurons': 128,

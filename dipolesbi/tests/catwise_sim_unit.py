@@ -8,6 +8,7 @@ import numpy as np
 import healpy as hp
 
 from dipolesbi.catwise.maps import Catwise
+from dipolesbi.tools.configs import CatwiseConfig
 from dipolesbi.catwise.utils import AlphaLookup
 from dipolesbi.tools.physics import (
     aberrate_points as fast_aberrate,
@@ -20,7 +21,13 @@ from dipolesbi.tools.physics import (
 
 @lru_cache(maxsize=1)
 def _build_simulator() -> Catwise:
-    sim = Catwise(cat_w1_max=17.0, cat_w12_min=0.5, use_float32=True)
+    cfg = CatwiseConfig(
+        cat_w1_max=17.0,
+        cat_w12_min=0.5,
+        magnitude_error_dist='gaussian',
+        use_float32=True,
+    )
+    sim = Catwise(cfg)
     sim.initialise_data()
     return sim
 
@@ -29,12 +36,9 @@ def test_catwise_generate_dipole_single_run():
     sim = _build_simulator()
 
     n_samples = 1_000
-    chunk_size = 128
 
     density_map, mask = sim.generate_dipole(
-        n_initial_samples=n_samples,
-        chunk_size=chunk_size,
-        store_final_samples=False
+        log10_n_initial_samples=np.log10(n_samples)
     )
 
     n_pix = hp.nside2npix(sim.nside)
@@ -59,22 +63,20 @@ def test_catwise_generate_dipole_parallel_joblib():
     n_jobs = 2
     n_runs = 4
     n_samples = 500
-    chunk_size = 128
 
     def _run_sim(seed: int):
         np.random.seed(seed)
         return sim.generate_dipole(
-            n_initial_samples=n_samples,
-            chunk_size=chunk_size,
-            store_final_samples=False
+            log10_n_initial_samples=np.log10(n_samples)
         )
 
     outputs = Parallel(n_jobs=n_jobs)(
         delayed(_run_sim)(seed) for seed in range(n_runs)
     )
 
-    density_stack = np.stack([out[0] for out in outputs], axis=0)
-    mask_stack = np.stack([out[1] for out in outputs], axis=0)
+    density_stack = np.stack([out[0] for out in outputs], axis=0) # pyright: ignore[reportOptionalSubscript]
+    mask_stack = np.stack([out[1] for out in outputs], axis=0) # pyright: ignore[reportOptionalSubscript]
+    
 
     n_pix = hp.nside2npix(sim.nside)
     assert density_stack.shape == (n_runs, n_pix)
