@@ -9,13 +9,18 @@ import math
 
 
 class MaskedSubspaceTransforms:
-    def __init__(self) -> None:
+    def __init__(self, xp=np, dtype=None) -> None:
         # make lookup table for all mask permutations
+        self.xp = xp
+        self.dtype = dtype if dtype is not None else getattr(self.xp, 'float64', float)
+        self._is_jax_backend = self.xp is jnp
         _T_list, _k_list = zip(*[self._transform_for_mask(m) for m in range(16)])
-        self.T_TABLE = jnp.stack(_T_list, axis=0) # (16, 4, 4), (i, 4, 4) a matrix mask perm
-        self.K_TABLE = jnp.array(_k_list)         # (16,), corresponding n_observed in 4-block
+        # (16, 4, 4), (i, 4, 4) stores the transform for each mask permutation
+        self.T_TABLE = self.xp.stack(_T_list, axis=0).astype(self.dtype)
+        # (16,), corresponding number of observed children in each 4-block
+        self.K_TABLE = self.xp.asarray(_k_list, dtype=getattr(self.xp, 'int32', np.int32))
 
-    def _Wk(self, k: int) -> jnp.ndarray:
+    def _Wk(self, k: int):
         '''
         For each masked subspace, construct a matrix transform corresponding
         to a particular orthonormal basis such that log det is zero and the
@@ -23,39 +28,55 @@ class MaskedSubspaceTransforms:
         Note that k = 2 and k = 4 are just the Hadamard matrices,
         whereas k = 3 is a 'Helmert' basis basis.
         '''
+        xp = self.xp
+        dtype = self.dtype
         if k == 1:
-            return jnp.array([[1.0]]) # i.e., get the same pixel out
+            return xp.asarray([[1.0]], dtype=dtype) # i.e., get the same pixel out
         if k == 2:
-            return (1/jnp.sqrt(2)) * jnp.array(
+            return (1 / xp.sqrt(2.0)) * xp.asarray(
                 [[1,  1],
-                 [1, -1]]
+                 [1, -1]],
+                dtype=dtype
             ) # H_2
         if k == 3:
             # Helmert basis: coarse coefficient, then two zero-sum orthonormal contrasts
-            return jnp.array(
-                [[1/jnp.sqrt(3),  1/jnp.sqrt(3),  1/jnp.sqrt(3)],
-                 [1/jnp.sqrt(2), -1/jnp.sqrt(2),  0.0          ],
-                 [1/jnp.sqrt(6),  1/jnp.sqrt(6), -2/jnp.sqrt(6)]]
+            inv_sqrt3 = 1 / xp.sqrt(3.0)
+            inv_sqrt2 = 1 / xp.sqrt(2.0)
+            inv_sqrt6 = 1 / xp.sqrt(6.0)
+            return xp.asarray(
+                [[inv_sqrt3,  inv_sqrt3,  inv_sqrt3],
+                 [inv_sqrt2, -inv_sqrt2,  0.0      ],
+                 [inv_sqrt6,  inv_sqrt6, -2 * inv_sqrt6]],
+                dtype=dtype
             )
         if k == 4:
-            return 0.5 * jnp.array(
+            return 0.5 * xp.asarray(
                 [[ 1,  1,  1,  1],
                  [ 1,  1, -1, -1],
                  [ 1, -1,  1, -1],
-                 [ 1, -1, -1,  1]]
+                 [ 1, -1, -1,  1]],
+                dtype=dtype
             ) # H_4
         raise ValueError("k must be 1, 2, 3 or 4.")
 
-    def _selector(self, idx: list) -> jnp.ndarray:
+    def _selector(self, idx: list):
         # k×4 column selector that picks observed child positions in order
         k = len(idx)
-        S = jnp.zeros((k, 4))
-        return S.at[jnp.arange(k), jnp.array(idx)].set(1.0)
+        xp = self.xp
+        dtype = self.dtype
+        S = xp.zeros((k, 4), dtype=dtype)
+        int_dtype = getattr(xp, 'int32', np.int32)
+        rows = xp.arange(k, dtype=int_dtype)
+        cols = xp.asarray(idx, dtype=int_dtype)
+        if self._is_jax_backend:
+            return S.at[rows, cols].set(1.0)
+        S[rows, cols] = 1.0
+        return S
 
     def _transform_for_mask(
             self, 
             mask_bits: int
-    ) -> tuple[jnp.ndarray, int]:
+    ) -> tuple:
         # mask bits is an encoded representation of the 4-bit mask (16 possible values),
         # so a number between 0 and 15.
         # bit i (0..3) says child i is observed
@@ -64,14 +85,18 @@ class MaskedSubspaceTransforms:
 
         if k == 0:
             # Empty block: return all-zero matrix
-            T = jnp.zeros((4, 4))
+            T = self.xp.zeros((4, 4), dtype=self.dtype)
             return T, 0
 
         Wk = self._Wk(k)            # k×k orthonormal
         S = self._selector(idx)     # k×4 selector of observed columns
         Tk = Wk @ S                 # k×4, rows = [c0; details], columns = children
         # pad to 4×4 so we can keep shapes fixed
-        T = jnp.zeros((4, 4)).at[:k, :].set(Tk)
+        T = self.xp.zeros((4, 4), dtype=self.dtype)
+        if self._is_jax_backend:
+            T = T.at[:k, :].set(Tk)
+        else:
+            T[:k, :] = Tk
         return T, k
 
 class HadamardTransform(InvertibleDataTransform):
@@ -123,7 +148,7 @@ class HadamardTransform(InvertibleDataTransform):
                 # If the check itself fails, raise with context
                 raise
 
-        self.subspace = MaskedSubspaceTransforms()
+        self.subspace = MaskedSubspaceTransforms(self.xp, dtype=self.dtype)
         self.matrix_type = matrix_type
         self.H = 0.5 * self.xp.asarray(
             [[1., 1. , 1. ,  1.],
