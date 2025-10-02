@@ -399,7 +399,11 @@ class MultiRoundInferer:
         assert self.mr_config.reference_theta is not None
         assert self.nflow is not None
 
-        samples = self._sample_likelihood_stream(rng_key, n_repeats) # (B, P)
+        samples = self._sample_likelihood_stream(
+            rng_key, 
+            n_repeats, 
+            self.mr_config.likelihood_chunk_size_gb
+        ) # (B, P)
         true_mean_likelihood, mask = self.simulator_function(
             simulate_key,
             self.mr_config.reference_theta,
