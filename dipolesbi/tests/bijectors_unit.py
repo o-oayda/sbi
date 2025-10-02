@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from jax.nn import sigmoid
 from jax.random import PRNGKey
 
-from dipolesbi.scripts.bijectors import LatitudeBijector, UniformIntervalSigmoid
+from dipolesbi.tools.bijectors import LatitudeBijector, UniformIntervalSigmoid
 
 
 def test_uniform_interval_sigmoid_round_trip():

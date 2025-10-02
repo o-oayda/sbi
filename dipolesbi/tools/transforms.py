@@ -3,7 +3,7 @@ from numpy.typing import NDArray
 import torch
 from torch.utils.data import Dataset
 import numpy as np
-from dipolesbi.scripts.bijectors import LatitudeBijector, UniformIntervalSigmoid
+from dipolesbi.tools.bijectors import LatitudeBijector, UniformIntervalSigmoid
 from dipolesbi.tools.priors_jax import DipolePriorJax
 from dipolesbi.tools.utils import PytreeAdapter, jax_sph2cart
 from abc import ABC, abstractmethod
