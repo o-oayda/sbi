@@ -574,7 +574,8 @@ class MultiRoundInferer:
         if posterior_samples is None:
             raise Exception('All posterior samples rejected.')
         corner(
-            np.asarray(self.theta_transform.adapter.to_array(posterior_samples))
+            np.asarray(self.theta_transform.adapter.to_array(posterior_samples)),
+            labels=self.initial_proposal.prior_names
         )
         plt.savefig(
             self.mr_config.plot_save_dir
@@ -746,15 +747,58 @@ class MultiRoundInferer:
             self.data_transform.clear()
             self.theta_transform.clear()
 
+    def _sample_initial_proposal(
+            self, 
+            key: NPKey, 
+            n_samples: int
+    ) -> dict[str, NDArray] | None:
+        if n_samples == 0:
+            return
+        self.ui.log('Sampling from initial proposal...')
+        prior_samples = self.initial_proposal.sample(key, n_samples)
+        return prior_samples
+
+    def _sample_posterior_for_simulations(
+            self, 
+            key: NPKey,
+            n_samples: int
+    ) -> dict[str, NDArray] | None:
+        if n_samples == 0:
+            return
+
+        self.sample_posterior_seed += 1
+
+        if self.mode == 'NLE':
+            posterior_samples = self.nested_samples.sample(
+                n=n_samples,
+                random_state=self.sample_posterior_seed
+            )
+            posterior_samples = self._reformat_samples(posterior_samples)
+
+        elif self.mode == 'NPE':
+            assert self.posterior_samples is not None
+            tree = self.posterior_samples
+            n_available = next(iter(tree.values())).shape[0]
+            idx = np.random.choice(n_available, size=n_samples, replace=True)
+            posterior_samples = {
+                key: np.asarray(value[idx]) for key, value in tree.items()
+            }
+
+        else:
+            raise Exception(f'Mode {self.mode} not recognised.')
+
+        return posterior_samples
+
     def _sample_proposal(
             self,
             key: NPKey,
             n_samples: int, 
             use_initial: bool = True
     ) -> dict[str, NDArray]:
+
         if use_initial:
-            self.ui.log('Sampling from initial proposal...')
-            prior_samples = self.initial_proposal.sample(key, n_samples)
+            prior_samples = self._sample_initial_proposal(key, n_samples)
+
         else:
             n_prior = int(self.mr_config.initial_fraction * n_samples)
             n_posterior = n_samples - n_prior
@@ -764,32 +808,10 @@ class MultiRoundInferer:
                 f'and initial proposal {self.mr_config.initial_fraction}...'
             )
 
-            if n_posterior > 0:
-                self.sample_posterior_seed += 1
+            posterior_samples = self._sample_posterior_for_simulations(key, n_posterior)
 
-                if self.mode == 'NLE':
-                    posterior_samples = self.nested_samples.sample(
-                        n=n_posterior,
-                        random_state=self.sample_posterior_seed
-                    )
-                    posterior_samples = self._reformat_samples(posterior_samples)
-
-                elif self.mode == 'NPE':
-                    assert self.posterior_samples is not None
-                    tree = self.posterior_samples
-                    n_available = next(iter(tree.values())).shape[0]
-                    idx = np.random.choice(n_available, size=n_posterior, replace=True)
-                    posterior_samples = {
-                        key: np.asarray(value[idx]) for key, value in tree.items()
-                    }
-            else:
-                posterior_samples = None
-
-            if n_prior > 0:
-                _, init_key = key.split()
-                initial_samples = self.initial_proposal.sample(init_key, n_prior)
-            else:
-                initial_samples = None
+            _, init_key = key.split()
+            initial_samples = self._sample_initial_proposal(init_key, n_prior)
 
             if initial_samples and posterior_samples:
                 prior_samples = {
@@ -802,10 +824,11 @@ class MultiRoundInferer:
                 elif posterior_samples and not initial_samples:
                     prior_samples = posterior_samples
                 else:
-                    raise Exception(
-                        'Somehow no posterior or initial samples were generated.'
-                    )
+                    prior_samples = None
             
+        assert prior_samples is not None, (
+            'Somehow no posterior or initial samples were generated.'
+        )
         return prior_samples
 
     def _reformat_samples(
