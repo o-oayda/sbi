@@ -21,6 +21,20 @@ class NPPrior(ABC):
     def __init__(self, dtype: DTypeLike) -> None:
         self.dtype = dtype
 
+    def __repr__(self) -> str:
+        lines = [f"{self.__class__.__name__}(dtype={self.dtype}"]
+        for name in self.prior_names:
+            entry = self.prior_dict[name]
+            low = entry['low_range']
+            high = entry['high_range']
+            kwarg = entry['simulator_kwarg']
+            dist = entry.get('dist_type', 'unknown')
+            lines.append(
+                f"  {name}: kwarg='{kwarg}', dist='{dist}', range=[{low}, {high}]"
+            )
+        lines.append(")")
+        return "\n".join(lines)
+
     @property
     @abstractmethod
     def prior_dict(self) -> dict[str, dict]:
