@@ -102,10 +102,10 @@ class NPPrior(ABC):
     def _np_distribution_funcs(self, dist_type: str) -> tuple[Callable, Callable, Callable]:
         dist = dist_type.lower()
         if dist == 'uniform':
-            def sample(key: NPKey, n: int, a, b):
+            def sample(key: NPKey, n: int, a, b): # pyright: ignore[reportRedeclaration]
                 return key.uniform((n,), low=a, high=b, dtype=self.dtype)
 
-            def logpdf(x, a, b):
+            def logpdf(x, a, b): # pyright: ignore[reportRedeclaration]
                 return scipy.stats.uniform.logpdf(x, loc=a, scale=b - a)
 
             def transform(u, a, b):

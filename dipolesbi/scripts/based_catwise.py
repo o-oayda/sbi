@@ -45,6 +45,11 @@ if __name__ == '__main__':
         default='gaussian',
         help='Error dist. for CatWISE errors (gaussian or students-t; default: gaussian).'
     )
+    parser.add_argument(
+        '--no_ui',
+        action='store_true',
+        help='Disable the Rich multi-round progress UI.'
+    )
     args = parser.parse_args()
 
     MODE = args.mode
@@ -153,6 +158,7 @@ if __name__ == '__main__':
         multi_round_config=cur_cfg.multiround,
         transform_config=cur_cfg.transforms,
         nflow_config=cur_cfg.flow,
-        train_config=cur_cfg.training
+        train_config=cur_cfg.training,
+        use_ui=not args.no_ui
     )
     inferer.run()

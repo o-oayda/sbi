@@ -35,7 +35,7 @@ from dipolesbi.tools.np_rngkey import npkey_sequence_from_hk
 from dipolesbi.tools.priors_jax import JaxPrior
 from dipolesbi.tools.transforms import DipoleThetaTransform, InvertibleDataTransform, InvertibleThetaTransformJax
 from dipolesbi.tools.hadamard_transform import HadamardTransform
-from dipolesbi.tools.ui import MultiRoundInfererUI
+from dipolesbi.tools.ui import MultiRoundInfererUI, NullMultiRoundInfererUI
 from dipolesbi.tools.utils import convert_x_in_named_dataset, PytreeAdapter
 
 
@@ -462,7 +462,7 @@ class AbstractNeuralFlow(ABC):
             training_data: healpix_map_dataset_idx, 
             validation_data: healpix_map_dataset,
             config: TrainingConfig = TrainingConfig(),
-            ui: Optional[MultiRoundInfererUI] = None,
+            ui: Optional[MultiRoundInfererUI | NullMultiRoundInfererUI] = None,
             prior: Optional[JaxPrior] = None
     ) -> tuple[NDArray, NDArray]:
         assert self.model is not None
@@ -676,7 +676,7 @@ class AbstractNeuralFlow(ABC):
             n_samples: int,
             dmap_and_mask: tuple[jnp.ndarray, jnp.ndarray],
             check_proposal_probs: bool = True,
-            ui: Optional[MultiRoundInfererUI] = None,
+            ui: Optional[MultiRoundInfererUI | NullMultiRoundInfererUI] = None,
             **kwargs
     ) -> dict[str, jnp.ndarray] | None:
         assert self.prior is not None

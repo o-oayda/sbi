@@ -24,7 +24,7 @@ from dipolesbi.tools.dataloader import healpix_map_dataset, healpix_map_dataset_
 from dipolesbi.tools.neural_flows import NeuralFlow
 from dipolesbi.tools.np_rngkey import NPKey, npkey_from_jax
 from dipolesbi.tools.priors_np import DipolePriorNP
-from dipolesbi.tools.ui import MultiRoundInfererUI
+from dipolesbi.tools.ui import MultiRoundInfererUI, NullMultiRoundInfererUI
 from dipolesbi.tools.utils import HidePrints, load_dict_npz, save_dict_npz
 from jax import lax
 import datetime
@@ -37,7 +37,7 @@ class MultiRoundInferer:
             mode: Literal['NLE'] | Literal['NPE'],
             initial_proposal: DipolePriorNP,
             simulator_function: Callable[
-                [NPKey, dict[str, NDArray[np.float32]], bool, Optional[MultiRoundInfererUI]],
+                [NPKey, dict[str, NDArray[np.float32]], bool],
                 tuple[NDArray[np.float32], NDArray[np.bool_]]
             ],
             reference_observation: tuple[NDArray, NDArray[np.bool_]],
@@ -45,10 +45,12 @@ class MultiRoundInferer:
             nflow_config: NeuralFlowConfig,
             transform_config: TransformConfig,
             train_config: TrainingConfig = TrainingConfig(),
-            true_logl: Optional[Callable[[dict[str, jnp.ndarray]], jnp.ndarray]] = None
+            true_logl: Optional[Callable[[dict[str, jnp.ndarray]], jnp.ndarray]] = None,
+            use_ui: bool = True
     ) -> None:
         self.mode = mode
         self.mr_config = multi_round_config
+        self.use_ui = use_ui
 
         self.rng_key = jax.random.PRNGKey(self.mr_config.prng_integer_seed)
 
@@ -139,7 +141,7 @@ class MultiRoundInferer:
             'Train NLE', 'Sample likelihood', 'Compute posterior',
             'Benchmark'
         ]
-        self.ui = MultiRoundInfererUI(tasks)
+        self.ui = MultiRoundInfererUI(tasks) if self.use_ui else NullMultiRoundInfererUI(tasks)
 
         with self.ui.session(refresh_per_second=20):
 
@@ -209,7 +211,7 @@ class MultiRoundInferer:
             'Sample proposal', 'Generate simulations',
             'Train NPE', 'Sample posterior'
         ]
-        self.ui = MultiRoundInfererUI(tasks)
+        self.ui = MultiRoundInfererUI(tasks) if self.use_ui else NullMultiRoundInfererUI(tasks)
 
         with self.ui.session(refresh_per_second=20):
 
@@ -825,7 +827,7 @@ class MultiRoundInferer:
             key: NPKey,
             theta: dict[str, NDArray]
     ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
-        return self.simulator_function(key, theta, True, self.ui)
+        return self.simulator_function(key, theta, True)
 
     def _instantiate_nflow(self) -> NeuralFlow:
         if (not self.train_config.restore_from_previous) or (self.nflow is None):

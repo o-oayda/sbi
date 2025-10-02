@@ -229,6 +229,7 @@ class MultiRoundInfererUI:
         self._global_task = None
         self._refresh()
 
+
 # ------------------- evidence panel --------------------
     def set_stats_columns(self, columns: Sequence[str]) -> None:
         """Define the table schema (call once, e.g., at startup)."""
@@ -346,3 +347,69 @@ class MultiRoundInfererUI:
             border_style="white",
         )
 
+
+class NullMultiRoundInfererUI:
+    def __init__(self, tasks: Optional[list[str]] = None, *_, **__) -> None:
+        self.tasks = tasks or []
+
+    @contextmanager
+    def session(self, *_, **__):
+        yield self
+
+    # no-op implementations of the API used by the real UI
+    def start_step(self, *_, **__):
+        return None
+
+    def finish_step(self, *_, **__):
+        return None
+
+    def log(self, *_, **__):
+        return None
+
+    def set_round(self, *_, **__):
+        return None
+
+    def increment_round(self, *_, **__):
+        return None
+
+    def reset(self, *_, **__):
+        return None
+
+    def set_subtitle(self, *_, **__):
+        return None
+
+    def set_stats_columns(self, *_, **__):
+        return None
+
+    def add_stats_row(self, *_, **__):
+        return None
+
+    def update_last_stats_row(self, *_, **__):
+        return None
+
+    def begin_progress(self, *_, **__):
+        return None
+
+    def update_progress(self, *_, **__):
+        return None
+
+    def end_progress(self, *_, **__):
+        return None
+
+    def begin_global_progress(self, *_, **__):
+        return None
+
+    def set_global_total(self, *_, **__):
+        return None
+
+    def set_global_description(self, *_, **__):
+        return None
+
+    def advance_global(self, *_, **__):
+        return None
+
+    def set_global_completed(self, *_, **__):
+        return None
+
+    def end_global_progress(self, *_, **__):
+        return None
