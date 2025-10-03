@@ -81,6 +81,76 @@ def downgrade_ignore_nan(
 
     return out_map, out_mask
 
+
+def downgrade_ignore_nan_jax(
+    map_in: jnp.ndarray,
+    mask_in: jnp.ndarray,
+    nside_out: int
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """JAX equivalent of ``downgrade_ignore_nan`` supporting 1D/2D inputs."""
+
+    map_arr = jnp.asarray(map_in)
+    mask_arr = jnp.asarray(mask_in, dtype=bool)
+
+    squeezed_input = map_arr.ndim == 1
+
+    if map_arr.ndim == 2 and mask_arr.ndim == 1:
+        mask_arr = jnp.broadcast_to(mask_arr, map_arr.shape)
+
+    if squeezed_input and mask_arr.ndim == 2:
+        mask_arr = mask_arr[0]
+
+    if squeezed_input:
+        map_arr = map_arr[None, :]
+        mask_arr = mask_arr[None, :]
+
+    assert map_arr.shape == mask_arr.shape, 'map and mask shapes must agree.'
+    assert map_arr.ndim == 2, 'map_in must be 1D or 2D (batch, npix).'
+
+    orig_dtype = map_arr.dtype
+    if jnp.issubdtype(orig_dtype, jnp.floating):
+        work_dtype = orig_dtype
+    else:
+        work_dtype = jnp.float32
+
+    work_map = map_arr.astype(work_dtype)
+    work_mask = mask_arr.astype(bool)
+
+    work_map = jnp.where(work_mask, work_map, jnp.nan)
+
+    npix = work_map.shape[-1]
+    cur_nside = hp.npix2nside(int(npix))
+    assert cur_nside >= nside_out, 'Output nside must be lower than input nside.'
+    ratio = cur_nside // nside_out
+    assert (cur_nside % nside_out) == 0 and (ratio & (ratio - 1)) == 0
+
+    out_map = work_map
+    out_mask = work_mask
+
+    while cur_nside > nside_out:
+        cur_npix = hp.nside2npix(cur_nside)
+        cur_npix //= 4
+
+        out_map = out_map.reshape(out_map.shape[0], cur_npix, 4)
+        out_mask = out_mask.reshape(out_mask.shape[0], cur_npix, 4)
+
+        valid_counts = jnp.sum(out_mask, axis=-1)
+        summed = jnp.sum(jnp.where(out_mask, out_map, 0.0), axis=-1)
+
+        out_mask = valid_counts > 0
+        out_map = jnp.where(out_mask, summed, jnp.nan)
+
+        cur_nside //= 2
+
+    if jnp.issubdtype(orig_dtype, jnp.floating) and work_dtype != orig_dtype:
+        out_map = out_map.astype(orig_dtype)
+
+    if squeezed_input:
+        out_map = out_map[0]
+        out_mask = out_mask[0]
+
+    return out_map, out_mask
+
 def _split_len(L: int, n: int) -> list[int]:
     """Split length L into n near-equal positive chunks that sum to L."""
     q, r = divmod(L, n)

@@ -128,3 +128,60 @@ def test_log_likelihood_matches_manual_with_downscaling() -> None:
         mu=coarse_signal[:, coarse_model_mask],
     ).sum(axis=1)
     np.testing.assert_allclose(logl, expected_logl)
+
+
+def test_log_likelihood_matches_manual_with_multi_step_downscaling() -> None:
+    nside = 8
+    downscale_nside = 2
+    theta = _make_theta(mean_density=25.0)
+
+    base_mapper = SimpleDipoleMap(nside=nside, dtype=np.float64)
+    model_signal = base_mapper.dipole_signal(**theta)
+
+    fine_mask = np.ones(model_signal.shape[1], dtype=np.bool_)
+    fine_mask[[1, 12, 47, 120]] = False
+
+    rng_key = NPKey.from_seed(21)
+    observed_counts = poisson_sample(
+        rng_key,
+        lam=model_signal,
+        shape=model_signal.shape,
+        dtype=np.int32,
+    ).astype(np.float64)
+
+    coarse_counts, coarse_mask = downgrade_ignore_nan(
+        observed_counts,
+        fine_mask,
+        downscale_nside,
+    )
+    coarse_counts = coarse_counts[0]
+    coarse_mask = coarse_mask[0]
+
+    mapper = SimpleDipoleMap(
+        nside=nside,
+        dtype=np.float64,
+        reference_data=coarse_counts,
+        reference_mask=fine_mask,
+        downscale_nside=downscale_nside,
+    )
+
+    logl = mapper.log_likelihood(theta)
+    assert logl.shape == (model_signal.shape[0],)
+    assert np.all(np.isfinite(logl))
+
+    model_mask = np.broadcast_to(fine_mask, model_signal.shape)
+    coarse_signal, coarse_model_mask = downgrade_ignore_nan(
+        model_signal,
+        model_mask,
+        downscale_nside,
+    )
+    coarse_model_mask = coarse_model_mask[0]
+
+    assert np.array_equal(coarse_model_mask, coarse_mask)
+    assert coarse_counts.shape[0] == 12 * downscale_nside * downscale_nside
+
+    expected_logl = sp_stats.poisson.logpmf(
+        k=coarse_counts[coarse_model_mask],
+        mu=coarse_signal[:, coarse_model_mask],
+    ).sum(axis=1)
+    np.testing.assert_allclose(logl, expected_logl)

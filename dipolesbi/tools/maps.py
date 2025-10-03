@@ -16,7 +16,7 @@ from dipolesbi.tools.utils import (
     enforce_batchwise_input, jax_sph2cart, spherical_to_cartesian, omega_to_theta,
     equatorial_to_ecliptic
 )
-from dipolesbi.tools.healpix_helpers import downgrade_ignore_nan
+from dipolesbi.tools.healpix_helpers import downgrade_ignore_nan, downgrade_ignore_nan_jax
 from dipolesbi.tools.physics import ellis_baldwin_amplitude
 from typing import Literal, Callable, Optional
 from dipolesbi.tools.noise_models import parse_noise_model
@@ -85,7 +85,8 @@ class SimpleDipoleMapJax:
             self, 
             nside: int = 64, 
             reference_data: Optional[jnp.ndarray] = None,
-            reference_mask: Optional[jnp.ndarray] = None
+            reference_mask: Optional[jnp.ndarray] = None,
+            downscale_nside: Optional[int] = None
     ) -> None:
         self.nside = nside
         self.fiducial_amplitude = 0.005
@@ -96,8 +97,43 @@ class SimpleDipoleMapJax:
             hp.pix2vec(self.nside, self.pixel_indices, nest=True)
         )
 
-        self.reference_data = reference_data
-        self.reference_mask = reference_mask
+        self.reference_data = (
+            None if reference_data is None else jnp.asarray(reference_data)
+        )
+        self.reference_mask = (
+            None if reference_mask is None else jnp.asarray(reference_mask, dtype=bool)
+        )
+        self.downscale_nside = downscale_nside
+
+        if self.reference_data is not None:
+            assert self.reference_mask is not None, (
+                "A binary mask must also be supplied when supplying reference data."
+            )
+            assert self.reference_mask.ndim == 1, "reference_mask must be 1D."
+
+            native_npix = self.n_pix
+            assert self.reference_mask.shape[-1] == native_npix, (
+                'reference_mask must be specified at the native resolution.'
+            )
+
+            assert self.reference_data.ndim == 1, "reference_data must be 1D."
+            if self.downscale_nside is None:
+                assert self.reference_data.shape[-1] == native_npix, (
+                    'reference_data must match native resolution when no '
+                    'downscaling is configured.'
+                )
+            else:
+                coarse_npix = hp.nside2npix(self.downscale_nside)
+                assert self.reference_data.shape[-1] == coarse_npix, (
+                    'reference_data must match the downscaled resolution.'
+                )
+
+        if self.downscale_nside is not None:
+            assert self.nside >= self.downscale_nside, (
+                'downscale_nside must not exceed native nside.'
+            )
+            ratio = self.nside // self.downscale_nside
+            assert (self.nside % self.downscale_nside) == 0 and (ratio & (ratio - 1)) == 0
 
     def generate_dipole(
             self,
@@ -133,16 +169,54 @@ class SimpleDipoleMapJax:
     def log_likelihood(self, theta: dict[str, jnp.ndarray]) -> jnp.ndarray:
         assert self.reference_data is not None
         dipole_signal = self.dipole_signal(**theta)
-        logl = lambda k, mu: jnp.sum(jax.scipy.stats.poisson.logpmf(k=k, mu=mu)) # no batch dim
+        logl = lambda k, mu: jnp.sum(jax.scipy.stats.poisson.logpmf(k=k, mu=mu))
 
-        if self.reference_mask is not None:
-            mask = self.reference_mask
-            assert mask.shape == self.reference_data.shape, (
-                f'Mask: {mask.shape}, x0: {self.reference_data.shape}'
+        if self.reference_mask is None:
+            assert self.reference_data.shape[0] == dipole_signal.shape[0], (
+                'reference_data must match native resolution.'
             )
-            return logl(self.reference_data[mask], dipole_signal[mask])
-        else:
             return logl(self.reference_data, dipole_signal)
+
+        fine_mask = self.reference_mask.astype(bool)
+        if not bool(jnp.any(fine_mask)):
+            raise ValueError('reference_mask removes all pixels; cannot compute likelihood.')
+
+        if self.downscale_nside:
+            coarse_signal, coarse_mask = downgrade_ignore_nan_jax(
+                dipole_signal,
+                fine_mask,
+                self.downscale_nside
+            )
+
+            dummy_map = jnp.where(fine_mask, jnp.zeros_like(dipole_signal), jnp.nan)
+            _, coarse_mask_from_mask = downgrade_ignore_nan_jax(
+                dummy_map,
+                fine_mask,
+                self.downscale_nside
+            )
+
+            if not bool(jnp.all(coarse_mask == coarse_mask_from_mask)):
+                raise ValueError('Mask differs across batches after downscaling.')
+
+            assert self.reference_data.shape[0] == coarse_signal.shape[0], (
+                'reference_data must match the downscaled resolution.'
+            )
+
+            effective_mask = coarse_mask
+            observed_counts = self.reference_data
+            model_counts = coarse_signal
+        else:
+            assert self.reference_data.shape[0] == dipole_signal.shape[0], (
+                'reference_data must match native resolution.'
+            )
+            effective_mask = fine_mask
+            observed_counts = self.reference_data
+            model_counts = dipole_signal
+
+        if not bool(jnp.any(effective_mask)):
+            raise ValueError('Effective mask removes all pixels; cannot compute likelihood.')
+
+        return logl(observed_counts[effective_mask], model_counts[effective_mask])
 
 class SimpleDipoleMap:
     def __init__(
@@ -158,7 +232,7 @@ class SimpleDipoleMap:
         :param nside: Nside of native data to generate dipole in.
         :param dtype: Dtype of output maps. Though we generate Poisson deviates,
             this shouldn't be an integer since we use nan to fill in unseen pixels.
-        :param reference_data: Healpy map of Poisson deviates at the native Nside.
+        :param reference_data: Healpy map of Poisson deviates at the downscaled Nside.
         :param reference_mask: Healpy map of binary mask at the native Nside.
         :param is_masked_val: Value to insert into masked pixels for safety.
         :param downscale_nside: Nside to downscale the map to, ignoring nan pixels.
