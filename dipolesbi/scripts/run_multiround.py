@@ -39,6 +39,7 @@ if __name__ == '__main__':
     x0_rng_key = PRNGKey(42)
 
     NSIDE = args.nside 
+    COARSE_NSIDE = NSIDE // 2
     TOTAL_SOURCES = 1_920_000
     MEAN_DENSITY = np.asarray(TOTAL_SOURCES / hp.nside2npix(NSIDE))
     modes = []
@@ -56,10 +57,16 @@ if __name__ == '__main__':
         'dipole_latitude': np.asarray(40.)
     }
 
-    model = SimpleDipoleMap(nside=NSIDE)
+    model = SimpleDipoleMap(nside=NSIDE, downscale_nside=COARSE_NSIDE)
     model.equatorial_plane_mask(angle=30)
-    x0, mask = model.generate_dipole(npkey_from_jax(x0_rng_key), theta=theta0)
-    model.reference_data = x0
+    # these will be at the coarse resolution
+    x0, coarse_mask = model.generate_dipole(npkey_from_jax(x0_rng_key), theta=theta0)
+    _, native_mask = model.dmap_and_mask
+
+    # check downgrading working as intended
+    assert native_mask.shape[-1] == 12 * NSIDE * NSIDE
+    assert coarse_mask.shape[-1] == 12 * COARSE_NSIDE * COARSE_NSIDE
+    assert x0.shape[-1] == 12 * COARSE_NSIDE * COARSE_NSIDE
 
     # this will be a bit how you going until I can work out an explicit likelihood
     # function for the downgraded data --- in principle doable since we know
@@ -71,7 +78,7 @@ if __name__ == '__main__':
     #     x, m = downgrade_ignore_nan(x, m, nside_out=8)
     #     return x, m
 
-    hp.projview(x0.squeeze() * mask.squeeze(), nest=True)
+    hp.projview(x0.squeeze() * coarse_mask.squeeze(), nest=True)
     plt.savefig('example_sample.pdf', bbox_inches='tight')
     plt.show()
 
@@ -84,12 +91,13 @@ if __name__ == '__main__':
 
     true_model_jax = SimpleDipoleMapJax(
         nside=NSIDE,
-        reference_data=jax.device_put(x0).squeeze(),
-        reference_mask=jax.device_put(mask).squeeze()
+        downscale_nside=COARSE_NSIDE,
+        reference_data=jax.device_put(x0).squeeze(), # coarse resolution
+        reference_mask=jax.device_put(native_mask).squeeze() # native resolution
     )
 
     nside16_scenario_npe = Scenario.anynside_npe(
-        nside=NSIDE,
+        nside=COARSE_NSIDE, # since the flow only sees the coarse res
         reference_theta=theta0,
         theta_prior=prior_jax,
         theta_spec_overrides={'embed_transform_in_flow': True},
@@ -102,7 +110,7 @@ if __name__ == '__main__':
         training_overrides={'learning_rate': 0.001}
     )
     nside16_scenario_nle = Scenario.anynside_nle(
-        nside=NSIDE,
+        nside=COARSE_NSIDE, # since the flow only sees the coarse res
         reference_theta=theta0,
         theta_prior=prior_jax,
         multiround_overrides={
@@ -131,7 +139,7 @@ if __name__ == '__main__':
         cur_cfg = meta_cfg[MODE]
 
         inferer = MultiRoundInferer(
-            MODE, prior, model.generate_dipole, (x0, mask),
+            MODE, prior, model.generate_dipole, (x0, coarse_mask),
             true_logl=true_model_jax.log_likelihood,
             multi_round_config=cur_cfg.multiround,
             transform_config=cur_cfg.transforms,
