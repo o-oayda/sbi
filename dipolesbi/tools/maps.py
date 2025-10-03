@@ -178,8 +178,9 @@ class SimpleDipoleMapJax:
             return logl(self.reference_data, dipole_signal)
 
         fine_mask = self.reference_mask.astype(bool)
-        if not bool(jnp.any(fine_mask)):
-            raise ValueError('reference_mask removes all pixels; cannot compute likelihood.')
+        # jax complaints about dynamic bool conversions
+        # if not bool(jnp.any(fine_mask)):
+        #     raise ValueError('reference_mask removes all pixels; cannot compute likelihood.')
 
         if self.downscale_nside:
             coarse_signal, coarse_mask = downgrade_ignore_nan_jax(
@@ -195,8 +196,9 @@ class SimpleDipoleMapJax:
                 self.downscale_nside
             )
 
-            if not bool(jnp.all(coarse_mask == coarse_mask_from_mask)):
-                raise ValueError('Mask differs across batches after downscaling.')
+            # jax complaints about dynamic bool conversions
+            # if not bool(jnp.all(coarse_mask == coarse_mask_from_mask)):
+            #     raise ValueError('Mask differs across batches after downscaling.')
 
             assert self.reference_data.shape[0] == coarse_signal.shape[0], (
                 'reference_data must match the downscaled resolution.'
@@ -213,10 +215,13 @@ class SimpleDipoleMapJax:
             observed_counts = self.reference_data
             model_counts = dipole_signal
 
-        if not bool(jnp.any(effective_mask)):
-            raise ValueError('Effective mask removes all pixels; cannot compute likelihood.')
-
-        return logl(observed_counts[effective_mask], model_counts[effective_mask])
+        # Boolean masking is not JIT-friendly in JAX because the indices need to be
+        # concrete. Instead, build dense arrays with safe filler values and gate the
+        # contribution using the mask so the computation stays compatible with tracing.
+        safe_counts = jnp.where(effective_mask, observed_counts, 0.0)
+        safe_means = jnp.where(effective_mask, model_counts, 1.0)
+        logpmf_vals = jax.scipy.stats.poisson.logpmf(k=safe_counts, mu=safe_means)
+        return jnp.sum(jnp.where(effective_mask, logpmf_vals, 0.0))
 
 class SimpleDipoleMap:
     def __init__(
