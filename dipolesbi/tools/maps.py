@@ -16,13 +16,9 @@ from dipolesbi.tools.utils import (
     enforce_batchwise_input, jax_sph2cart, spherical_to_cartesian, omega_to_theta,
     equatorial_to_ecliptic
 )
+from dipolesbi.tools.healpix_helpers import downgrade_ignore_nan
 from dipolesbi.tools.physics import ellis_baldwin_amplitude
 from typing import Literal, Callable, Optional
-from sbi.inference import simulate_for_sbi
-from sbi.utils.user_input_checks import (
-    check_sbi_inputs,
-    process_simulator,
-)
 from dipolesbi.tools.noise_models import parse_noise_model
 from dipolesbi.tools.noise_models import ecliptic_noise
 from astropy.coordinates import SkyCoord
@@ -155,8 +151,32 @@ class SimpleDipoleMap:
             dtype: DTypeLike = np.float32,
             reference_data: Optional[NDArray] = None,
             reference_mask: Optional[NDArray[np.bool_]] = None,
-            is_masked_val: float = np.nan
+            is_masked_val: float = np.nan,
+            downscale_nside: Optional[int] = None
     ) -> None:
+        '''
+        :param nside: Nside of native data to generate dipole in.
+        :param dtype: Dtype of output maps. Though we generate Poisson deviates,
+            this shouldn't be an integer since we use nan to fill in unseen pixels.
+        :param reference_data: Healpy map of Poisson deviates at the native Nside.
+        :param reference_mask: Healpy map of binary mask at the native Nside.
+        :param is_masked_val: Value to insert into masked pixels for safety.
+        :param downscale_nside: Nside to downscale the map to, ignoring nan pixels.
+            See the note below for more detail. If this is set, the output of
+            generate dipole will be at the coarser Nside, and log likelihood
+            calculations will be done at that coarse resolution.
+
+        # Downscale Nside
+        For a map `x` with mask `m` where the entries of `x` are Poisson deviates,
+        the sum of entries of `x` will also be a Poisson deviate with rate parameter
+        equal to the sum of the rate parameters of the entries.
+
+        Thus, when downscaling a map, we can compute the explicit log likelihood
+        of the coarse map given the log likelihood of the finer map.
+        Unseen pixels are simply ignored. For example, in a four-block with 2
+        masked pixels, the sum will be over the 2 seen pixels, yielding a total
+        coarse rate parameter less than that if all the pixels were seen.
+        '''
         self.nside = nside
         self.dtype = dtype
         self.fiducial_amplitude = 0.005
@@ -164,9 +184,44 @@ class SimpleDipoleMap:
         self.mask = Mask(nside=nside)
         self.masked_pixels = set()
         self._data_masked_val = is_masked_val
+        self.downscale_nside = downscale_nside
 
         self.reference_data = reference_data
         self.reference_mask = reference_mask
+
+        if self.reference_data is not None:
+            assert self.reference_mask is not None, (
+                "A binary mask must also be supplied when supplying reference data."
+            )
+            assert self.reference_mask.ndim == 1, "reference_mask must be 1D."
+
+            native_npix = hp.nside2npix(self.nside)
+            assert self.reference_mask.shape[-1] == native_npix, (
+                'reference_mask must be specified at the native resolution.'
+            )
+
+            assert self.reference_data.ndim == 1, "reference_data must be 1D."
+            if self.downscale_nside is None:
+                assert self.reference_data.shape[-1] == native_npix, (
+                    'reference_data must match the native resolution when '
+                    'no downscaling is configured.'
+                )
+            else:
+                coarse_npix = hp.nside2npix(self.downscale_nside)
+                assert self.reference_data.shape[-1] == coarse_npix, (
+                    'reference_data must match the downscaled resolution.'
+                )
+
+        if self.downscale_nside is not None:
+            assert self.nside >= self.downscale_nside, (
+                'downscale_nside must not exceed native nside.'
+            )
+
+            ratio = self.nside // self.downscale_nside
+            assert ( # power of 2 check
+                    (self.nside % self.downscale_nside) == 0
+                and (ratio & (ratio - 1)) == 0
+            )
     
     def equatorial_plane_mask(self, angle: float) -> None:
         self.masked_pixels |= set(self.mask.equator_mask(angle))
@@ -188,7 +243,13 @@ class SimpleDipoleMap:
             ).astype(self.dtype)
         else:
             self._density_map = poisson_mean.astype(self.dtype)
-        return self.dmap_and_mask
+
+        # if downscale is desired, transform after generating poisson deviates
+        if self.downscale_nside:
+            dmap, mask = self.dmap_and_mask
+            return downgrade_ignore_nan(dmap, mask, self.downscale_nside)
+        else:
+            return self.dmap_and_mask
 
     @property
     def dmap_and_mask(self) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
@@ -228,17 +289,65 @@ class SimpleDipoleMap:
 
     def log_likelihood(self, theta: dict[str, NDArray]) -> NDArray:
         assert self.reference_data is not None
-        dipole_signal = self.dipole_signal(**theta)
-        logl = lambda k, mu: np.sum(sp.stats.poisson.logpmf(k=k, mu=mu), axis=1)
+        assert self.reference_mask is not None
 
-        if self.reference_mask is not None:
-            mask = np.repeat(self.reference_mask, dipole_signal.shape[0], axis=1)
-            assert mask.shape == self.reference_data.shape, (
-                f'Mask: {mask.shape}, x0: {self.reference_data.shape}'
+        dipole_signal = self.dipole_signal(**theta)
+        assert dipole_signal.ndim == 2, (
+            'dipole_signal must include a batch dimension.'
+        )
+
+        fine_mask = self.reference_mask.astype(np.bool_)
+        if not np.any(fine_mask):
+            raise ValueError(
+                'reference_mask removes all pixels; cannot compute likelihood.'
             )
-            return logl(self.reference_data[mask], dipole_signal[mask])
+
+        native_npix = fine_mask.shape[0]
+        assert dipole_signal.shape[1] == native_npix, (
+            'Model output must match the native mask length.'
+        )
+
+        if self.downscale_nside:
+            model_mask = np.broadcast_to(fine_mask, dipole_signal.shape).copy()
+            dipole_signal, model_mask = downgrade_ignore_nan(
+                dipole_signal,
+                model_mask,
+                self.downscale_nside
+            )
+
+            if model_mask.ndim == 2:
+                first_mask = model_mask[0].astype(np.bool_)
+                if not np.all(model_mask == first_mask):
+                    raise ValueError(
+                        'Mask differs across batches after downscaling.'
+                    )
+                effective_mask = first_mask
+            else:
+                effective_mask = model_mask.astype(np.bool_)
+
+            coarse_npix = effective_mask.shape[0]
+            assert self.reference_data.shape[0] == coarse_npix, (
+                'reference_data must match the downscaled resolution.'
+            )
+            reference_data = self.reference_data
         else:
-            return logl(self.reference_data, self.dipole_signal)
+            effective_mask = fine_mask
+            assert self.reference_data.shape[0] == native_npix, (
+                'reference_data must match the native resolution when no '\
+                'downscaling is configured.'
+            )
+            reference_data = self.reference_data
+
+        if not np.any(effective_mask):
+            raise ValueError(
+                'Effective mask removes all pixels; cannot compute likelihood.'
+            )
+
+        observed_counts = reference_data[effective_mask]
+        model_counts = dipole_signal[:, effective_mask]
+
+        logpmf = sp.stats.poisson.logpmf(k=observed_counts, mu=model_counts)
+        return np.sum(logpmf, axis=1)
 
 class SkyMap:
     def __init__(self, nside: int = 32, device: str = 'cpu'):
