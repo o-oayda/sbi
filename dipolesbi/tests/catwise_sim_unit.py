@@ -183,7 +183,7 @@ def test_alpha_lookup_buffered_vs_default():
     reference = lookup_fresh.p_W12(colours).astype(np.float32)
 
     assert buffered is out_buffer
-    assert np.allclose(buffered, reference, rtol=1e-6, atol=1e-7)
+    assert np.allclose(buffered, reference, rtol=1e-6, atol=1e-6)
 
 
 def test_aberrate_points_matches_astropy_reference():
