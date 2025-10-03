@@ -20,7 +20,7 @@ from dipolesbi.tools.configs import (
     TransformConfig
 )
 from dipolesbi.tools.dataloader import split_train_val_dict
-from dipolesbi.tools.inference import JaxNestedSampler
+from dipolesbi.tools.jax_ns import JaxNestedSampler
 from dipolesbi.tools.dataloader import healpix_map_dataset, healpix_map_dataset_idx
 from dipolesbi.tools.neural_flows import NeuralFlow
 from dipolesbi.tools.np_rngkey import NPKey, npkey_from_jax
@@ -158,13 +158,18 @@ class MultiRoundInferer:
                 self.current_round = round_idx
                 self.ui.add_stats_row(row={'Round': round_idx+1, 'Evidence': ""})
 
+                self.ui.start_step(0, subtitle='sampling')
+
+                if round_idx == 0:
+                    initial_lnZkey, current_key = jax.random.split(current_key)
+                    self._get_true_posterior_and_evidence(initial_lnZkey)
+
                 npkey = npkey_from_jax(current_key)
                 proposal_key, sim_key, split_key = npkey.split(3)
                 current_key, train_key, inspect_key, posterior_key = jax.random.split(
                     current_key, 4
                 )
 
-                self.ui.start_step(0, subtitle='sampling')
                 theta = self._sample_proposal(
                     key=proposal_key,
                     n_samples=self.mr_config.simulations_per_round,
@@ -457,15 +462,12 @@ class MultiRoundInferer:
 
         self.true_lnZ = float(self.classic_nested_samples.logZ()) # type: ignore
         self.true_lnZerr = float(self.classic_nested_samples.logZ(100).std()) # type: ignore
-        if self.mode == 'NLE':
-            self.ui.log(
-                f"NLE Log Evidence: {self.nested_samples.logZ():.2f} "
-                f"± {self.nested_samples.logZ(100).std():.2f}" # type: ignore
-            )
+
         self.ui.log(
             f"Classic Log Evidence: {self.true_lnZ:.2f} "
             f"± {self.true_lnZerr:.2f}" # type: ignore
         )
+
         return self.true_lnZ, self.true_lnZerr, self.classic_nested_samples
 
     def _benchmark_classic(self, rng_key: PRNGKey) -> None:
@@ -474,6 +476,10 @@ class MultiRoundInferer:
         )
 
         if self.mode == 'NLE':
+            self.ui.log(
+                f"NLE Log Evidence: {self.nested_samples.logZ():.2f} "
+                f"± {self.nested_samples.logZ(100).std():.2f}" # type: ignore
+            )
             diff = self.nested_samples.logZ() - self.true_lnZ # type: ignore
             sigma = (
                 np.abs(diff) # type: ignore
