@@ -29,6 +29,7 @@ dependencies = [
     "surjectors @ git+https://github.com/o-oayda/surjectors.git@main",
     "blackjax @ git+https://github.com/handley-lab/blackjax@nested_sampling"
 
+]
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
