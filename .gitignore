@@ -27,3 +27,4 @@ benchmark/*
 *.txt
 *.npz
 *.csv
+*.npy
