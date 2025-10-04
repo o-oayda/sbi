@@ -46,6 +46,11 @@ if __name__ == '__main__':
         help='Error dist. for CatWISE errors (gaussian or students-t; default: gaussian).'
     )
     parser.add_argument(
+        '--common_error',
+        action='store_true',
+        help='Use common extra error on W1 and W2 magnitudes.'
+    )
+    parser.add_argument(
         '--no_ui',
         action='store_true',
         help='Disable the Rich multi-round progress UI.'
@@ -57,6 +62,7 @@ if __name__ == '__main__':
     N_WORKERS = args.n_workers
     SAVE_DIR = args.out_dir
     ERROR_DIST = args.error_dist
+    COMMON_ERROR = args.common_error
     USE_FLOAT32 = False
     NSIDE = 64
     N_ROUNDS = 10
@@ -65,7 +71,8 @@ if __name__ == '__main__':
         cat_w1_max=17.0, 
         cat_w12_min=0.5,
         magnitude_error_dist=ERROR_DIST,
-        use_float32=USE_FLOAT32
+        use_float32=USE_FLOAT32,
+        use_common_extra_error=COMMON_ERROR
     )
 
     model = Catwise(config)
@@ -80,21 +87,22 @@ if __name__ == '__main__':
     )
     
     prior.add_prior(
-        short_name='etaW1',
+        short_name='etaW1' if not COMMON_ERROR else 'etaWX',
         simulator_kwarg='w1_extra_error',
         low=0,
         high=8,
         dist_type='uniform',
         index=1
     )
-    prior.add_prior(
-        short_name='etaW2',
-        simulator_kwarg='w2_extra_error',
-        low=0,
-        high=8,
-        dist_type='uniform',
-        index=2
-    )
+    if not COMMON_ERROR:
+        prior.add_prior(
+            short_name='etaW2',
+            simulator_kwarg='w2_extra_error',
+            low=0,
+            high=8,
+            dist_type='uniform',
+            index=2
+        )
     if ERROR_DIST == 'students-t':
         prior.add_prior(
             short_name='nu',
