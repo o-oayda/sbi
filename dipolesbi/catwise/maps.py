@@ -48,6 +48,7 @@ class Catwise:
         
         self.store_final_samples = self.cfg.store_final_samples
         self.chunk_size = self.cfg.chunk_size
+        self.use_common_extra_error = self.cfg.use_common_extra_error
 
         self.dipole_longitude = CMB_L
         self.dipole_latitude = CMB_B
@@ -119,6 +120,8 @@ class Catwise:
         chunk_size = self.chunk_size
         store_final_samples = self.store_final_samples
         magnitude_error_dist = self.magnitude_error_dist
+
+        common_extra_error = self.use_common_extra_error
 
         if self.n_samples == 0:
             n_pix = hp.nside2npix(self.nside)
@@ -234,6 +237,7 @@ class Catwise:
                 w2=(boosted_w2_samples, w2_error),
                 w1_extra_error=w1_extra_error,
                 w2_extra_error=w2_extra_error,
+                common_extra_error=common_extra_error,
                 error_dist=magnitude_error_dist,
                 log10_shape_param=log10_magnitude_error_shape_param,
                 rng=self.rng,
@@ -377,6 +381,7 @@ class Catwise:
             w2: tuple[NDArray, NDArray],
             w1_extra_error: Optional[float] = None,
             w2_extra_error: Optional[float] = None,
+            common_extra_error: bool = False,
             error_dist: Literal['gaussian', 'students-t'] = 'gaussian',
             log10_shape_param: float = 0.,
             rng: Optional[np.random.Generator] = None,
@@ -400,6 +405,9 @@ class Catwise:
 
         w1_dtype = w1_magnitudes.dtype
         w2_dtype = w2_magnitudes.dtype
+
+        if common_extra_error and w1_extra_error is not None:
+            w2_extra_error = w1_extra_error
 
         w1_sigma = np.array(w1_error, dtype=w1_dtype, copy=True)
         w2_sigma = np.array(w2_error, dtype=w2_dtype, copy=True)

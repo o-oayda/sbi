@@ -172,6 +172,7 @@ if __name__ == '__main__':
         transform_config=cur_cfg.transforms,
         nflow_config=cur_cfg.flow,
         train_config=cur_cfg.training,
-        use_ui=not args.no_ui
+        use_ui=not args.no_ui,
+        model_config=config
     )
     inferer.run()

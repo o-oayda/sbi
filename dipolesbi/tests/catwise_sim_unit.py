@@ -147,6 +147,26 @@ def test_add_error_statistical_properties():
     assert np.isclose(np.var(residual_w1_extra, ddof=1), eff_sigma_w1 ** 2, rtol=0.1)
     assert np.isclose(np.var(residual_w2_extra, ddof=1), eff_sigma_w2 ** 2, rtol=0.1)
 
+    # Common extra error flag should mirror W1 onto W2 when W2 not provided
+    common_extra = 0.3
+    rng = np.random.default_rng(rng_seed)
+    noisy_w1_common, noisy_w2_common = sim.add_error(
+        w1=(w1, w1_error),
+        w2=(w2, w2_error),
+        w1_extra_error=common_extra,
+        w2_extra_error=None,
+        common_extra_error=True,
+        error_dist='gaussian',
+        rng=rng
+    )
+
+    residual_w1_common = noisy_w1_common - w1
+    residual_w2_common = noisy_w2_common - w2
+    eff_sigma_common = np.sqrt(base_sigma ** 2 * (1 + common_extra))
+
+    assert np.isclose(np.var(residual_w1_common, ddof=1), eff_sigma_common ** 2, rtol=0.1)
+    assert np.isclose(np.var(residual_w2_common, ddof=1), eff_sigma_common ** 2, rtol=0.1)
+
     # Student's t distribution (nu from log10 params)
     log10_shape_param = np.log10(8.0)
     nu = 10 ** log10_shape_param
