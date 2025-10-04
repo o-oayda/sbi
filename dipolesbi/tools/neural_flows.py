@@ -527,13 +527,10 @@ class AbstractNeuralFlow(ABC):
             )
         else:
             round_weights = None
-        print_func(f'Round weights: {round_weights}')
 
         if (self.trn_config.restore_from_previous) and (self.best_params is not None):
-            print_func('Initialising using previously-inferred params...')
             params = self.best_params
         else:
-            print_func('No previous state to initialise from. Starting fresh...')
             params = self._model_init_params(rng_seq, train_iter)
 
         lr_schedule = self._make_lr_schedule(

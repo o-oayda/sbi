@@ -555,7 +555,6 @@ class MultiRoundInferer:
             _, dequantise_key = rng_key.split(2)
             dmap += dequantise_key.uniform(shape=dmap.shape, low=-0.5, high=0.5)
 
-        self.ui.log(f'Adding data from idx {start} to idx {end}...')
         self.all_data[start:end, :] = dmap
         self.all_mask[start:end, :] = mask
         self.all_round_id[start:end] = self.current_round
@@ -771,7 +770,6 @@ class MultiRoundInferer:
     ) -> dict[str, NDArray] | None:
         if n_samples == 0:
             return
-        self.ui.log('Sampling from initial proposal...')
         prior_samples = self.initial_proposal.sample(key, n_samples)
         return prior_samples
 
@@ -820,10 +818,6 @@ class MultiRoundInferer:
             n_prior = int(self.mr_config.initial_fraction * n_samples)
             n_posterior = n_samples - n_prior
             assert n_prior + n_posterior == n_samples
-            self.ui.log(
-                f'Sampling from learned posterior {1 - self.mr_config.initial_fraction} '
-                f'and initial proposal {self.mr_config.initial_fraction}...'
-            )
 
             posterior_samples = self._sample_posterior_for_simulations(key, n_posterior)
 

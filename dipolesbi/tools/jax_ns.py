@@ -42,7 +42,6 @@ class JaxNestedSampler:
             num_delete=n_delete,
             num_inner_steps=n_inner_steps,
         )
-        self.print_func(f"Initialised nested sampler with {n_live} live points.")
 
         self._jit_functions()
 
@@ -51,7 +50,6 @@ class JaxNestedSampler:
         self.step_fn = jax.jit(self.nested_sampler.step)
 
     def run(self) -> NestedSamples:
-        self.print_func("Running nested sampling...")
         live = self.init_fn(self.particles)
         dead = []
 
