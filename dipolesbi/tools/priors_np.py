@@ -187,6 +187,14 @@ class NPPrior(ABC):
         self.prior_dict[short_name] = entry
         self.prior_names.insert(index, short_name)
 
+    def remove_prior(self, short_name: str) -> None:
+        if short_name not in self.prior_dict:
+            raise ValueError(f"Prior '{short_name}' not found.")
+
+        # Remove from the ordered name list first to keep downstream views consistent.
+        self.prior_names.remove(short_name)
+        del self.prior_dict[short_name]
+
     def sample(self, rng_key: NPKey, n_samples: int) -> dict[str, NDArray]:
         init_keys = rng_key.split(self.ndim)
         params = {}
