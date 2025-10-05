@@ -49,7 +49,8 @@ class CatwiseConfig(ModelConfig):
     use_float32: bool = False
     chunk_size: int = 25_000
     store_final_samples: bool = False
-    use_common_extra_error: bool = False
+    use_common_extra_error: Optional[bool] = False
+    model_identifier: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.magnitude_error_dist not in ('gaussian', 'students-t'):

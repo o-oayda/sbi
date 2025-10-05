@@ -1,3 +1,4 @@
+from functools import partial
 from typing import Optional
 from numpy.typing import NDArray
 from dipolesbi.catwise.maps import Catwise
@@ -40,15 +41,9 @@ if __name__ == '__main__':
         help='Seed used for sequential neural estimators.'
     )
     parser.add_argument(
-        '--error_dist',
+        '--model',
         type=str,
-        default='gaussian',
-        help='Error dist. for CatWISE errors (gaussian or students-t; default: gaussian).'
-    )
-    parser.add_argument(
-        '--common_error',
-        action='store_true',
-        help='Use common extra error on W1 and W2 magnitudes.'
+        help='Choose a model to run.'
     )
     parser.add_argument(
         '--no_ui',
@@ -61,22 +56,13 @@ if __name__ == '__main__':
     N_SIM = args.n_simulations
     N_WORKERS = args.n_workers
     SAVE_DIR = args.out_dir
-    ERROR_DIST = args.error_dist
-    COMMON_ERROR = args.common_error
     USE_FLOAT32 = False
     NSIDE = 64
     N_ROUNDS = 10
 
-    config = CatwiseConfig(
-        cat_w1_max=17.0, 
-        cat_w12_min=0.5,
-        magnitude_error_dist=ERROR_DIST,
-        use_float32=USE_FLOAT32,
-        use_common_extra_error=COMMON_ERROR
-    )
+    def simulator_wrapper(**kwargs) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
+        return model.generate_dipole(**kwargs)
 
-    model = Catwise(config)
-    model.initialise_data()
     prior = DipolePriorNP(
         mean_count_range=[np.log10(30_000_000), np.log10(40_000_000)],
         speed_range=[0, 8]
@@ -85,25 +71,18 @@ if __name__ == '__main__':
         param_short_name='N',
         new_kwarg='log10_n_initial_samples'
     )
-    
-    prior.add_prior(
-        short_name='etaW1' if not COMMON_ERROR else 'etaWX',
-        simulator_kwarg='w1_extra_error',
-        low=0,
-        high=8,
-        dist_type='uniform',
-        index=1
-    )
-    if not COMMON_ERROR:
+
+    def add_error_scale(short_name: str, prior: DipolePriorNP):
         prior.add_prior(
-            short_name='etaW2',
-            simulator_kwarg='w2_extra_error',
+            short_name=short_name,
+            simulator_kwarg='w1_extra_error',
             low=0,
             high=8,
             dist_type='uniform',
-            index=2
+            index=1
         )
-    if ERROR_DIST == 'students-t':
+
+    def add_tdist_shape_param(prior: DipolePriorNP):
         prior.add_prior(
             short_name='nu',
             simulator_kwarg='log10_magnitude_error_shape_param',
@@ -113,6 +92,72 @@ if __name__ == '__main__':
             index=3
         )
 
+    simulator = simulator_wrapper
+
+    match args.model:
+        case 'free_gauss_extra_err':
+            ERROR_DIST = 'gaussian'
+            COMMON_ERROR = True
+            add_error_scale('etaWX', prior)
+
+        case 'free_students-t_extra_err':
+            ERROR_DIST = 'students-t'
+            COMMON_ERROR = True
+            add_error_scale('etaWX', prior)
+            add_tdist_shape_param(prior)
+            simulator = simulator_wrapper
+
+        case 'free_gauss':
+            ERROR_DIST = 'gaussian'
+            COMMON_ERROR = None
+            simulator = partial( # auto-add kwargs on call of simulator()
+                simulator_wrapper,
+                w1_extra_error=None,
+                w2_extra_error=None
+            )
+
+        case 'cmb_dipole':
+            ERROR_DIST = 'gaussian'
+            COMMON_ERROR = True
+            # the default params for the dipole are the CMB ones
+            simulator = simulator_wrapper
+            prior.remove_prior('D')
+            prior.remove_prior('phi')
+            prior.remove_prior('theta')
+            add_error_scale('etaWX', prior)
+            assert prior.ndim == 2
+
+        case 'cmb_direction':
+            ERROR_DIST = 'gaussian'
+            COMMON_ERROR = True
+            simulator = simulator_wrapper
+            prior.remove_prior('phi')
+            prior.remove_prior('theta')
+            add_error_scale('etaWX', prior)
+            assert prior.ndim == 3
+
+        case 'cmb_velocity':
+            ERROR_DIST = 'gaussian'
+            COMMON_ERROR = True
+            simulator = simulator_wrapper
+            prior.remove_prior('D')
+            add_error_scale('etaWX', prior)
+            assert prior.ndim == 4
+
+        case _:
+            raise KeyError(f'Model {args.model} not recognised.')
+
+    config = CatwiseConfig(
+        cat_w1_max=17.0, 
+        cat_w12_min=0.5,
+        magnitude_error_dist=ERROR_DIST,
+        use_float32=USE_FLOAT32,
+        use_common_extra_error=COMMON_ERROR,
+        model_identifier=args.model
+    )
+
+    model = Catwise(config)
+    model.initialise_data()
     prior_jax = prior.to_jax()
 
     nside16_scenario_npe = Scenario.anynside_npe(
@@ -130,6 +175,10 @@ if __name__ == '__main__':
     nside16_scenario_nle = Scenario.anynside_nle(
         nside=NSIDE,
         theta_prior=prior_jax,
+        training_overrides={
+            'learning_rate': 1e-4,
+            'min_lr_ratio': 1.
+        },
         multiround_overrides={
             'prng_integer_seed': args.ssnle_seed,
             'plot_save_dir': SAVE_DIR,
@@ -140,7 +189,9 @@ if __name__ == '__main__':
         },
         flow_overrides={
             'decoder_n_neurons': 128,
-            'decoder_n_layers': 4
+            'decoder_n_layers': 4,
+            'architecture': 4 * ['MAF'] + ['surjective_MAF'] + 6 * ['MAF'],
+            'data_reduction_factor': 0.5,
         }
     )
 
@@ -158,14 +209,13 @@ if __name__ == '__main__':
     ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
         return batch_simulate(
             params,
-            model.generate_dipole,
+            simulator,
             n_workers=N_WORKERS,
             ui=ui
         )
 
     x0, mask = model.make_real_sample()
-    # add a reference theta for diagnosing learned P(D | theta_0)
-    theta_0 = {
+    theta_0 = { # add a reference theta for diagnosing learned P(D | theta_0)
         'log10_n_initial_samples': 7.552,
         'etaW1': 4.,
         'etaW2': 3.2,

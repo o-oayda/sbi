@@ -92,8 +92,8 @@ class Catwise:
             observer_speed: float = 1.,
             dipole_longitude: float = CMB_L,
             dipole_latitude: float = CMB_B,
-            w1_extra_error: float = 1.,
-            w2_extra_error: float = 1.,
+            w1_extra_error: Optional[float] = 1.,
+            w2_extra_error: Optional[float] = 1.,
             log10_magnitude_error_shape_param: float = 0.,
         ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
         '''
@@ -381,7 +381,7 @@ class Catwise:
             w2: tuple[NDArray, NDArray],
             w1_extra_error: Optional[float] = None,
             w2_extra_error: Optional[float] = None,
-            common_extra_error: bool = False,
+            common_extra_error: Optional[bool] = False,
             error_dist: Literal['gaussian', 'students-t'] = 'gaussian',
             log10_shape_param: float = 0.,
             rng: Optional[np.random.Generator] = None,
