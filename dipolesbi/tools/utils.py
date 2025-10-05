@@ -31,8 +31,15 @@ def batch_simulate(
 ) -> tuple[NDArray, NDArray]:
     simulation_batch_size = 1
     theta_np = {key: np.asarray(val) for key, val in theta.items()}
-    n_simulations = list(theta_np.values())[0].shape[0]
+    first_val = list(theta_np.values())[0]
+    if first_val.shape == ():
+        n_simulations = 1
+    else:
+        n_simulations = list(theta_np.values())[0].shape[0]
     n_batches = n_simulations // simulation_batch_size # batch size of 1 by default in simulate_for_sbi
+
+    if n_simulations == 1:
+        return model_callable(**theta_np)
 
     theta_batches = [
         {key: arr_batch for key, arr_batch in zip(theta.keys(), batch)}
