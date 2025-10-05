@@ -160,7 +160,7 @@ class MultiRoundInferer:
 
                 self.ui.start_step(0, subtitle='sampling')
 
-                if round_idx == 0:
+                if (round_idx == 0) and (self.true_logl is not None):
                     initial_lnZkey, current_key = jax.random.split(current_key)
                     self._get_true_posterior_and_evidence(initial_lnZkey)
 
@@ -423,6 +423,7 @@ class MultiRoundInferer:
         (_, zmask), _ = self.nflow.data_transform(
             jax.device_put(self.reference_data), jax.device_put(self.reference_mask)
         )
+        zmask = np.atleast_2d(zmask) # safeguard against dim = 1 output
         zmask = zmask.repeat(repeats=samples.shape[0], axis=0)
 
         (samples_untransformed, mask), _ = self._untransform_data_and_logdet(
@@ -438,7 +439,10 @@ class MultiRoundInferer:
         )
         hp.projview(
             true_mean_likelihood, nest=True, graticule=True, sub=212, 
-            title='True mean P(D | theta)'
+            title=(
+                'True mean P(D | theta)' if self.true_logl is not None
+                else 'Simulated D | theta_0'
+            )
         )
         plt.savefig(
             self.mr_config.plot_save_dir
@@ -912,4 +916,9 @@ class MultiRoundInferer:
             self.mr_config.plot_save_dir,
             'epoch_lnZ.npy'
         )
+        true_lnZ_save_path = os.path.join(
+            self.mr_config.plot_save_dir,
+            'true_lnZ.npy'
+        )
         np.save(array_save_path, [lnZ_estimates, lnZ_estimates_err])
+        np.save(true_lnZ_save_path, np.asarray([self.true_lnZ, self.true_lnZerr]))

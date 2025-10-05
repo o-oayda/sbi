@@ -51,12 +51,17 @@ class CatwiseConfig(ModelConfig):
     store_final_samples: bool = False
     use_common_extra_error: Optional[bool] = False
     model_identifier: Optional[str] = None
+    downscale_nside: Optional[int] = None
 
     def __post_init__(self) -> None:
         if self.magnitude_error_dist not in ('gaussian', 'students-t'):
             raise ValueError(
                 "Magnitude_error_dist must be 'gaussian' or 'students-t'."
             )
+
+        if self.downscale_nside is not None:
+            if self.downscale_nside <= 0:
+                raise ValueError('downscale_nside must be a positive integer.')
 
 @dataclass
 class TrainingConfig:
@@ -97,7 +102,7 @@ class EmbeddingNetConfig:
         if self.n_blocks is None:
             assert self.nside is not None
             self.n_blocks = int(np.log2(self.nside))
-
+        assert self.n_blocks > 0
 
 EmbeddingNetConfigOverrides = _make_override_class(EmbeddingNetConfig)
 

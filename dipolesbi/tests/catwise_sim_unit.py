@@ -190,6 +190,65 @@ def test_add_error_statistical_properties():
     assert np.isclose(np.var(residual_w2_t, ddof=1), t_variance, rtol=0.2)
 
 
+def _build_downscaled_simulator(nside_out: int) -> Catwise:
+    cfg = CatwiseConfig(
+        cat_w1_max=17.0,
+        cat_w12_min=0.5,
+        magnitude_error_dist='gaussian',
+        use_float32=True,
+        downscale_nside=nside_out,
+    )
+    sim = Catwise(cfg)
+    sim.initialise_data()
+    return sim
+
+
+def test_generate_dipole_downscaled_shapes():
+    coarse_nside = 32
+    sim = _build_downscaled_simulator(coarse_nside)
+
+    n_samples = 2_000
+    dmap, mask = sim.generate_dipole(
+        log10_n_initial_samples=np.log10(n_samples)
+    )
+
+    coarse_npix = hp.nside2npix(coarse_nside)
+    native_npix = hp.nside2npix(sim.nside)
+
+    assert dmap.shape == (coarse_npix,)
+    assert mask.shape == (coarse_npix,)
+    assert dmap.dtype == np.float32
+    assert mask.dtype == np.bool_
+
+    assert np.all(np.isnan(dmap[~mask]))
+    assert np.all(dmap[mask] >= 0)
+    assert np.nansum(dmap) <= n_samples
+
+    # properties should reuse the cached downscaled outputs
+    assert np.array_equal(sim.density_map, dmap, equal_nan=True)
+    assert np.array_equal(sim.binary_mask, mask)
+
+    native_mask = sim.native_mask
+    assert native_mask.shape == (native_npix,)
+    assert native_mask.dtype == np.bool_
+
+
+def test_make_real_sample_downscaled_shapes():
+    coarse_nside = 32
+    sim = _build_downscaled_simulator(coarse_nside)
+
+    real_map, real_mask = sim.make_real_sample()
+
+    coarse_npix = hp.nside2npix(coarse_nside)
+
+    assert real_map.shape == (coarse_npix,)
+    assert real_mask.shape == (coarse_npix,)
+    assert real_map.dtype == np.float32
+    assert real_mask.dtype == np.bool_
+
+    assert np.all(np.isnan(real_map[~real_mask]))
+    assert np.array_equal(sim.real_density_map, real_map, equal_nan=True)
+
 def test_alpha_lookup_buffered_vs_default():
     lookup = AlphaLookup(no_check=True)
 

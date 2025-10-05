@@ -17,6 +17,7 @@ import healpy as hp
 from tqdm import tqdm
 import os
 from dipolesbi.tools.maps import Mask
+from dipolesbi.tools.healpix_helpers import downgrade_ignore_nan
 from collections import defaultdict
 import pickle
 from scipy.stats import binned_statistic_2d
@@ -37,6 +38,16 @@ class Catwise:
         '''
         self.nside = 64
         self.cfg = config
+
+        self.downscale_nside = self.cfg.downscale_nside
+        if self.downscale_nside is not None:
+            if self.downscale_nside > self.nside:
+                raise ValueError('downscale_nside must be ≤ native nside (64).')
+            ratio = self.nside // self.downscale_nside
+            if (self.nside % self.downscale_nside) != 0 or (ratio & (ratio - 1)) != 0:
+                raise ValueError(
+                    'downscale_nside must be a power-of-two divisor of the native nside.'
+                )
 
         self.dtype = np.float32 if self.cfg.use_float32 else np.float64
         print(f'Using {self.dtype} for intermediate variables...')
@@ -64,6 +75,11 @@ class Catwise:
             'dipolesbi/catwise/catwise_agns_masked_final_w1lt16p5_alpha.fits'
         )
         self.rng = np.random.default_rng()
+
+        self._coarse_density_map: Optional[NDArray[np.float32]] = None
+        self._coarse_mask: Optional[NDArray[np.bool_]] = None
+        self._coarse_real_density_map: Optional[NDArray[np.float32]] = None
+        self._coarse_real_mask: Optional[NDArray[np.bool_]] = None
     
     def _get_cut_path(self,
             cat_w1_max: float,
@@ -136,7 +152,14 @@ class Catwise:
                 self.final_w2_samples = None
                 self.final_w12_samples = None
                 self.final_pixel_indices = None
-            return self.density_map, self.binary_mask
+            output_map, output_mask = self._prepare_map_output(
+                self._density_map,
+                cache='simulation'
+            )
+            if self.downscale_nside is None:
+                self._coarse_density_map = None
+                self._coarse_mask = None
+            return output_map, output_mask
 
 
         n_pix = hp.nside2npix(self.nside)
@@ -288,7 +311,14 @@ class Catwise:
                 self.final_w12_samples = np.empty(0, dtype=np.float32)
                 self.final_pixel_indices = np.empty(0, dtype=np.int32)
 
-        return self.density_map, self.binary_mask
+        output_map, output_mask = self._prepare_map_output(
+            self._density_map,
+            cache='simulation'
+        )
+        if self.downscale_nside is None:
+            self._coarse_density_map = None
+            self._coarse_mask = None
+        return output_map, output_mask
     
     def make_real_sample(self) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
         print(f'Reading in CatWISE2020 from {self.real_file_path}...')
@@ -306,7 +336,14 @@ class Catwise:
             longitudes=self.real_catalogue['l'].data,
             latitudes=self.real_catalogue['b'].data
         )
-        return self.real_density_map, self.binary_mask
+        output_map, output_mask = self._prepare_map_output(
+            self._real_density_map,
+            cache='real'
+        )
+        if self.downscale_nside is None:
+            self._coarse_real_density_map = None
+            self._coarse_real_mask = None
+        return output_map, output_mask
 
     def make_density_map(self,
         longitudes: NDArray,
@@ -319,23 +356,84 @@ class Catwise:
             source_indices,
             minlength=hp.nside2npix(self.nside)
         ).astype(np.float32)
+
+    def _native_mask(self) -> NDArray[np.bool_]:
+        if not hasattr(self, 'mask_map'):
+            raise AttributeError('Mask not initialised; call determine_masked_pixels() first.')
+        return (self.mask_map == 0).astype(np.bool_)
+
+    @property
+    def native_mask(self) -> NDArray[np.bool_]:
+        """Return the native-resolution boolean mask (nside=64)."""
+        return self._native_mask()
+
+    def _prepare_map_output(
+            self,
+            map_values: NDArray,
+            *,
+            cache: Optional[str] = None
+    ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
+        native_mask = self._native_mask()
+        fill_value = getattr(self, 'fill_value', np.nan)
+
+        map_with_mask = np.asarray(map_values, dtype=np.float32).copy()
+        map_with_mask[~native_mask] = fill_value
+
+        if self.downscale_nside is None:
+            if cache == 'simulation':
+                self._coarse_density_map = None
+                self._coarse_mask = None
+            elif cache == 'real':
+                self._coarse_real_density_map = None
+                self._coarse_real_mask = None
+            return map_with_mask, native_mask
+
+        coarse_map, coarse_mask = downgrade_ignore_nan(
+            map_with_mask,
+            native_mask,
+            self.downscale_nside
+        )
+
+        coarse_map = coarse_map.astype(np.float32, copy=False)
+        coarse_mask = coarse_mask.astype(np.bool_, copy=False)
+
+        if not np.isnan(fill_value):
+            coarse_map = coarse_map.copy()
+            coarse_map[~coarse_mask] = fill_value
+
+        if cache == 'simulation':
+            self._coarse_density_map = coarse_map
+            self._coarse_mask = coarse_mask
+        elif cache == 'real':
+            self._coarse_real_density_map = coarse_map
+            self._coarse_real_mask = coarse_mask
+
+        return coarse_map, coarse_mask
     
     @property
     def density_map(self) -> NDArray[np.float32]:
-        out = self._density_map
-        out[self.mask_map == 1] = self.fill_value
+        if self.downscale_nside is not None and self._coarse_density_map is not None:
+            return self._coarse_density_map
+
+        out = np.asarray(self._density_map, dtype=np.float32).copy()
+        fill_value = getattr(self, 'fill_value', np.nan)
+        out[self.mask_map == 1] = fill_value
         return out
 
     @property
     def binary_mask(self) -> NDArray[np.bool_]:
-        out = np.ones(hp.nside2npix(self.nside), dtype=np.bool_)
-        out[self.masked_pixel_indices_list] = False
-        return out
+        if self.downscale_nside is not None and self._coarse_mask is not None:
+            return self._coarse_mask
+        return self._native_mask()
 
     @property
     def real_density_map(self) -> NDArray[np.float32]:
-        out = self._real_density_map
-        out[self.mask_map == 1] = self.fill_value
+        if self.downscale_nside is not None and self._coarse_real_density_map is not None:
+            return self._coarse_real_density_map
+
+        out = np.asarray(self._real_density_map, dtype=np.float32).copy()
+        fill_value = getattr(self, 'fill_value', np.nan)
+        out[self.mask_map == 1] = fill_value
         return out
 
     def determine_masked_pixels(self,

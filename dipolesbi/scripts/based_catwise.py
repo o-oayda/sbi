@@ -2,7 +2,7 @@ from functools import partial
 from typing import Optional
 from numpy.typing import NDArray
 from dipolesbi.catwise.maps import Catwise
-from dipolesbi.tools.configs import CatwiseConfig, Scenario
+from dipolesbi.tools.configs import CatwiseConfig, DataTransformSpec, Scenario
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
 from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.priors_np import DipolePriorNP
@@ -46,6 +46,12 @@ if __name__ == '__main__':
         help='Choose a model to run.'
     )
     parser.add_argument(
+        '--downscale_nside',
+        type=int,
+        default=None,
+        help='Optional HEALPix nside to downscale simulated maps to.'
+    )
+    parser.add_argument(
         '--no_ui',
         action='store_true',
         help='Disable the Rich multi-round progress UI.'
@@ -57,8 +63,8 @@ if __name__ == '__main__':
     N_WORKERS = args.n_workers
     SAVE_DIR = args.out_dir
     USE_FLOAT32 = False
-    NSIDE = 64
     N_ROUNDS = 10
+    DOWNSCALE_NSIDE = args.downscale_nside
 
     def simulator_wrapper(**kwargs) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
         return model.generate_dipole(**kwargs)
@@ -94,11 +100,21 @@ if __name__ == '__main__':
 
     simulator = simulator_wrapper
 
+    theta_0 = { # add a reference theta for diagnosing learned P(D | theta_0)
+        'log10_n_initial_samples': 7.552,
+        'w1_extra_error': 4.,
+        'w2_extra_error': 3.2,
+        'observer_speed': 2.,
+        'dipole_longitude': 220,
+        'dipole_latitude': 45
+    }
+
     match args.model:
         case 'free_gauss_extra_err':
             ERROR_DIST = 'gaussian'
             COMMON_ERROR = True
             add_error_scale('etaWX', prior)
+            theta_0.pop('w2_extra_error')
 
         case 'free_students-t_extra_err':
             ERROR_DIST = 'students-t'
@@ -153,53 +169,60 @@ if __name__ == '__main__':
         magnitude_error_dist=ERROR_DIST,
         use_float32=USE_FLOAT32,
         use_common_extra_error=COMMON_ERROR,
-        model_identifier=args.model
+        model_identifier=args.model,
+        downscale_nside=DOWNSCALE_NSIDE
     )
 
     model = Catwise(config)
     model.initialise_data()
     prior_jax = prior.to_jax()
 
-    nside16_scenario_npe = Scenario.anynside_npe(
-        nside=NSIDE,
-        theta_prior=prior_jax,
-        theta_spec_overrides={'embed_transform_in_flow': True},
-        multiround_overrides={
-            'prng_integer_seed': args.ssnle_seed,
-            'plot_save_dir': SAVE_DIR,
-            'n_rounds': N_ROUNDS,
-            'simulation_budget': N_SIM
-        },
-        training_overrides={'learning_rate': 0.001}
-    )
-    nside16_scenario_nle = Scenario.anynside_nle(
-        nside=NSIDE,
-        theta_prior=prior_jax,
-        training_overrides={
-            'learning_rate': 1e-4,
-            'min_lr_ratio': 1.
-        },
-        multiround_overrides={
-            'prng_integer_seed': args.ssnle_seed,
-            'plot_save_dir': SAVE_DIR,
-            'simulation_budget': N_SIM,
-            'n_rounds': N_ROUNDS,
-            'likelihood_chunk_size_gb': 0.5,
-            'n_likelihood_samples':  10_000
-        },
-        flow_overrides={
-            'decoder_n_neurons': 128,
-            'decoder_n_layers': 4,
-            'architecture': 4 * ['MAF'] + ['surjective_MAF'] + 6 * ['MAF'],
-            'data_reduction_factor': 0.5,
-        }
-    )
+    match args.mode:
+        case 'NPE':
+            scenario = Scenario.anynside_npe(
+                nside=DOWNSCALE_NSIDE,
+                theta_prior=prior_jax,
+                reference_theta=theta_0,
+                theta_spec_overrides={'embed_transform_in_flow': True},
+                multiround_overrides={
+                    'prng_integer_seed': args.ssnle_seed,
+                    'plot_save_dir': SAVE_DIR,
+                    'n_rounds': N_ROUNDS,
+                    'simulation_budget': N_SIM
+                },
+                training_overrides={'learning_rate': 0.001}
+            )
+        case 'NLE':
+            data_spec = DataTransformSpec.zscore(
+                method='batchwise'
+            )
+            scenario = Scenario.anynside_nle(
+                nside=DOWNSCALE_NSIDE,
+                theta_prior=prior_jax,
+                training_overrides={
+                    'learning_rate': 1e-4,
+                    'min_lr_ratio': 1.
+                },
+                reference_theta=theta_0,
+                multiround_overrides={
+                    'prng_integer_seed': args.ssnle_seed,
+                    'plot_save_dir': SAVE_DIR,
+                    'simulation_budget': N_SIM,
+                    'n_rounds': N_ROUNDS,
+                    'likelihood_chunk_size_gb': 0.5,
+                    'n_likelihood_samples':  10_000
+                },
+                flow_overrides={
+                    'decoder_n_neurons': 128,
+                    'decoder_n_layers': 4,
+                    'architecture': 4 * ['MAF'] + ['surjective_MAF'] + 6 * ['MAF'],
+                    'data_reduction_factor': 0.5,
+                },
+                data_spec=data_spec
+            )
+        case _:
+            raise KeyError(f'Mode {args.mode} not recognised.')
 
-    meta_cfg = {
-        'NLE': nside16_scenario_nle,
-        'NPE': nside16_scenario_npe
-    }
-    cur_cfg = meta_cfg[MODE]
 
     def model_sim_wrapper(
             npkey: NPKey,
@@ -215,21 +238,13 @@ if __name__ == '__main__':
         )
 
     x0, mask = model.make_real_sample()
-    theta_0 = { # add a reference theta for diagnosing learned P(D | theta_0)
-        'log10_n_initial_samples': 7.552,
-        'etaW1': 4.,
-        'etaW2': 3.2,
-        'observer_speed': 2.,
-        'dipole_longitude': 220,
-        'dipole_latitude': 45
-    }
         
     inferer = MultiRoundInferer(
         MODE, prior, model_sim_wrapper, (x0, mask),
-        multi_round_config=cur_cfg.multiround,
-        transform_config=cur_cfg.transforms,
-        nflow_config=cur_cfg.flow,
-        train_config=cur_cfg.training,
+        multi_round_config=scenario.multiround,
+        transform_config=scenario.transforms,
+        nflow_config=scenario.flow,
+        train_config=scenario.training,
         use_ui=not args.no_ui,
         model_config=config
     )
