@@ -305,6 +305,13 @@ class SimpleDipoleMap:
     def equatorial_plane_mask(self, angle: float) -> None:
         self.masked_pixels |= set(self.mask.equator_mask(angle))
 
+    def catwise_mask(self) -> None:
+        assert self.nside == 64
+
+        self.masked_pixels |= set(self.mask.catwise_mask())
+        north_pole_pixels = self.mask.north_ecliptic_mask()
+        self.masked_pixels.update(north_pole_pixels)
+
     def generate_dipole(self,
             rng_key: NPKey,
             theta: dict[str, NDArray],
