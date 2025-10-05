@@ -1,7 +1,7 @@
 from jax.random import PRNGKey
 from dipolesbi.tools.healpix_helpers import downgrade_ignore_nan
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
-from dipolesbi.tools.configs import Scenario
+from dipolesbi.tools.configs import DataTransformSpec, Scenario
 from dipolesbi.tools.np_rngkey import npkey_from_jax
 from dipolesbi.tools.maps import SimpleDipoleMap, SimpleDipoleMapJax
 import healpy as hp
@@ -18,6 +18,11 @@ if __name__ == '__main__':
         '--nside',
         type=int,
         help='Nside of simulated maps.'
+    )
+    parser.add_argument(
+        '--downscale_nside',
+        type=int,
+        help='Nside of downscaled maps to use in normalising flow.'
     )
     parser.add_argument(
         '--mode',
@@ -39,8 +44,11 @@ if __name__ == '__main__':
     x0_rng_key = PRNGKey(42)
 
     NSIDE = args.nside 
-    COARSE_NSIDE = NSIDE // 2
-    TOTAL_SOURCES = 1_920_000
+    COARSE_NSIDE = args.downscale_nside
+    assert hp.isnsideok(NSIDE)
+    assert hp.isnsideok(COARSE_NSIDE)
+
+    TOTAL_SOURCES = 2_500_000
     MEAN_DENSITY = np.asarray(TOTAL_SOURCES / hp.nside2npix(NSIDE))
     modes = []
     if args.mode is not None:
@@ -58,28 +66,23 @@ if __name__ == '__main__':
     }
 
     model = SimpleDipoleMap(nside=NSIDE, downscale_nside=COARSE_NSIDE)
-    model.equatorial_plane_mask(angle=30)
+    model.catwise_mask()
     # these will be at the coarse resolution
     x0, coarse_mask = model.generate_dipole(npkey_from_jax(x0_rng_key), theta=theta0)
-    _, native_mask = model.dmap_and_mask
+    native_dmap, native_mask = model.dmap_and_mask
+    print(np.nansum(x0))
 
     # check downgrading working as intended
     assert native_mask.shape[-1] == 12 * NSIDE * NSIDE
     assert coarse_mask.shape[-1] == 12 * COARSE_NSIDE * COARSE_NSIDE
     assert x0.shape[-1] == 12 * COARSE_NSIDE * COARSE_NSIDE
 
-    # this will be a bit how you going until I can work out an explicit likelihood
-    # function for the downgraded data --- in principle doable since we know
-    # the likelihood of the constituent pixels and how they are used to form the
-    # coarser map
-    # x0, mask = downgrade_ignore_nan(x0, mask, nside_out=8)
-    # def model_sim_wrapper(key, theta, make_poisson_draws):
-    #     x, m = model.generate_dipole(key, theta, make_poisson_draws)
-    #     x, m = downgrade_ignore_nan(x, m, nside_out=8)
-    #     return x, m
-
     hp.projview(x0.squeeze() * coarse_mask.squeeze(), nest=True)
-    plt.savefig('example_sample.pdf', bbox_inches='tight')
+    plt.savefig('example_sample_coarse.pdf', bbox_inches='tight')
+    plt.show()
+
+    hp.projview(native_dmap.squeeze() * native_mask.squeeze(), nest=True)
+    plt.savefig('example_sample_native.pdf', bbox_inches='tight')
     plt.show()
 
     prior = DipolePriorNP(
@@ -109,22 +112,36 @@ if __name__ == '__main__':
         },
         training_overrides={'learning_rate': 0.001}
     )
+    
+    # batchwise: first round well contrained posteriors; is the evidence underestimated?
+    # batchwise: not as well constrained in initial rounds, evidence?
+    data_spec = DataTransformSpec.zscore(
+        method='batchwise'
+    )
     nside16_scenario_nle = Scenario.anynside_nle(
         nside=COARSE_NSIDE, # since the flow only sees the coarse res
         reference_theta=theta0,
         theta_prior=prior_jax,
+        training_overrides={
+            'learning_rate': 1e-4,
+            'min_lr_ratio': 1.
+        },
         multiround_overrides={
             'prng_integer_seed': args.ssnle_seed,
             'plot_save_dir': args.out_dir,
-            'simulation_budget': 100_000,
-            'n_rounds': 20,
+            'simulation_budget': 50_000,
+            'n_rounds': 10,
             'likelihood_chunk_size_gb': 0.5,
             'n_likelihood_samples': 5_000
         },
         flow_overrides={
             'decoder_n_neurons': 128,
-            'decoder_n_layers': 4
-        }
+            'decoder_n_layers': 4,
+            'architecture': 4 * ['MAF'] + ['surjective_MAF'] + 6 * ['MAF'],
+            'data_reduction_factor': 0.5,
+            # 'architecture': 12 * ['MAF']
+        },
+        data_spec=data_spec
     )
 
     meta_cfg = {

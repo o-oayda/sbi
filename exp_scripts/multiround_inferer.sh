@@ -1,29 +1,71 @@
 #!/bin/bash
 
-# Parse arguments
+set -euo pipefail
+
+usage() {
+    cat <<EOF
+Usage: $0 --nside <INT> --downscale_nside <INT> --mode <MODE[,MODE...]> --descriptor <NAME> [--resume]
+
+Examples:
+  $0 --nside 16 --downscale_nside 8 --mode 'NLE,NPE' --descriptor cold_start
+  $0 --nside 16 --downscale_nside 8 --mode NLE --descriptor test_run --resume
+EOF
+}
+
+NSIDE=""
+DOWNSCALE_NSIDE=""
+MODE_INPUT=""
+DESCRIPTOR=""
 RESUME=0
-for arg in "$@"; do
-    if [ "$arg" = "--resume" ]; then
-        RESUME=1
-    fi
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --nside)
+            NSIDE=${2:-}
+            shift 2
+            ;;
+        --downscale_nside)
+            DOWNSCALE_NSIDE=${2:-}
+            shift 2
+            ;;
+        --mode)
+            MODE_INPUT=${2:-}
+            shift 2
+            ;;
+        --descriptor)
+            DESCRIPTOR=${2:-}
+            shift 2
+            ;;
+        --resume)
+            RESUME=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --*)
+            echo "Unknown option: $1" >&2
+            usage
+            exit 1
+            ;;
+        *)
+            echo "Unexpected positional argument: $1" >&2
+            usage
+            exit 1
+            ;;
+    esac
 done
 
-# Remove --resume from positional parameters
-set -- $(printf '%s\n' "$@" | grep -v -- '--resume')
-
-# e.g. exp_scripts/multiround_inferer.sh 16 'NLE,NPE' 'cold_start_only_post_100k' --resume
-if [ "$#" -ne 3 ]; then
-    echo "Usage: $0 <NSIDE> <MODE[,MODE...]> <DESCRIPTOR> [--resume]"
+if [[ -z "$NSIDE" || -z "$DOWNSCALE_NSIDE" || -z "$MODE_INPUT" || -z "$DESCRIPTOR" ]]; then
+    echo "Error: --nside, --downscale_nside, --mode, and --descriptor are required." >&2
+    usage
     exit 1
 fi
 
-NSIDE=$1
-MODE_INPUT=$2
-DESCRIPTOR=$3
-
 # First, check NSIDE is a positive integer
 if ! [[ "$NSIDE" =~ ^[0-9]+$ ]] || [ "$NSIDE" -le 0 ]; then
-    echo "Error: NSIDE must be a positive integer."
+    echo "Error: NSIDE must be a positive integer." >&2
     exit 1
 fi
 
@@ -34,6 +76,21 @@ fi
 #   8 & 7 = 1000 & 0111 = 0000
 if [ $((NSIDE & (NSIDE - 1))) -ne 0 ]; then
     echo "Error: NSIDE must be a power of 2."
+    exit 1
+fi
+
+if ! [[ "$DOWNSCALE_NSIDE" =~ ^[0-9]+$ ]] || [ "$DOWNSCALE_NSIDE" -le 0 ]; then
+    echo "Error: DOWNSCALE_NSIDE must be a positive integer." >&2
+    exit 1
+fi
+
+if [ $((DOWNSCALE_NSIDE & (DOWNSCALE_NSIDE - 1))) -ne 0 ]; then
+    echo "Error: DOWNSCALE_NSIDE must be a power of 2." >&2
+    exit 1
+fi
+
+if [ "$DOWNSCALE_NSIDE" -gt "$NSIDE" ]; then
+    echo "Error: DOWNSCALE_NSIDE must be less than or equal to NSIDE." >&2
     exit 1
 fi
 
@@ -76,6 +133,7 @@ log "Starting multiround runs for NSIDE=$NSIDE"
 
 START_SEED=0
 END_SEED=24
+RUN_SEEDS=()
 
 if [ "$RESUME" -eq 1 ]; then
     log "Resume mode enabled. Checking for completed seeds..."
@@ -108,7 +166,7 @@ fi
 for SEED in $(seq $START_SEED $END_SEED)
 do
     log "Running SEED=$SEED..."
-    python dipolesbi/scripts/run_multiround.py --nside "$NSIDE" --mode "$MODE" --ssnle_seed "$SEED" --out_dir "$OUTDIR" >> "$LOGFILE" 2>&1
+    python dipolesbi/scripts/run_multiround.py --nside "$NSIDE" --downscale_nside "$DOWNSCALE_NSIDE" --mode "$MODE" --ssnle_seed "$SEED" --out_dir "$OUTDIR" >> "$LOGFILE" 2>&1
     if [ $? -eq 0 ]; then
         log "SEED=$SEED completed successfully."
         RUN_SEEDS+=("$SEED")
@@ -119,4 +177,3 @@ do
 done
 SUMMARY_MSG="All runs completed for NSIDE=$NSIDE. Seeds run in this session: $(printf '%s ' "${RUN_SEEDS[@]}")"
 log "$SUMMARY_MSG"
-
