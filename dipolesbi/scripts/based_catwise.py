@@ -103,7 +103,7 @@ if __name__ == '__main__':
     theta_0 = { # add a reference theta for diagnosing learned P(D | theta_0)
         'log10_n_initial_samples': 7.552,
         'w1_extra_error': 4.,
-        'w2_extra_error': 3.2,
+        # 'w2_extra_error': 3.2,
         'observer_speed': 2.,
         'dipole_longitude': 220,
         'dipole_latitude': 45
@@ -114,7 +114,7 @@ if __name__ == '__main__':
             ERROR_DIST = 'gaussian'
             COMMON_ERROR = True
             add_error_scale('etaWX', prior)
-            theta_0.pop('w2_extra_error')
+            # theta_0.pop('w2_extra_error')
 
         case 'free_students-t_extra_err':
             ERROR_DIST = 'students-t'
@@ -122,6 +122,7 @@ if __name__ == '__main__':
             add_error_scale('etaWX', prior)
             add_tdist_shape_param(prior)
             simulator = simulator_wrapper
+            theta_0['log10_magnitude_error_shape_param'] = 1.
 
         case 'free_gauss':
             ERROR_DIST = 'gaussian'
@@ -131,6 +132,7 @@ if __name__ == '__main__':
                 w1_extra_error=None,
                 w2_extra_error=None
             )
+            theta_0.pop('w1_extra_error')
 
         case 'cmb_dipole':
             ERROR_DIST = 'gaussian'
@@ -141,6 +143,9 @@ if __name__ == '__main__':
             prior.remove_prior('phi')
             prior.remove_prior('theta')
             add_error_scale('etaWX', prior)
+            theta_0.pop('observer_speed')
+            theta_0.pop('dipole_longitude')
+            theta_0.pop('dipole_latitude')
             assert prior.ndim == 2
 
         case 'cmb_direction':
@@ -150,6 +155,7 @@ if __name__ == '__main__':
             prior.remove_prior('phi')
             prior.remove_prior('theta')
             add_error_scale('etaWX', prior)
+            theta_0.pop('dipole_longitude'); theta_0.pop('dipole_latitude')
             assert prior.ndim == 3
 
         case 'cmb_velocity':
@@ -159,6 +165,7 @@ if __name__ == '__main__':
             prior.remove_prior('D')
             add_error_scale('etaWX', prior)
             assert prior.ndim == 4
+            theta_0.pop('observer_speed')
 
         case _:
             raise KeyError(f'Model {args.model} not recognised.')
