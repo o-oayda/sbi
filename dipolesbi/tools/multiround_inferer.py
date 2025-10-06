@@ -121,6 +121,8 @@ class MultiRoundInferer:
         self.lnZerr_per_round = []
         self.final_nested_samples = None
         self.classic_nested_samples = None
+        self.true_lnZ = None
+        self.true_lnZerr = None
 
     @property
     def target_ndim(self) -> int:
@@ -881,19 +883,21 @@ class MultiRoundInferer:
         return nflow
 
     def _lnZ_plot(self) -> None:
-        true_lnZ = self.true_lnZ
-        true_lnZ_err = self.true_lnZerr
+        if self.true_lnZ:
+            true_lnZ = self.true_lnZ
+            true_lnZ_err = self.true_lnZerr
         lnZ_estimates = self.lnZ_per_round
         lnZ_estimates_err = self.lnZerr_per_round
 
         epochs = range(len(lnZ_estimates))
         _, ax = plt.subplots()
 
-        ax.axhspan(
-            true_lnZ - true_lnZ_err, # type: ignore
-            true_lnZ + true_lnZ_err, # type: ignore
-            color='gray', alpha=0.3, label='True lnZ ± err'
-        )
+        if self.true_lnZ:
+            ax.axhspan(
+                true_lnZ - true_lnZ_err, # type: ignore
+                true_lnZ + true_lnZ_err, # type: ignore
+                color='gray', alpha=0.3, label='True lnZ ± err'
+            )
 
         ax.errorbar(
             epochs, lnZ_estimates, yerr=lnZ_estimates_err,
@@ -916,9 +920,10 @@ class MultiRoundInferer:
             self.mr_config.plot_save_dir,
             'epoch_lnZ.npy'
         )
-        true_lnZ_save_path = os.path.join(
-            self.mr_config.plot_save_dir,
-            'true_lnZ.npy'
-        )
+        if self.true_lnZ:
+            true_lnZ_save_path = os.path.join(
+                self.mr_config.plot_save_dir,
+                'true_lnZ.npy'
+            )
+            np.save(true_lnZ_save_path, np.asarray([self.true_lnZ, self.true_lnZerr]))
         np.save(array_save_path, [lnZ_estimates, lnZ_estimates_err])
-        np.save(true_lnZ_save_path, np.asarray([self.true_lnZ, self.true_lnZerr]))
