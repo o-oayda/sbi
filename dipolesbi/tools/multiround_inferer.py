@@ -77,6 +77,14 @@ class MultiRoundInferer:
 
         self.sample_posterior_seed = 0
         self.mr_config.plot_save_dir = self._get_output_dir()
+        if self.mr_config.save_round_simulations:
+            self._round_sim_save_dir = os.path.join(
+                self.mr_config.plot_save_dir,
+                self.mr_config.round_simulation_subdir
+            )
+            os.makedirs(self._round_sim_save_dir, exist_ok=True)
+        else:
+            self._round_sim_save_dir = None
 
         self.nflow_config = nflow_config
         self.train_config = train_config
@@ -188,6 +196,7 @@ class MultiRoundInferer:
 
                 self.ui.start_step(1, subtitle='simulating')
                 data = self._generate_simulations(sim_key, theta)
+                self._maybe_save_round_simulations(round_idx, data, theta)
                 self._add_to_simulation_pool(sim_key, data, theta)
                 self.trn_set, self.val_set = self._make_train_val_set(split_key)
                 del data; del theta
@@ -257,6 +266,7 @@ class MultiRoundInferer:
 
                 self.ui.start_step(1, subtitle='simulating')
                 data = self._generate_simulations(sim_key, theta)
+                self._maybe_save_round_simulations(round_idx, data, theta)
                 self._add_to_simulation_pool(sim_key, data, theta)
                 self.trn_set, self.val_set = self._make_train_val_set(split_key)
                 del data; del theta
@@ -879,6 +889,28 @@ class MultiRoundInferer:
             theta: dict[str, NDArray]
     ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
         return self.simulator_function(key, theta, True)
+
+    def _maybe_save_round_simulations(
+            self,
+            round_idx: int,
+            data: tuple[NDArray[np.float32], NDArray[np.bool_]],
+            theta: dict[str, NDArray]
+    ) -> None:
+        if self._round_sim_save_dir is None:
+            return
+
+        x, mask = data
+        round_prefix = f'round_{round_idx:02d}'
+
+        np.savez_compressed(
+            os.path.join(self._round_sim_save_dir, f'{round_prefix}_data.npz'),
+            x=np.asarray(x),
+            mask=np.asarray(mask)
+        )
+        save_dict_npz(
+            os.path.join(self._round_sim_save_dir, f'{round_prefix}_theta'),
+            theta
+        )
 
     def _instantiate_nflow(self) -> NeuralFlow:
         if (not self.train_config.restore_from_previous) or (self.nflow is None):

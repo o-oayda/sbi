@@ -183,6 +183,8 @@ class MultiRoundInfererConfig:
     check_proposal_probs: bool = True
     write_results_to_disk: bool = True
     likelihood_chunk_size_gb: float = 0.25
+    save_round_simulations: bool = True
+    round_simulation_subdir: str = 'round_simulations'
 
     def __post_init__(self) -> None:
         self.simulations_per_round = self.simulation_budget // self.n_rounds
