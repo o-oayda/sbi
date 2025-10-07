@@ -50,7 +50,10 @@ if __name__ == '__main__':
         '--downscale_nside',
         type=int,
         default=None,
-        help='Optional HEALPix nside to downscale simulated maps to.'
+        help=(
+            'Optional HEALPix nside to downscale simulated maps to. '
+            'Ignored for NPE runs, which always operate on the native nside (64).'
+        )
     )
     parser.add_argument(
         '--no_ui',
@@ -72,6 +75,7 @@ if __name__ == '__main__':
     USE_FLOAT32 = False
     N_ROUNDS = 10
     DOWNSCALE_NSIDE = args.downscale_nside
+    ORIGINAL_NSIDE = 64
 
     def simulator_wrapper(**kwargs) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
         return model.generate_dipole(**kwargs)
@@ -177,19 +181,6 @@ if __name__ == '__main__':
         case _:
             raise KeyError(f'Model {args.model} not recognised.')
 
-    config = CatwiseConfig(
-        cat_w1_max=17.0, 
-        cat_w12_min=0.5,
-        magnitude_error_dist=ERROR_DIST,
-        use_float32=USE_FLOAT32,
-        use_common_extra_error=COMMON_ERROR,
-        model_identifier=args.model,
-        downscale_nside=DOWNSCALE_NSIDE
-    )
-
-    model = Catwise(config)
-    model.initialise_data()
-    prior_jax = prior.to_jax()
 
     def model_sim_wrapper(
             npkey: NPKey,
@@ -204,13 +195,20 @@ if __name__ == '__main__':
             ui=ui
         )
 
-    x0, mask = model.make_real_sample()
+    prior_jax = prior.to_jax()
 
     for mode in modes:
         match mode:
             case 'NPE':
+                nside = ORIGINAL_NSIDE
+                current_downscale = None
+                if DOWNSCALE_NSIDE not in (None, ORIGINAL_NSIDE):
+                    print(
+                        f'Overriding --downscale_nside={DOWNSCALE_NSIDE} to native '
+                        f'nside={ORIGINAL_NSIDE} for NPE.'
+                    )
                 scenario = Scenario.anynside_npe(
-                    nside=DOWNSCALE_NSIDE,
+                    nside=nside,
                     theta_prior=prior_jax,
                     reference_theta=theta_0,
                     theta_spec_overrides={'embed_transform_in_flow': True},
@@ -223,11 +221,13 @@ if __name__ == '__main__':
                     training_overrides={'learning_rate': 0.001}
                 )
             case 'NLE':
+                nside = DOWNSCALE_NSIDE
+                current_downscale = DOWNSCALE_NSIDE
                 data_spec = DataTransformSpec.zscore(
                     method='batchwise'
                 )
                 scenario = Scenario.anynside_nle(
-                    nside=DOWNSCALE_NSIDE,
+                    nside=nside, # type: ignore
                     theta_prior=prior_jax,
                     training_overrides={
                         'learning_rate': 1e-4,
@@ -252,6 +252,21 @@ if __name__ == '__main__':
                 )
             case _:
                 raise KeyError(f'Mode {mode} not recognised.')
+
+        config = CatwiseConfig(
+            cat_w1_max=17.0, 
+            cat_w12_min=0.5,
+            magnitude_error_dist=ERROR_DIST,
+            use_float32=USE_FLOAT32,
+            use_common_extra_error=COMMON_ERROR,
+            model_identifier=args.model,
+            downscale_nside=current_downscale
+        )
+
+        model = Catwise(config)
+        model.initialise_data()
+
+        x0, mask = model.make_real_sample()
 
         inferer = MultiRoundInferer(
             mode, prior, model_sim_wrapper, (x0, mask),
