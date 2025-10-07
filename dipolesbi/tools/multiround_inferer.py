@@ -221,7 +221,7 @@ class MultiRoundInferer:
         self.ui.finish_step('benchmarked')
 
         if self.mr_config.write_results_to_disk: self._write_results_to_disk()
-        self._lnZ_plot()
+        self._plot_and_save_lnZ()
 
     def _npe_pipeline(self):
         current_key = self.rng_key
@@ -893,7 +893,7 @@ class MultiRoundInferer:
             nflow = self.nflow
         return nflow
 
-    def _lnZ_plot(self) -> None:
+    def _plot_and_save_lnZ(self) -> None:
         if self.true_lnZ:
             true_lnZ = self.true_lnZ
             true_lnZ_err = self.true_lnZerr
