@@ -331,6 +331,13 @@ class DipoleBijectorWrapper(InvertibleThetaTransformJax):
         return theta, logdet
 
 class DipoleThetaTransform(InvertibleThetaTransformJax):
+    """
+    Transform dipole parameters either via spherical-to-Cartesian conversion
+    or a simple z-score. When `method='cartesian'` but the adapter does not
+    expose both `dipole_longitude` and `dipole_latitude`, the transform
+    transparently falls back to the z-score pathway so parameter sets without
+    those keys remain usable.
+    """
     def __init__(
             self,
             prior: DipolePriorJax,
@@ -340,12 +347,21 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
     ):
         super().__init__(prior)
 
-        if method == 'cartesian':
+        adapter_keys = set(self.adapter.keys)
+        has_spherical_keys = {'dipole_longitude', 'dipole_latitude'}.issubset(adapter_keys)
+
+        if method == 'cartesian' and has_spherical_keys:
             self._forward_and_log_det = self._forward_and_log_det_cartesian
             self._inverse_and_log_det = self._inverse_and_log_det_cartesian
+
+        elif method == 'cartesian':
+            self._forward_and_log_det = self._forward_and_log_det_zscore
+            self._inverse_and_log_det = self._inverse_and_log_det_zscore
+
         elif method == 'zscore':
             self._forward_and_log_det = self._forward_and_log_det_zscore
             self._inverse_and_log_det = self._inverse_and_log_det_zscore
+
         else:
             raise Exception(f'{method} not recognised.')
 
@@ -375,9 +391,6 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
     def compute_mean_and_std(self, theta: dict[str, jnp.ndarray]) -> None:
         if not self.stats_are_none():
             raise Exception('Stats should be empty before making new ones.')
-
-        assert 'dipole_longitude' in self.adapter.keys
-        assert 'dipole_latitude' in self.adapter.keys
 
         means = []
         stds = []
