@@ -76,14 +76,7 @@ class MultiRoundInferer:
             self.reference_theta_jax: dict[str, jnp.ndarray] = {}
 
         self.sample_posterior_seed = 0
-
-        if not os.path.exists(self.mr_config.plot_save_dir):
-            os.makedirs(self.mr_config.plot_save_dir)
-        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        timestamp_and_seed = f'{timestamp}_SEED{self.mr_config.prng_integer_seed}'
-        new_plot_dir = os.path.join(self.mr_config.plot_save_dir, timestamp_and_seed)
-        os.makedirs(new_plot_dir, exist_ok=True)
-        self.mr_config.plot_save_dir = new_plot_dir
+        self.mr_config.plot_save_dir = self._get_output_dir()
 
         self.nflow_config = nflow_config
         self.train_config = train_config
@@ -138,6 +131,20 @@ class MultiRoundInferer:
             self._nle_pipeline()
         elif self.mode == 'NPE':
             self._npe_pipeline()
+
+    def _get_output_dir(self) -> str:
+        if not os.path.exists(self.mr_config.plot_save_dir):
+            os.makedirs(self.mr_config.plot_save_dir)
+
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        timestamp_and_seed = (
+            f'{timestamp}_SEED{self.mr_config.prng_integer_seed}_{self.mode}'
+        )
+        new_plot_dir = os.path.join(self.mr_config.plot_save_dir, timestamp_and_seed)
+
+        os.makedirs(new_plot_dir, exist_ok=True)
+
+        return new_plot_dir
 
     def _nle_pipeline(self):
         current_key = self.rng_key
@@ -203,6 +210,7 @@ class MultiRoundInferer:
                 self.ui.start_step(4, 'computing')
                 self._compute_posterior(posterior_key)
                 self.ui.update_last_stats_row({'Evidence': self.jax_ns.evidence_str})
+                self._write_results_to_disk()
                 self.ui.finish_step('computed')
 
                 plt.close('all')
@@ -263,9 +271,10 @@ class MultiRoundInferer:
                     self._dump_configs() # dump after training
 
                 self.ui.start_step(3, 'computing')
-                self.posterior_samples = self._sample_posterior(
+                self.current_posterior_samples = self._sample_posterior(
                     posterior_key, self.mr_config.n_posterior_samples
                 )
+                self._write_results_to_disk()
                 self.ui.finish_step('computed')
 
                 plt.close('all')
@@ -298,21 +307,23 @@ class MultiRoundInferer:
 
     def _write_results_to_disk(self):
         if self.mode == 'NLE':
-            self.final_posterior_samples = self.nested_samples
-            self.final_posterior_samples.to_csv(
-                path_or_buf=os.path.join(self.mr_config.plot_save_dir, 'samples.csv')
+            self.current_nested_samples.to_csv(
+                path_or_buf=os.path.join(
+                    self.mr_config.plot_save_dir,
+                    f'samples_rnd-{self.current_round}.csv'
+                )
             )
         else:
-            self.final_posterior_samples = self.posterior_samples
             np_samples = {
-                k: np.array(v) for k, v in self.posterior_samples.items()
+                k: np.array(v) for k, v in self.current_posterior_samples.items()
             }
             np.savez(
-                os.path.join(self.mr_config.plot_save_dir, 'samples.npz'),
+                os.path.join(
+                    self.mr_config.plot_save_dir,
+                    f'samples_rnd-{self.current_round}.npz'
+                ),
                 **np_samples
             )
-
-        self.final_classic_samples = self.classic_nested_samples
 
     def save_simulations(self) -> None:
         data_path = self.mr_config.plot_save_dir + '/data'
@@ -483,27 +494,27 @@ class MultiRoundInferer:
 
         if self.mode == 'NLE':
             self.ui.log(
-                f"NLE Log Evidence: {self.nested_samples.logZ():.2f} "
-                f"± {self.nested_samples.logZ(100).std():.2f}" # type: ignore
+                f"NLE Log Evidence: {self.current_nested_samples.logZ():.2f} "
+                f"± {self.current_nested_samples.logZ(100).std():.2f}" # type: ignore
             )
-            diff = self.nested_samples.logZ() - self.true_lnZ # type: ignore
+            diff = self.current_nested_samples.logZ() - self.true_lnZ # type: ignore
             sigma = (
                 np.abs(diff) # type: ignore
               / np.sqrt(
-                    self.nested_samples.logZ(100).std()**2  # type: ignore
+                    self.current_nested_samples.logZ(100).std()**2  # type: ignore
                   + self.true_lnZerr**2 # type: ignore
                 ) 
             )
             self.ui.log(f'Tension: {sigma}')
 
-            nle_raw_samples = self.nested_samples.to_numpy()[:, :-3]
-            idx_weights = self.nested_samples.index.to_numpy()
+            nle_raw_samples = self.current_nested_samples.to_numpy()[:, :-3]
+            idx_weights = self.current_nested_samples.index.to_numpy()
             weights = np.asarray([el[1] for el in idx_weights])
             posterior_samples = nle_raw_samples
         else:
             assert self.theta_transform is not None
             flat_samples = np.asarray(
-                self.theta_transform.adapter.to_array(self.posterior_samples)
+                self.theta_transform.adapter.to_array(self.current_posterior_samples)
             )
             weights = np.asarray(jnp.ones(flat_samples.shape[0]))
             posterior_samples = np.asarray(flat_samples)
@@ -678,11 +689,11 @@ class MultiRoundInferer:
             self.ui
         )
         self.jax_ns.setup(ns_key, n_live=1000, n_delete=200)
-        self.nested_samples = self.jax_ns.run()
+        self.current_nested_samples = self.jax_ns.run()
 
         kinds = {'lower': 'kde_2d', 'diagonal': 'hist_1d', 'upper': 'scatter_2d'}
         plt.figure()
-        self.nested_samples.plot_2d(
+        self.current_nested_samples.plot_2d(
             self.initial_proposal.simulator_kwargs,
             kinds=kinds
         )
@@ -692,8 +703,8 @@ class MultiRoundInferer:
             bbox_inches='tight'
         )
 
-        self.lnZ_per_round.append(self.nested_samples.logZ())
-        self.lnZerr_per_round.append(self.nested_samples.logZ(100).std()) # type: ignore
+        self.lnZ_per_round.append(self.current_nested_samples.logZ())
+        self.lnZerr_per_round.append(self.current_nested_samples.logZ(100).std()) # type: ignore
 
     def _make_train_val_set(
             self, 
@@ -790,15 +801,15 @@ class MultiRoundInferer:
         self.sample_posterior_seed += 1
 
         if self.mode == 'NLE':
-            posterior_samples = self.nested_samples.sample(
+            posterior_samples = self.current_nested_samples.sample(
                 n=n_samples,
                 random_state=self.sample_posterior_seed
             )
             posterior_samples = self._reformat_samples(posterior_samples)
 
         elif self.mode == 'NPE':
-            assert self.posterior_samples is not None
-            tree = self.posterior_samples
+            assert self.current_posterior_samples is not None
+            tree = self.current_posterior_samples
             n_available = next(iter(tree.values())).shape[0]
             idx = np.random.choice(n_available, size=n_samples, replace=True)
             posterior_samples = {

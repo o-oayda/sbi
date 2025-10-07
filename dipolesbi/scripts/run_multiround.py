@@ -17,26 +17,31 @@ if __name__ == '__main__':
     parser.add_argument(
         '--nside',
         type=int,
+        required=True,
         help='Nside of simulated maps.'
     )
     parser.add_argument(
         '--downscale_nside',
         type=int,
+        required=True,
         help='Nside of downscaled maps to use in normalising flow.'
     )
     parser.add_argument(
         '--mode',
         type=str,
+        required=True,
         help='Comma separated list of modes to run (e.g. "NLE" or "NLE,NPE").'
     )
     parser.add_argument(
         '--ssnle_seed',
         type=int,
+        required=True,
         help='Integer seed for the multiround inferer pipeline.'
     )
     parser.add_argument(
         '--out_dir',
         type=str,
+        required=True,
         help='Diretory for simulation outputs.'
     )
     args = parser.parse_args()
@@ -99,61 +104,57 @@ if __name__ == '__main__':
         reference_mask=jax.device_put(native_mask).squeeze() # native resolution
     )
 
-    nside16_scenario_npe = Scenario.anynside_npe(
-        nside=COARSE_NSIDE, # since the flow only sees the coarse res
-        reference_theta=theta0,
-        theta_prior=prior_jax,
-        theta_spec_overrides={'embed_transform_in_flow': True},
-        multiround_overrides={
-            'prng_integer_seed': args.ssnle_seed,
-            'plot_save_dir': args.out_dir,
-            'n_rounds': 10,
-            'check_proposal_probs': True
-        },
-        training_overrides={'learning_rate': 0.001}
-    )
-    
-    # batchwise: first round well contrained posteriors; is the evidence underestimated?
-    # batchwise: not as well constrained in initial rounds, evidence?
-    data_spec = DataTransformSpec.zscore(
-        method='batchwise'
-    )
-    nside16_scenario_nle = Scenario.anynside_nle(
-        nside=COARSE_NSIDE, # since the flow only sees the coarse res
-        reference_theta=theta0,
-        theta_prior=prior_jax,
-        training_overrides={
-            'learning_rate': 1e-4,
-            'min_lr_ratio': 1.
-        },
-        multiround_overrides={
-            'prng_integer_seed': args.ssnle_seed,
-            'plot_save_dir': args.out_dir,
-            'simulation_budget': 50_000,
-            'n_rounds': 10,
-            'likelihood_chunk_size_gb': 0.5,
-            'n_likelihood_samples': 5_000
-        },
-        flow_overrides={
-            'decoder_n_neurons': 128,
-            'decoder_n_layers': 4,
-            'architecture': 4 * ['MAF'] + ['surjective_MAF'] + 6 * ['MAF'],
-            'data_reduction_factor': 0.5,
-            # 'architecture': 12 * ['MAF']
-        },
-        data_spec=data_spec
-    )
-
-    meta_cfg = {
-        'NLE': nside16_scenario_nle,
-        'NPE': nside16_scenario_npe
-    }
-
     for MODE in modes:
-        if MODE not in meta_cfg:
-            raise ValueError(f"Mode '{MODE}' not recognised.")
+        match MODE:
+            case 'NLE':
+                # batchwise: first round well contrained posteriors; is the evidence underestimated?
+                # batchwise: not as well constrained in initial rounds, evidence?
+                data_spec = DataTransformSpec.zscore(
+                    method='batchwise'
+                )
+                cur_cfg = Scenario.anynside_nle(
+                    nside=COARSE_NSIDE, # since the flow only sees the coarse res
+                    reference_theta=theta0,
+                    theta_prior=prior_jax,
+                    training_overrides={
+                        'learning_rate': 1e-4,
+                        'min_lr_ratio': 1.
+                    },
+                    multiround_overrides={
+                        'prng_integer_seed': args.ssnle_seed,
+                        'plot_save_dir': args.out_dir,
+                        'simulation_budget': 50_000,
+                        'n_rounds': 10,
+                        'likelihood_chunk_size_gb': 0.5,
+                        'n_likelihood_samples': 5_000
+                    },
+                    flow_overrides={
+                        'decoder_n_neurons': 128,
+                        'decoder_n_layers': 4,
+                        'architecture': 4 * ['MAF'] + ['surjective_MAF'] + 6 * ['MAF'],
+                        'data_reduction_factor': 0.5,
+                        # 'architecture': 12 * ['MAF']
+                    },
+                    data_spec=data_spec
+                )
 
-        cur_cfg = meta_cfg[MODE]
+            case 'NPE':
+                cur_cfg = Scenario.anynside_npe(
+                    nside=COARSE_NSIDE, # since the flow only sees the coarse res
+                    reference_theta=theta0,
+                    theta_prior=prior_jax,
+                    theta_spec_overrides={'embed_transform_in_flow': True},
+                    multiround_overrides={
+                        'prng_integer_seed': args.ssnle_seed,
+                        'plot_save_dir': args.out_dir,
+                        'n_rounds': 10,
+                        'check_proposal_probs': True
+                    },
+                    training_overrides={'learning_rate': 0.001}
+                )
+                
+            case _:
+                raise ValueError(f'Mode {MODE} not recognised.')
 
         inferer = MultiRoundInferer(
             MODE, prior, model.generate_dipole, (x0, coarse_mask),
@@ -164,3 +165,4 @@ if __name__ == '__main__':
             train_config=cur_cfg.training
         )
         inferer.run()
+
