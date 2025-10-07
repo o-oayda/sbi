@@ -17,7 +17,8 @@ if __name__ == '__main__':
     parser.add_argument(
         '--mode',
         type=str,
-        help='Comma separated list of modes to run (e.g. "NLE" or "NLE,NPE").'
+        nargs='+',
+        help='One or more modes to run, separated by spaces (e.g. "--mode NLE NPE").'
     )
     parser.add_argument(
         '--n_simulations',
@@ -58,7 +59,13 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
 
-    MODE = args.mode
+    raw_modes = args.mode or []
+    modes: list[str] = []
+    for entry in raw_modes:
+        modes.extend(part.strip().upper() for part in entry.split(',') if part.strip())
+    if not modes:
+        parser.error('At least one mode must be provided via --mode.')
+
     N_SIM = args.n_simulations
     N_WORKERS = args.n_workers
     SAVE_DIR = args.out_dir
@@ -184,53 +191,6 @@ if __name__ == '__main__':
     model.initialise_data()
     prior_jax = prior.to_jax()
 
-    match args.mode:
-        case 'NPE':
-            scenario = Scenario.anynside_npe(
-                nside=DOWNSCALE_NSIDE,
-                theta_prior=prior_jax,
-                reference_theta=theta_0,
-                theta_spec_overrides={'embed_transform_in_flow': True},
-                multiround_overrides={
-                    'prng_integer_seed': args.ssnle_seed,
-                    'plot_save_dir': SAVE_DIR,
-                    'n_rounds': N_ROUNDS,
-                    'simulation_budget': N_SIM
-                },
-                training_overrides={'learning_rate': 0.001}
-            )
-        case 'NLE':
-            data_spec = DataTransformSpec.zscore(
-                method='batchwise'
-            )
-            scenario = Scenario.anynside_nle(
-                nside=DOWNSCALE_NSIDE,
-                theta_prior=prior_jax,
-                training_overrides={
-                    'learning_rate': 1e-4,
-                    'min_lr_ratio': 1.
-                },
-                reference_theta=theta_0,
-                multiround_overrides={
-                    'prng_integer_seed': args.ssnle_seed,
-                    'plot_save_dir': SAVE_DIR,
-                    'simulation_budget': N_SIM,
-                    'n_rounds': N_ROUNDS,
-                    'likelihood_chunk_size_gb': 0.5,
-                    'n_likelihood_samples':  10_000
-                },
-                flow_overrides={
-                    'decoder_n_neurons': 128,
-                    'decoder_n_layers': 4,
-                    'architecture': 4 * ['MAF'] + ['surjective_MAF'] + 6 * ['MAF'],
-                    'data_reduction_factor': 0.5,
-                },
-                data_spec=data_spec
-            )
-        case _:
-            raise KeyError(f'Mode {args.mode} not recognised.')
-
-
     def model_sim_wrapper(
             npkey: NPKey,
             params: dict[str, NDArray],
@@ -245,14 +205,61 @@ if __name__ == '__main__':
         )
 
     x0, mask = model.make_real_sample()
-        
-    inferer = MultiRoundInferer(
-        MODE, prior, model_sim_wrapper, (x0, mask),
-        multi_round_config=scenario.multiround,
-        transform_config=scenario.transforms,
-        nflow_config=scenario.flow,
-        train_config=scenario.training,
-        use_ui=not args.no_ui,
-        model_config=config
-    )
-    inferer.run()
+
+    for mode in modes:
+        match mode:
+            case 'NPE':
+                scenario = Scenario.anynside_npe(
+                    nside=DOWNSCALE_NSIDE,
+                    theta_prior=prior_jax,
+                    reference_theta=theta_0,
+                    theta_spec_overrides={'embed_transform_in_flow': True},
+                    multiround_overrides={
+                        'prng_integer_seed': args.ssnle_seed,
+                        'plot_save_dir': SAVE_DIR,
+                        'n_rounds': N_ROUNDS,
+                        'simulation_budget': N_SIM
+                    },
+                    training_overrides={'learning_rate': 0.001}
+                )
+            case 'NLE':
+                data_spec = DataTransformSpec.zscore(
+                    method='batchwise'
+                )
+                scenario = Scenario.anynside_nle(
+                    nside=DOWNSCALE_NSIDE,
+                    theta_prior=prior_jax,
+                    training_overrides={
+                        'learning_rate': 1e-4,
+                        'min_lr_ratio': 1.
+                    },
+                    reference_theta=theta_0,
+                    multiround_overrides={
+                        'prng_integer_seed': args.ssnle_seed,
+                        'plot_save_dir': SAVE_DIR,
+                        'simulation_budget': N_SIM,
+                        'n_rounds': N_ROUNDS,
+                        'likelihood_chunk_size_gb': 0.5,
+                        'n_likelihood_samples':  10_000
+                    },
+                    flow_overrides={
+                        'decoder_n_neurons': 128,
+                        'decoder_n_layers': 4,
+                        'architecture': 4 * ['MAF'] + ['surjective_MAF'] + 6 * ['MAF'],
+                        'data_reduction_factor': 0.5,
+                    },
+                    data_spec=data_spec
+                )
+            case _:
+                raise KeyError(f'Mode {mode} not recognised.')
+
+        inferer = MultiRoundInferer(
+            mode, prior, model_sim_wrapper, (x0, mask),
+            multi_round_config=scenario.multiround,
+            transform_config=scenario.transforms,
+            nflow_config=scenario.flow,
+            train_config=scenario.training,
+            use_ui=not args.no_ui,
+            model_config=config
+        )
+        inferer.run()
