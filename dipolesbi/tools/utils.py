@@ -27,30 +27,57 @@ def batch_simulate(
         theta: dict[str, NDArray],
         model_callable: Callable[..., tuple[NDArray, NDArray]],
         n_workers: int,
-        ui: Optional[MultiRoundInfererUI] = None
+        ui: Optional[MultiRoundInfererUI] = None,
+        rng_key: Optional[NPKey] = None
 ) -> tuple[NDArray, NDArray]:
-    simulation_batch_size = 1
     theta_np = {key: np.asarray(val) for key, val in theta.items()}
-    first_val = list(theta_np.values())[0]
-    if first_val.shape == ():
-        n_simulations = 1
-    else:
-        n_simulations = list(theta_np.values())[0].shape[0]
-    n_batches = n_simulations // simulation_batch_size # batch size of 1 by default in simulate_for_sbi
 
-    if n_simulations == 1:
-        return model_callable(**theta_np)
+    def _leading_dim(arr: np.ndarray) -> Optional[int]:
+        return None if arr.shape == () else arr.shape[0]
 
-    theta_batches = [
-        {key: arr_batch for key, arr_batch in zip(theta.keys(), batch)}
-        for batch in zip(*[
-            np.array_split(arr, n_batches, axis=0)
-            for arr in theta_np.values()
-        ])
+    n_simulations = 1
+    for arr in theta_np.values():
+        leading = _leading_dim(arr)
+        if leading is not None:
+            n_simulations = leading
+            break
+
+    def _slice_param(arr: np.ndarray, idx: int):
+        if arr.shape == ():
+            return arr
+        return arr[idx]
+
+    params_per_sim = [
+        {key: _slice_param(arr, idx) for key, arr in theta_np.items()}
+        for idx in range(n_simulations)
+    ] if n_simulations > 1 else [
+        {key: (arr if arr.shape == () else arr) for key, arr in theta_np.items()}
     ]
 
+    sim_keys: list[Optional[NPKey]]
+    if rng_key is not None:
+        # Fold the base key with the simulation index so each task gets a unique,
+        # order-independent seed even when joblib reorders execution.
+        sim_keys = [rng_key.fold_in(idx) for idx in range(n_simulations)]
+    else:
+        sim_keys = [None] * n_simulations
+
+    if n_simulations == 1:
+        kwargs = params_per_sim[0]
+        key = sim_keys[0]
+        if key is not None:
+            kwargs = {**kwargs, 'rng_key': key}
+        return model_callable(**kwargs)
+
+    def _run_single(idx: int, key: Optional[NPKey], kwargs: dict[str, NDArray]):
+        call_kwargs = dict(kwargs)
+        if key is not None:
+            call_kwargs['rng_key'] = key
+        return idx, model_callable(**call_kwargs)
+
     iterator = Parallel(return_as='generator', n_jobs=n_workers)(
-        delayed(model_callable)(**batch) for batch in theta_batches
+        delayed(_run_single)(idx, key, kwargs)
+        for idx, (key, kwargs) in enumerate(zip(sim_keys, params_per_sim))
     )
 
     progress = None
@@ -61,7 +88,7 @@ def batch_simulate(
     else:
         progress = tqdm(total=n_simulations)
 
-    simulation_outputs: list[tuple[NDArray, NDArray]] = []
+    simulation_outputs: list[tuple[int, tuple[NDArray, NDArray]]] = []
     for idx, result in enumerate(iterator, start=1):
         simulation_outputs.append(result)
         if ui is not None:
@@ -69,13 +96,16 @@ def batch_simulate(
         else:
             progress.update(1)
 
+    # Restore original ordering; joblib yields results as workers finish.
+    simulation_outputs.sort(key=lambda item: item[0])
+
     if ui is not None:
         ui.end_global_progress()
     elif progress is not None:
         progress.close()
 
-    x = np.vstack([output[0] for output in simulation_outputs])
-    mask = np.vstack([output[1] for output in simulation_outputs])
+    x = np.vstack([output[0] for _, output in simulation_outputs])
+    mask = np.vstack([output[1] for _, output in simulation_outputs])
     return x, mask
 
 class PytreeAdapter:
@@ -792,7 +822,11 @@ class MultinomialSample2DHistogram:
         self.y_edges = sampler_data['y_edges']
         self.original_shape = sampler_data['original_shape']
 
-    def sample(self, n_samples: int) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    def sample(
+            self,
+            n_samples: int,
+            rng: Optional[np.random.Generator] = None
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         """
         Sample from the 2D distribution using multinomial sampling with uniform jittering.
         
@@ -808,8 +842,11 @@ class MultinomialSample2DHistogram:
         y_samples : NDArray[np.float64]
             Y coordinates of samples with uniform jittering within bins
         """
+        if rng is None:
+            rng = np.random.default_rng()
+
         # Multinomial sampling to select bins
-        indices = np.random.choice(
+        indices = rng.choice(
             len(self.probs_flat), 
             size=n_samples, 
             p=self.probs_flat
@@ -823,8 +860,8 @@ class MultinomialSample2DHistogram:
         
         # Add uniform jitter within each bin
         # Jitter is uniform in [-width/2, +width/2] around bin center
-        x_jitter = np.random.uniform(-0.5, 0.5, n_samples) * x_widths
-        y_jitter = np.random.uniform(-0.5, 0.5, n_samples) * y_widths
+        x_jitter = rng.uniform(-0.5, 0.5, n_samples) * x_widths
+        y_jitter = rng.uniform(-0.5, 0.5, n_samples) * y_widths
         
         # Apply jittering to get continuous samples
         x_samples = x_centers + x_jitter

@@ -27,6 +27,7 @@ from numpy.typing import NDArray
 from datetime import datetime
 import matplotlib.pyplot as plt
 from memory_profiler import profile
+from dipolesbi.tools.np_rngkey import NPKey
 
 
 class Catwise:
@@ -74,7 +75,6 @@ class Catwise:
         self.real_file_path = (
             'dipolesbi/catwise/catwise_agns_masked_final_w1lt16p5_alpha.fits'
         )
-        self.rng = np.random.default_rng()
 
         self._coarse_density_map: Optional[NDArray[np.float32]] = None
         self._coarse_mask: Optional[NDArray[np.bool_]] = None
@@ -111,6 +111,7 @@ class Catwise:
             w1_extra_error: Optional[float] = 1.,
             w2_extra_error: Optional[float] = 1.,
             log10_magnitude_error_shape_param: float = 0.,
+            rng_key: Optional[NPKey] = None,
         ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
         '''
         :param observer_speed: Observer speed in units of CMB-derived speed.
@@ -138,6 +139,7 @@ class Catwise:
         magnitude_error_dist = self.magnitude_error_dist
 
         common_extra_error = self.use_common_extra_error
+        rng = rng_key._generator() if rng_key is not None else np.random.default_rng()
 
         if self.n_samples == 0:
             n_pix = hp.nside2npix(self.nside)
@@ -185,10 +187,11 @@ class Catwise:
             current_chunk = min(chunk_size, self.n_samples - start)
 
             rest_w1_samples, rest_w2_samples = self.sample_magnitudes(
-                current_chunk, dtype=self.dtype
+                current_chunk, dtype=self.dtype, rng=rng
             )
             rest_source_lon_deg, rest_source_lat_deg = self.sample_points(
                 current_chunk,
+                rng=rng
             )
 
             boosted_source_lon_deg, boosted_source_lat_deg, \
@@ -263,7 +266,7 @@ class Catwise:
                 common_extra_error=common_extra_error,
                 error_dist=magnitude_error_dist,
                 log10_shape_param=log10_magnitude_error_shape_param,
-                rng=self.rng,
+                rng=rng,
                 noise_buffers=current_noise_buffers
             )
 
@@ -995,16 +998,22 @@ class Catwise:
     def sample_magnitudes(
             self,
             n_samples: int,
-            dtype: type = np.float64
+            dtype: type = np.float64,
+            rng: Optional[np.random.Generator] = None
     ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
         '''
         :return: Tuple of 64-bit numpy arrays representing the w1 and w2 mag samples.
         '''
-        w1_samples, w2_samples = self.colour_mag_sampler.sample(n_samples)
+        w1_samples, w2_samples = self.colour_mag_sampler.sample(n_samples, rng=rng)
         return w1_samples.astype(dtype), w2_samples.astype(dtype)
     
-    def sample_points(self, n_points: int, dtype: type = np.float64) -> tuple[NDArray, NDArray]:
-        longitudes_deg, latitudes_deg = sample_spherical_points(n_points)
+    def sample_points(
+            self,
+            n_points: int,
+            dtype: type = np.float64,
+            rng: Optional[np.random.Generator] = None
+    ) -> tuple[NDArray, NDArray]:
+        longitudes_deg, latitudes_deg = sample_spherical_points(n_points, rng=rng)
         return longitudes_deg.astype(dtype), latitudes_deg.astype(dtype)
     
     def aberrate_points(self,

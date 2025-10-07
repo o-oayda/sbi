@@ -67,9 +67,10 @@ def main():
 
     # Add horizontal dashed line at y=-14262 to both panels
     for ax in [ax0, ax1]:
-        ax.axhline(-14262, color='black', linestyle='--', linewidth=1, label='y = -14262')
+        ax.axhline(-684.7, color='black', linestyle='--', linewidth=1, label='y = -14262')
     
     plt.tight_layout()
+    plt.savefig(f'evidence_{args.save_dir}.png', bbox_inches='tight', dpi=300)
     plt.show()
 
 if __name__ == "__main__":

@@ -17,6 +17,8 @@ from dipolesbi.tools.physics import (
     dipole_to_native_frame,
     compute_boosted_angles
 )
+from dipolesbi.tools.np_rngkey import prng_key
+from dipolesbi.tools.utils import batch_simulate
 
 
 @lru_cache(maxsize=1)
@@ -89,6 +91,97 @@ def test_catwise_generate_dipole_parallel_joblib():
     # Density entries should respect masking and remain finite for unmasked pixels
     assert np.all(np.isnan(density_stack[:, ~first_mask]))
     assert np.all(density_stack[:, first_mask] >= 0)
+
+
+def test_catwise_generate_dipole_reproducible_with_npkey():
+    sim = _build_simulator()
+
+    key = prng_key(1234)
+    params = { # use a large-ish number to ensure maps aren't just full of zeros
+        'log10_n_initial_samples': np.log10(1_000_000)
+    }
+
+    density_1, mask_1 = sim.generate_dipole(rng_key=key, **params)
+    density_2, mask_2 = sim.generate_dipole(rng_key=key, **params)
+
+    np.testing.assert_array_equal(mask_1, mask_2)
+    np.testing.assert_array_equal(density_1, density_2)
+
+
+def test_batch_simulate_reproducible_with_npkey():
+    sim = _build_simulator()
+
+    params = {
+        'log10_n_initial_samples': np.full(3, np.log10(1_000_000), dtype=np.float32)
+    }
+    base_key = prng_key(99)
+
+    sims_a, masks_a = batch_simulate(
+        params,
+        sim.generate_dipole,
+        n_workers=2,
+        rng_key=base_key
+    )
+    sims_b, masks_b = batch_simulate(
+        params,
+        sim.generate_dipole,
+        n_workers=2,
+        rng_key=base_key
+    )
+
+    np.testing.assert_array_equal(masks_a, masks_b)
+    np.testing.assert_array_equal(sims_a, sims_b)
+
+
+def test_batch_simulate_worker_invariance():
+    sim = _build_simulator()
+
+    params = {
+        'log10_n_initial_samples': np.full(4, np.log10(1_000_000), dtype=np.float32)
+    }
+    base_key = prng_key(7)
+
+    sims_serial, masks_serial = batch_simulate(
+        params,
+        sim.generate_dipole,
+        n_workers=1,
+        rng_key=base_key
+    )
+    sims_parallel, masks_parallel = batch_simulate(
+        params,
+        sim.generate_dipole,
+        n_workers=3,
+        rng_key=base_key
+    )
+
+    np.testing.assert_array_equal(masks_serial, masks_parallel)
+    np.testing.assert_array_equal(sims_serial, sims_parallel)
+
+
+def test_batch_simulate_key_diversity():
+    sim = _build_simulator()
+
+    params = {
+        'log10_n_initial_samples': np.full(2, np.log10(1_000_000), dtype=np.float32)
+    }
+    key_a = prng_key(21)
+    key_b = prng_key(22)
+
+    sims_a, masks_a = batch_simulate(
+        params,
+        sim.generate_dipole,
+        n_workers=2,
+        rng_key=key_a
+    )
+    sims_b, masks_b = batch_simulate(
+        params,
+        sim.generate_dipole,
+        n_workers=2,
+        rng_key=key_b
+    )
+
+    np.testing.assert_array_equal(masks_a, masks_b)
+    assert not np.array_equal(sims_a, sims_b)
 
 
 def test_add_error_statistical_properties():

@@ -77,8 +77,11 @@ if __name__ == '__main__':
     DOWNSCALE_NSIDE = args.downscale_nside
     ORIGINAL_NSIDE = 64
 
-    def simulator_wrapper(**kwargs) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
-        return model.generate_dipole(**kwargs)
+    def simulator_wrapper(
+            rng_key: Optional[NPKey] = None,
+            **kwargs
+    ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
+        return model.generate_dipole(rng_key=rng_key, **kwargs)
 
     prior = DipolePriorNP(
         mean_count_range=[np.log10(30_000_000), np.log10(40_000_000)],
@@ -192,7 +195,8 @@ if __name__ == '__main__':
             params,
             simulator,
             n_workers=N_WORKERS,
-            ui=ui
+            ui=ui,
+            rng_key=npkey
         )
 
     prior_jax = prior.to_jax()

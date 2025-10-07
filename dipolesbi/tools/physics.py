@@ -6,6 +6,7 @@ from astropy.modeling.rotations import (
 import astropy.units as u
 import numpy as np
 from numpy.typing import NDArray
+from typing import Optional
 
 
 def _spherical_to_cart_deg(
@@ -55,10 +56,16 @@ def rotation_matrices_for_dipole(
     return forward.astype(np.float64), inverse.astype(np.float64)
 
 
-def sample_spherical_points(n_points) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    longitudes_deg = 360 * np.random.rand(n_points)
+def sample_spherical_points(
+        n_points: int,
+        rng: Optional[np.random.Generator] = None
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    if rng is None:
+        rng = np.random.default_rng()
+
+    longitudes_deg = 360 * rng.random(n_points)
     latitudes_deg = np.rad2deg(
-        np.arcsin( 2 * np.random.rand(n_points) - 1)
+        np.arcsin(2 * rng.random(n_points) - 1)
     )
     return longitudes_deg, latitudes_deg
 

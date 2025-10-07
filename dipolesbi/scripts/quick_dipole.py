@@ -32,13 +32,20 @@ sim_cfg = CatwiseConfig(
 sim = Catwise(sim_cfg)
 sim.initialise_data()
 
-key = prng_key(42)
+master_key = prng_key(42)
+prior_key, sim_key = master_key.split(2)
+
 prior = DipolePriorNP(mean_count_range=[np.log10(30e6), np.log10(40e6)])
 prior.change_kwarg('N', 'log10_n_initial_samples')
-theta = prior.sample(key, n_samples=args.sims)
+theta = prior.sample(prior_key, n_samples=args.sims)
 
 t0 = time.time()
-sims, masks = batch_simulate(theta, sim.generate_dipole, n_workers=args.workers)
+sims, masks = batch_simulate(
+    theta,
+    sim.generate_dipole,
+    n_workers=args.workers,
+    rng_key=sim_key
+)
 t1 = time.time()
 print(sims.dtype)
 
