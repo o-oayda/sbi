@@ -4,8 +4,6 @@ from dipolesbi.tools.configs import CatwiseConfig
 from dipolesbi.tools.utils import (
     Sample1DHistogram, ParameterMap, MultinomialSample2DHistogram
 )
-from torch.types import Tensor
-import torch
 from dipolesbi.tools.physics import (
     sample_spherical_points, aberrate_points, boost_magnitudes,
     rotation_matrices_for_dipole

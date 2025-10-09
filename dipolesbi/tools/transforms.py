@@ -1,7 +1,5 @@
 from typing import Literal, cast
 from numpy.typing import NDArray
-import torch
-from torch.utils.data import Dataset
 import numpy as np
 from dipolesbi.tools.bijectors import LatitudeBijector, UniformIntervalSigmoid
 from dipolesbi.tools.priors_jax import DipolePriorJax
@@ -654,13 +652,13 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
 
         return theta, abslogdet_per_batch
 
-class MapDataset(Dataset):
-    def __init__(self, D_all: torch.Tensor):
-        """
-        Interface for pytorch.
-
-        D_all: (N, Npix) torch tensor in NEST order.
-        """
-        self.D = D_all
-    def __len__(self): return self.D.shape[0]
-    def __getitem__(self, i): return self.D[i]
+# class MapDataset(Dataset):
+#     def __init__(self, D_all: torch.Tensor):
+#         """
+#         Interface for pytorch.
+#
+#         D_all: (N, Npix) torch tensor in NEST order.
+#         """
+#         self.D = D_all
+#     def __len__(self): return self.D.shape[0]
+#     def __getitem__(self, i): return self.D[i]

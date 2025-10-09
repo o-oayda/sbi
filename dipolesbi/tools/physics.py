@@ -1,5 +1,3 @@
-import torch
-from torch.types import Tensor
 from astropy.modeling.rotations import (
     RotateCelestial2Native, RotateNative2Celestial
 )
@@ -70,20 +68,20 @@ def sample_spherical_points(
     return longitudes_deg, latitudes_deg
 
 
-def sample_luminosity_function(
-        index: float,
-        minimum_flux: float,
-        n_fluxes: int
-    ) -> Tensor:
-    return minimum_flux * (1 - torch.rand(size=(n_fluxes,))) ** (- 1 / index)
+# def sample_luminosity_function(
+#         index: float,
+#         minimum_flux: float,
+#         n_fluxes: int
+#     ) -> Tensor:
+#     return minimum_flux * (1 - torch.rand(size=(n_fluxes,))) ** (- 1 / index)
 
 
-def sample_spectral_index(
-        n_points: int,
-        mean_index: float,
-        sigma_index: float
-    ) -> Tensor:
-    return torch.normal(mean=mean_index, std=sigma_index, size=(n_points,))
+# def sample_spectral_index(
+#         n_points: int,
+#         mean_index: float,
+#         sigma_index: float
+#     ) -> Tensor:
+#     return torch.normal(mean=mean_index, std=sigma_index, size=(n_points,))
 
 
 def lorentz_factor(observer_speed: float) -> float: 

@@ -1,10 +1,7 @@
-from typing import Callable, Optional, cast
+from typing import Callable, Optional
 import healpy as hp
 from joblib import Parallel, delayed
 import numpy as np
-import torch
-from torch import poisson
-from torch.types import Tensor
 from scipy.interpolate import interp1d
 import os
 import sys
@@ -14,7 +11,6 @@ from operator import itemgetter
 import dill as pickle
 from numpy.typing import DTypeLike, NDArray
 from collections import defaultdict
-import torch.nn.functional as F
 from jax import numpy as jnp
 import jax
 from dipolesbi.tools.np_rngkey import NPKey
@@ -258,12 +254,12 @@ def jax_cart2sph(
     phi[phi < 0] += 2 * jnp.pi
     return phi, theta
 
-def sample_unif(unif: Tensor, low_high: tuple[Tensor, Tensor]) -> Tensor:
-    '''
-    (b - a) * u + a
-    '''
-    low = low_high[0]; high = low_high[1]
-    return (high - low) * unif + low
+# def sample_unif(unif: Tensor, low_high: tuple[Tensor, Tensor]) -> Tensor:
+#     '''
+#     (b - a) * u + a
+#     '''
+#     low = low_high[0]; high = low_high[1]
+#     return (high - low) * unif + low
 
 def sample_unif_np(unif: NDArray, low: NDArray, high=NDArray) -> NDArray:
     '''
@@ -275,15 +271,15 @@ def unif_pdf(low_high: list[float]) -> float:
     low = low_high[0]; high = low_high[1]
     return 1 / (high - low)
 
-def sample_polar(unif: Tensor, low_high: tuple[Tensor, Tensor]) -> Tensor:
-    '''
-    :param unif: Uniform deviates on [0, 1).
-    :param low_high: Tuple of minimum and maximum polar angle (colatitude, radians).
-    :return: Samples on [0, pi).
-    '''
-    low = low_high[0]; high = low_high[1]
-    unif_theta = torch.arccos(torch.cos(low) + unif * (torch.cos(high) - torch.cos(low)))
-    return unif_theta
+# def sample_polar(unif: Tensor, low_high: tuple[Tensor, Tensor]) -> Tensor:
+#     '''
+#     :param unif: Uniform deviates on [0, 1).
+#     :param low_high: Tuple of minimum and maximum polar angle (colatitude, radians).
+#     :return: Samples on [0, pi).
+#     '''
+#     low = low_high[0]; high = low_high[1]
+#     unif_theta = torch.arccos(torch.cos(low) + unif * (torch.cos(high) - torch.cos(low)))
+#     return unif_theta
 
 def sample_polar_np(
         rngkey_or_unifs: NPKey | NDArray,
@@ -367,25 +363,25 @@ def polar_logpdf_jax(
 
     return jnp.where(support, log_density, -jnp.inf)
 
-def softplus_pos(x):  # avoids zero scales
-    return F.softplus(x) + 1e-8
+# def softplus_pos(x):  # avoids zero scales
+#     return F.softplus(x) + 1e-8
 
-def dipole_signal(Theta, nside=32, device='cpu'):
-    Nbar, D, phi, theta = torch.as_tensor(Theta, device=device, dtype=torch.float64)
-    pixel_indices = torch.arange(hp.nside2npix(nside))
-    pixel_vectors = torch.as_tensor(
-        torch.stack(
-            hp.pix2vec(nside, pixel_indices, nest=True)
-        ),
-        device=device
-    )
-    dipole_vector = D * spherical_to_cartesian((theta, phi), device=device)
-    poisson_mean = Nbar * (1 + torch.einsum('i,i...', dipole_vector, pixel_vectors))
-    return poisson_mean
+# def dipole_signal(Theta, nside=32, device='cpu'):
+#     Nbar, D, phi, theta = torch.as_tensor(Theta, device=device, dtype=torch.float64)
+#     pixel_indices = torch.arange(hp.nside2npix(nside))
+#     pixel_vectors = torch.as_tensor(
+#         torch.stack(
+#             hp.pix2vec(nside, pixel_indices, nest=True)
+#         ),
+#         device=device
+#     )
+#     dipole_vector = D * spherical_to_cartesian((theta, phi), device=device)
+#     poisson_mean = Nbar * (1 + torch.einsum('i,i...', dipole_vector, pixel_vectors))
+#     return poisson_mean
 
-def simulation(Theta, nside=32, device='cpu'):
-    poisson_mean = dipole_signal(Theta, nside, device)
-    return poisson(poisson_mean)
+# def simulation(Theta, nside=32, device='cpu'):
+#     poisson_mean = dipole_signal(Theta, nside, device)
+#     return poisson(poisson_mean)
 
 def enforce_batchwise_input(Theta: NDArray, ndim: int) -> NDArray:
         if Theta.shape == (ndim,):
@@ -421,7 +417,7 @@ def convert_to_l_dash(l):
         else:
             print('No you should not be here!')
 
-def sigma_to_prob2D(sigma: list) -> Tensor:
+def sigma_to_prob2D(sigma: list) -> NDArray:
     '''Convert sigma significance to mass enclosed inside a 2D normal
     distribution using the explicit formula for a 2D normal.
     :param sigma: the levels of significance
@@ -429,9 +425,9 @@ def sigma_to_prob2D(sigma: list) -> Tensor:
     return 1.0 - np.exp(-0.5 * np.asarray(sigma)**2)
 
 def compute_2D_contours(
-        P_xy: Tensor,
+        P_xy: NDArray,
         contour_levels: list[float]
-) -> tuple[Tensor]:
+) -> tuple[NDArray, NDArray, NDArray]:
     '''
     Compute contour heights corresponding to sigma levels of probability
     density by creating a mapping (interpolation function) from the CDF
@@ -454,60 +450,60 @@ def compute_2D_contours(
     t_contours = np.flip(f(sigma_to_prob2D(contour_levels)))
     return t_contours, P_levels, P_integral
 
-def samples_to_hpmap(
-        phi: Tensor,
-        theta: Tensor,
-        lonlat: bool = False,
-        nside: int = 64,
-        smooth: None | float = None
-    ) -> Tensor:
-    '''
-    Turn numerical samples in phi-theta space to a healpy map, in the native
-    coords of phi theta, defining the probability of a sample (phi_i, theta_i)
-    lying in a given pixel.
-
-    :param phi: vector of phi samples in spherical coordinates: [0, 2pi)
-    :param theta: vector of theta samples in spherical coordinates: [0, pi]
-    :param lonlat: if True, phi ~ [0, 360] and theta ~ [-90, 90]; else,
-        phi ~ [0, 2pi] and theta ~ [0, pi]
-    :param weights: weights of each samples, defaults to None
-    :param nside: nside (resolution) of binning of nested samples, i.e. the
-        resolution of the posterior probability map
-    '''
-    # note: labels flip where lonlat=True... thanks healpy
-    if lonlat:
-        sample_pixel_indices = hp.ang2pix(
-            nside=nside, theta=phi, phi=theta, lonlat=lonlat
-        )
-    else:
-        sample_pixel_indices = hp.ang2pix(
-            nside=nside, theta=theta, phi=phi
-        )
-    sample_count_map = np.bincount(
-        sample_pixel_indices, minlength=hp.nside2npix(nside)
-    )
-    
-    # convert count to prob density
-    map_total = np.sum(sample_count_map)
-    sample_pdensity_map = sample_count_map / map_total
-    
-    if smooth is not None:
-        # healpy's smooth function (in samples_to_hpmap) works in sph
-        # harmonic space, and produces a small number of very small
-        # negative values; the sum is also not preserved.
-        # correct by replacing negative values with 0 and renormalise.
-        smooth_map = hp.sphtfunc.smoothing(sample_pdensity_map, sigma=smooth)
-        smooth_map[smooth_map < 0] = 0
-        smooth_map /= np.sum(smooth_map)
-        return smooth_map
-    else:
-        return sample_pdensity_map
+# def samples_to_hpmap(
+#         phi: Tensor,
+#         theta: Tensor,
+#         lonlat: bool = False,
+#         nside: int = 64,
+#         smooth: None | float = None
+#     ) -> Tensor:
+#     '''
+#     Turn numerical samples in phi-theta space to a healpy map, in the native
+#     coords of phi theta, defining the probability of a sample (phi_i, theta_i)
+#     lying in a given pixel.
+#
+#     :param phi: vector of phi samples in spherical coordinates: [0, 2pi)
+#     :param theta: vector of theta samples in spherical coordinates: [0, pi]
+#     :param lonlat: if True, phi ~ [0, 360] and theta ~ [-90, 90]; else,
+#         phi ~ [0, 2pi] and theta ~ [0, pi]
+#     :param weights: weights of each samples, defaults to None
+#     :param nside: nside (resolution) of binning of nested samples, i.e. the
+#         resolution of the posterior probability map
+#     '''
+#     # note: labels flip where lonlat=True... thanks healpy
+#     if lonlat:
+#         sample_pixel_indices = hp.ang2pix(
+#             nside=nside, theta=phi, phi=theta, lonlat=lonlat
+#         )
+#     else:
+#         sample_pixel_indices = hp.ang2pix(
+#             nside=nside, theta=theta, phi=phi
+#         )
+#     sample_count_map = np.bincount(
+#         sample_pixel_indices, minlength=hp.nside2npix(nside)
+#     )
+#
+#     # convert count to prob density
+#     map_total = np.sum(sample_count_map)
+#     sample_pdensity_map = sample_count_map / map_total
+#
+#     if smooth is not None:
+#         # healpy's smooth function (in samples_to_hpmap) works in sph
+#         # harmonic space, and produces a small number of very small
+#         # negative values; the sum is also not preserved.
+#         # correct by replacing negative values with 0 and renormalise.
+#         smooth_map = hp.sphtfunc.smoothing(sample_pdensity_map, sigma=smooth)
+#         smooth_map[smooth_map < 0] = 0
+#         smooth_map /= np.sum(smooth_map)
+#         return smooth_map
+#     else:
+#         return sample_pdensity_map
 
 def omega_to_theta(omega: float) -> np.float64:
     '''
     Convert solid angle in steradins to theta in radians for
     a cone section of a sphere.
-    
+
     :param omega: solid angle in steradians.
     '''
     return np.arccos( 1 - omega / (2 * np.pi) )
@@ -887,23 +883,23 @@ class MultinomialSample2DHistogram:
             'max_probability': np.max(self.probs_flat)
         }
 
-class Samples:
-    def __init__(self, samples: Tensor | NDArray) -> None:
-        if type(samples) is NDArray:
-            self.samples = torch.as_tensor(samples)
-        else:
-            self.samples = samples
-        self.total_samples = samples.shape[0]
-
-    def sample(self, num_simulations: tuple[int]) -> Tensor:
-        '''
-        :param num_simulations: e.g. (5,).
-        '''
-        indices = torch.as_tensor(
-            np.random.choice(
-                self.total_samples,
-                size=num_simulations[0],
-                replace=True
-            )
-        )
-        return self.samples[indices]
+# class Samples:
+#     def __init__(self, samples: Tensor | NDArray) -> None:
+#         if type(samples) is NDArray:
+#             self.samples = torch.as_tensor(samples)
+#         else:
+#             self.samples = samples
+#         self.total_samples = samples.shape[0]
+#
+#     def sample(self, num_simulations: tuple[int]) -> Tensor:
+#         '''
+#         :param num_simulations: e.g. (5,).
+#         '''
+#         indices = torch.as_tensor(
+#             np.random.choice(
+#                 self.total_samples,
+#                 size=num_simulations[0],
+#                 replace=True
+#             )
+#         )
+#         return self.samples[indices]
