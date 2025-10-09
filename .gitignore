@@ -16,15 +16,16 @@ exp_out/*
 nice_rig/*
 benchmark/*
 
-!dipolesbi/catwise/0p5_17p0/data/**
-!dipolesbi/catwise/0p7_16p8/data/**
-!dipolesbi/catwise/0p0_17p2/data/**
-!dipolesbi/catwise/alpha_colors.fits
-
-*.png
 *.pdf
 *.log
 *.txt
 *.npz
 *.csv
 *.npy
+
+!dipolesbi/catwise/0p5_17p0/data/**
+!dipolesbi/catwise/0p7_16p8/data/**
+!dipolesbi/catwise/0p0_17p2/data/**
+!dipolesbi/catwise/alpha_colors.fits
+
+*.png
