@@ -646,13 +646,13 @@ class Catwise:
         if not os.path.exists(file_path):
             os.makedirs(file_path)
         
-        torch.save(
-            torch.as_tensor(w1_covmap),
-            f'{file_path}w1_coverage_map.pt'
+        np.save(
+            f'{file_path}w1_coverage_map.npy',
+            w1_covmap.astype(np.float32, copy=False)
         )
-        torch.save(
-            torch.as_tensor(w2_covmap),
-            f'{file_path}w2_coverage_map.pt'
+        np.save(
+            f'{file_path}w2_coverage_map.npy',
+            w2_covmap.astype(np.float32, copy=False)
         )
         print(f'Saved coverage maps at {file_path}.')
 
@@ -840,13 +840,15 @@ class Catwise:
         path = f'dipolesbi/catwise/{self.cut_path}/data/coverage_map/'
 
         # loads things back into numpy
-        self.w1cov_map: NDArray[np.float32] = torch.load(
-            f'{path}w1_coverage_map.pt'
-        ).numpy().astype(np.float32)
+        self.w1cov_map: NDArray[np.float32] = np.load(
+            f'{path}w1_coverage_map.npy',
+            allow_pickle=False
+        ).astype(np.float32, copy=False)
 
-        self.w2cov_map: NDArray[np.float32] = torch.load(
-            f'{path}w2_coverage_map.pt'
-        ).numpy().astype(np.float32)
+        self.w2cov_map: NDArray[np.float32] = np.load(
+            f'{path}w2_coverage_map.npy',
+            allow_pickle=False
+        ).astype(np.float32, copy=False)
 
         self.log_w1cov_map = np.log10(self.w1cov_map).astype(self.dtype)
         self.log_w2cov_map = np.log10(self.w2cov_map).astype(self.dtype)
@@ -898,17 +900,17 @@ class Catwise:
         if not os.path.exists(file_path):
             os.makedirs(file_path)
         
-        torch.save(
-            torch.as_tensor(w1_error_map),
-            f'{file_path}w1_error_map.pt'
+        np.save(
+            f'{file_path}w1_error_map.npy',
+            w1_error_map.astype(np.float32, copy=False)
         )
-        torch.save(
-            torch.as_tensor(w2_error_map),
-            f'{file_path}w2_error_map.pt'
+        np.save(
+            f'{file_path}w2_error_map.npy',
+            w2_error_map.astype(np.float32, copy=False)
         )
-        torch.save(
-            torch.as_tensor(w12_error_map),
-            f'{file_path}w12_error_map.pt'
+        np.save(
+            f'{file_path}w12_error_map.npy',
+            w12_error_map.astype(np.float32, copy=False)
         )
         with open(f'{file_path}w1_error_dict.pt', 'wb') as handle:
             pickle.dump(w1_error_dict, handle)
@@ -967,7 +969,10 @@ class Catwise:
         )
         sampler.save_data(f'dipolesbi/catwise/{self.cut_path}/data/spectral_index/')
     
-    def resample_catwise_magnitudes(self, n_samples: int) -> tuple[Tensor, Tensor]:
+    def resample_catwise_magnitudes(
+            self,
+            n_samples: int
+    ) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
         if not self.catalogue_is_loaded:
             self.load_catalogue()
         
@@ -980,9 +985,12 @@ class Catwise:
         w1_resampled = w1_real[resampled_indexes].astype('float32')
         w2_resampled = w2_real[resampled_indexes].astype('float32')
         
-        return torch.as_tensor(w1_resampled), torch.as_tensor(w2_resampled)
+        return w1_resampled, w2_resampled
     
-    def resample_colour_mag_distribution(self, n_samples: int) -> tuple[Tensor, Tensor]:
+    def resample_colour_mag_distribution(
+            self,
+            n_samples: int
+    ) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
         if not self.catalogue_is_loaded:
             self.load_catalogue()
         
@@ -991,7 +999,7 @@ class Catwise:
         w1_resampled = w1_real[resampled_indexes].astype('float32')
         w12_resampled = w12_real[resampled_indexes].astype('float32')
 
-        return torch.as_tensor(w1_resampled), torch.as_tensor(w12_resampled)
+        return w1_resampled, w12_resampled
 
     def sample_magnitudes(
             self,
