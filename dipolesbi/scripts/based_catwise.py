@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from functools import partial
 from typing import Optional
 from numpy.typing import NDArray
@@ -8,8 +9,11 @@ from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.priors_np import DipolePriorNP
 from dipolesbi.tools.ui import MultiRoundInfererUI
 import argparse
+from dataclasses import asdict
 import numpy as np
+from joblib import parallel_backend
 from dipolesbi.tools.utils import batch_simulate
+from dipolesbi.tools.remote_sim import remote_generate_dipole
 
 
 if __name__ == '__main__':
@@ -60,6 +64,18 @@ if __name__ == '__main__':
         action='store_true',
         help='Disable the Rich multi-round progress UI.'
     )
+    parser.add_argument(
+        '--simulation_backend',
+        choices=['joblib', 'dask'],
+        default='joblib',
+        help='Choose how simulations are dispatched; defaults to local joblib workers.'
+    )
+    parser.add_argument(
+        '--dask_scheduler',
+        type=str,
+        default=None,
+        help='Optional Dask scheduler address (e.g. "tcp://head:8786") when using --simulation_backend dask.'
+    )
     args = parser.parse_args()
 
     raw_modes = args.mode or []
@@ -76,6 +92,21 @@ if __name__ == '__main__':
     N_ROUNDS = 10
     DOWNSCALE_NSIDE = args.downscale_nside
     ORIGINAL_NSIDE = 64
+    SIM_BACKEND = args.simulation_backend
+    DASK_SCHEDULER = args.dask_scheduler
+
+    if SIM_BACKEND != 'dask' and DASK_SCHEDULER is not None:
+        parser.error(
+            '--dask_scheduler is only valid when using --simulation_backend dask.'
+        )
+
+    def _parallel_backend_context():
+        if SIM_BACKEND == 'dask':
+            backend_kwargs = {}
+            if DASK_SCHEDULER:
+                backend_kwargs['scheduler_host'] = DASK_SCHEDULER
+            return parallel_backend('dask', **backend_kwargs)
+        return nullcontext()
 
     def simulator_wrapper(
             rng_key: Optional[NPKey] = None,
@@ -185,20 +216,6 @@ if __name__ == '__main__':
             raise KeyError(f'Model {args.model} not recognised.')
 
 
-    def model_sim_wrapper(
-            npkey: NPKey,
-            params: dict[str, NDArray],
-            noise: bool = True,
-            ui: Optional[MultiRoundInfererUI] = None
-    ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
-        return batch_simulate(
-            params,
-            simulator,
-            n_workers=N_WORKERS,
-            ui=ui,
-            rng_key=npkey
-        )
-
     prior_jax = prior.to_jax()
 
     for mode in modes:
@@ -269,6 +286,43 @@ if __name__ == '__main__':
 
         model = Catwise(config)
         model.initialise_data()
+
+        if SIM_BACKEND == 'dask':
+            config_payload = asdict(config)
+
+            def _make_remote_sim_callable(base_callable):
+                fixed_kwargs: dict[str, object] = {}
+                current = base_callable
+                while isinstance(current, partial):
+                    if current.keywords:
+                        fixed_kwargs = {**current.keywords, **fixed_kwargs}
+                    current = current.func
+
+                def _remote_sim_callable(**kwargs):
+                    call_kwargs = {**fixed_kwargs, **kwargs}
+                    rng_key = call_kwargs.pop('rng_key', None)
+                    return remote_generate_dipole(config_payload, call_kwargs, rng_key)
+
+                return _remote_sim_callable
+
+            sim_callable = _make_remote_sim_callable(simulator)
+        else:
+            sim_callable = simulator
+
+        def model_sim_wrapper(
+                npkey: NPKey,
+                params: dict[str, NDArray],
+                noise: bool = True,
+                ui: Optional[MultiRoundInfererUI] = None
+        ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
+            with _parallel_backend_context():
+                return batch_simulate(
+                    params,
+                    sim_callable,
+                    n_workers=N_WORKERS,
+                    ui=ui,
+                    rng_key=npkey
+                )
 
         x0, mask = model.make_real_sample()
 
