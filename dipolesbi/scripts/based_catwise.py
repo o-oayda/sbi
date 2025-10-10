@@ -76,6 +76,12 @@ if __name__ == '__main__':
         default=None,
         help='Optional Dask scheduler address (e.g. "tcp://head:8786") when using --simulation_backend dask.'
     )
+    parser.add_argument(
+        '--expected_dask_workers',
+        type=int,
+        default=None,
+        help='Optional hint for how many Dask workers to wait for before starting simulations.'
+    )
     args = parser.parse_args()
 
     raw_modes = args.mode or []
@@ -96,6 +102,9 @@ if __name__ == '__main__':
     DASK_SCHEDULER = args.dask_scheduler
     dask_client = None
     warmed_configs = set()
+    EXPECTED_DASK_WORKERS = (
+        args.expected_dask_workers if args.expected_dask_workers and args.expected_dask_workers > 0 else None
+    )
 
     if SIM_BACKEND != 'dask' and DASK_SCHEDULER is not None:
         parser.error(
@@ -112,6 +121,14 @@ if __name__ == '__main__':
             dask_client = get_client()
         except ValueError:
             dask_client = Client(DASK_SCHEDULER) if DASK_SCHEDULER else Client()
+        try:
+            target_workers = EXPECTED_DASK_WORKERS or 1
+            dask_client.wait_for_workers(target_workers, timeout=120)
+        except TimeoutError:
+            print(
+                'Warning: Timed out waiting for the expected number of Dask workers; '
+                'continuing anyway.'
+            )
 
     def _parallel_backend_context():
         if SIM_BACKEND == 'dask':
@@ -305,8 +322,14 @@ if __name__ == '__main__':
             if dask_client is not None:
                 config_key = tuple(sorted(config_payload.items()))
                 if config_key not in warmed_configs:
-                    dask_client.run(ensure_worker_model, config_payload)
-                    warmed_configs.add(config_key)
+                    try:
+                        dask_client.run(ensure_worker_model, config_payload)
+                        warmed_configs.add(config_key)
+                    except OSError as exc:
+                        print(
+                            'Warning: Failed to warm Dask workers for Catwise config; '
+                            f'continuing without preloading ({exc}).'
+                        )
 
             def _make_remote_sim_callable(base_callable):
                 fixed_kwargs: dict[str, object] = {}
