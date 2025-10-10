@@ -1,4 +1,4 @@
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 import healpy as hp
 from joblib import Parallel, delayed
 import numpy as np
@@ -24,7 +24,8 @@ def batch_simulate(
         model_callable: Callable[..., tuple[NDArray, NDArray]],
         n_workers: int,
         ui: Optional[MultiRoundInfererUI] = None,
-        rng_key: Optional[NPKey] = None
+        rng_key: Optional[NPKey] = None,
+        parallel_kwargs: Optional[dict[str, Any]] = None
 ) -> tuple[NDArray, NDArray]:
     theta_np = {key: np.asarray(val) for key, val in theta.items()}
 
@@ -71,7 +72,8 @@ def batch_simulate(
             call_kwargs['rng_key'] = key
         return idx, model_callable(**call_kwargs)
 
-    iterator = Parallel(return_as='generator', n_jobs=n_workers)(
+    parallel_opts = parallel_kwargs or {}
+    iterator = Parallel(return_as='generator', n_jobs=n_workers, **parallel_opts)(
         delayed(_run_single)(idx, key, kwargs)
         for idx, (key, kwargs) in enumerate(zip(sim_keys, params_per_sim))
     )

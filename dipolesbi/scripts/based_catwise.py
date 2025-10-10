@@ -102,7 +102,7 @@ if __name__ == '__main__':
 
     def _parallel_backend_context():
         if SIM_BACKEND == 'dask':
-            backend_kwargs = {}
+            backend_kwargs = {'batch_size': 1}
             if DASK_SCHEDULER:
                 backend_kwargs['scheduler_host'] = DASK_SCHEDULER
             return parallel_backend('dask', **backend_kwargs)
@@ -306,8 +306,10 @@ if __name__ == '__main__':
                 return _remote_sim_callable
 
             sim_callable = _make_remote_sim_callable(simulator)
+            parallel_opts = {'batch_size': 1}
         else:
             sim_callable = simulator
+            parallel_opts = None
 
         def model_sim_wrapper(
                 npkey: NPKey,
@@ -321,7 +323,8 @@ if __name__ == '__main__':
                     sim_callable,
                     n_workers=N_WORKERS,
                     ui=ui,
-                    rng_key=npkey
+                    rng_key=npkey,
+                    parallel_kwargs=parallel_opts
                 )
 
         x0, mask = model.make_real_sample()
