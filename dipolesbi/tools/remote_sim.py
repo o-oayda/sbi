@@ -53,3 +53,12 @@ def remote_generate_dipole(
                 'model_config': config_dict,
             }
             raise ValueError(f'remote_generate_dipole failed: {debug}') from exc
+
+
+def ensure_worker_model(config_dict: Dict[str, Any]) -> None:
+    """
+    Ensure the Catwise model for ``config_dict`` is initialised on this worker.
+    Call via ``client.run`` to pre-warm workers so heavy setup I/O happens
+    outside latency-sensitive joblib tasks.
+    """
+    _get_model(config_dict)

@@ -13,7 +13,7 @@ from dataclasses import asdict
 import numpy as np
 from joblib import parallel_backend
 from dipolesbi.tools.utils import batch_simulate
-from dipolesbi.tools.remote_sim import remote_generate_dipole
+from dipolesbi.tools.remote_sim import ensure_worker_model, remote_generate_dipole
 
 
 if __name__ == '__main__':
@@ -94,15 +94,28 @@ if __name__ == '__main__':
     ORIGINAL_NSIDE = 64
     SIM_BACKEND = args.simulation_backend
     DASK_SCHEDULER = args.dask_scheduler
+    dask_client = None
+    warmed_configs = set()
 
     if SIM_BACKEND != 'dask' and DASK_SCHEDULER is not None:
         parser.error(
             '--dask_scheduler is only valid when using --simulation_backend dask.'
         )
+    if SIM_BACKEND == 'dask':
+        try:
+            from dask.distributed import Client, get_client
+        except ImportError as exc:
+            parser.error(
+                'Using --simulation_backend dask requires dask.distributed to be installed.'
+            )
+        try:
+            dask_client = get_client()
+        except ValueError:
+            dask_client = Client(DASK_SCHEDULER) if DASK_SCHEDULER else Client()
 
     def _parallel_backend_context():
         if SIM_BACKEND == 'dask':
-            backend_kwargs = {'batch_size': 1}
+            backend_kwargs = {}
             if DASK_SCHEDULER:
                 backend_kwargs['scheduler_host'] = DASK_SCHEDULER
             return parallel_backend('dask', **backend_kwargs)
@@ -289,6 +302,11 @@ if __name__ == '__main__':
 
         if SIM_BACKEND == 'dask':
             config_payload = asdict(config)
+            if dask_client is not None:
+                config_key = tuple(sorted(config_payload.items()))
+                if config_key not in warmed_configs:
+                    dask_client.run(ensure_worker_model, config_payload)
+                    warmed_configs.add(config_key)
 
             def _make_remote_sim_callable(base_callable):
                 fixed_kwargs: dict[str, object] = {}
