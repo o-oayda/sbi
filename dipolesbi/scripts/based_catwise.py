@@ -95,7 +95,7 @@ if __name__ == '__main__':
     N_WORKERS = args.n_workers
     SAVE_DIR = args.out_dir
     USE_FLOAT32 = False
-    N_ROUNDS = 10
+    N_ROUNDS = 15
     DOWNSCALE_NSIDE = args.downscale_nside
     ORIGINAL_NSIDE = 64
     SIM_BACKEND = args.simulation_backend

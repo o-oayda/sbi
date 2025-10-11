@@ -53,6 +53,13 @@ def batch_simulate(
 
     sim_keys: list[Optional[NPKey]]
     if rng_key is not None:
+        if not isinstance(rng_key, NPKey):
+            try:
+                rng_key = NPKey.from_jax(rng_key)
+            except Exception as exc:
+                raise TypeError(
+                    f'Expected NPKey-compatible rng_key, got {type(rng_key)}'
+                ) from exc
         # Fold the base key with the simulation index so each task gets a unique,
         # order-independent seed even when joblib reorders execution.
         sim_keys = [rng_key.fold_in(idx) for idx in range(n_simulations)]
