@@ -133,6 +133,12 @@ def _build_parser() -> argparse.ArgumentParser:
         nargs="+",
         help="Legend labels corresponding to each experiment directory.",
     )
+    parser.add_argument(
+        "--logz-average-start",
+        type=int,
+        default=None,
+        help="Round index from which to compute weighted logZ averages (applies per run).",
+    )
     return parser
 
 
@@ -217,6 +223,50 @@ def main(argv: list[str] | None = None) -> int:
             console.print(f"logZ ({label}) = {logz_mean:.4f} ± {logz_err:.4f}")
         else:
             console.print(f"logZ ({label}) = {logz_mean:.4f} (uncertainty unavailable)")
+
+        if args.logz_average_start is not None:
+            start_round = args.logz_average_start
+            available_rounds = sorted(iface._repository.available_rounds())
+            selected_rounds = [r for r in available_rounds if r >= start_round]
+            if not selected_rounds:
+                console.print(f"[yellow]No rounds ≥ {start_round} found for {label}; skipping logZ average.[/yellow]")
+            else:
+                table = Table(title=f"logZ per round (≥ {start_round}) for {label}")
+                table.add_column("Round", justify="right")
+                table.add_column("logZ", justify="right")
+                table.add_column("σ", justify="right")
+
+                round_values: list[tuple[float, float | None]] = []
+                for r in selected_rounds:
+                    round_samples = iface.load_round(round_id=r, show_table=False)
+                    z_mean, z_err = round_samples.log_evidence()
+                    round_values.append((z_mean, z_err))
+                    err_display = f"{z_err:.4f}" if z_err is not None else "N/A"
+                    table.add_row(str(r), f"{z_mean:.4f}", err_display)
+
+                console.print(table)
+
+                if not round_values:
+                    console.print("[yellow]No valid rounds for logZ averaging.[/yellow]")
+                elif len(round_values) == 1:
+                    z_mean, z_err = round_values[0]
+                    err_display = z_err if (z_err is not None and np.isfinite(z_err)) else 0.0
+                    console.print(
+                        f"[cyan]Average logZ ({label}): {z_mean:.4f} ± {err_display:.4f}[/cyan]"
+                    )
+                else:
+                    rng = np.random.default_rng(12345)
+                    values = np.array([z for z, _ in round_values])
+                    boot_means = []
+                    for _ in range(2000):
+                        indices = rng.choice(len(values), size=len(values), replace=True)
+                        boot_means.append(values[indices].mean())
+                    boot_means = np.asarray(boot_means)
+                    avg = float(boot_means.mean())
+                    std = float(boot_means.std(ddof=1))
+                    console.print(
+                        f"[cyan]Bootstrap average logZ ({label}): {avg:.4f} ± {std:.4f}[/cyan]"
+                    )
 
     if not samples_list:
         console.print("[red]No samples loaded.[/red]")
