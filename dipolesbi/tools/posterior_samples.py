@@ -23,7 +23,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 from dipolesbi.tools.configs import CatwiseConfig, ModelConfig
 from dipolesbi.catwise.maps import Catwise
-from dipolesbi.tools.utils import HidePrints, batch_simulate
+from dipolesbi.tools.utils import HidePrints, batch_simulate, sigma_to_prob1D
 from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.plotting import sky_probability
 from dipolesbi.tools.maps import average_smooth_map
@@ -478,6 +478,7 @@ class PosteriorSamplesInterface:
         markers: Sequence[float] | None = None,
         filled: bool = True,
         show_table: bool = True,
+        contour_sigmas: Sequence[float] | None = None,
         **triangle_kwargs: Any,
     ) -> Path:
         samples = self.load_round(round_id=round_id, show_table=show_table)
@@ -488,6 +489,7 @@ class PosteriorSamplesInterface:
             weight_column=weight_column,
             markers=markers,
             filled=filled,
+            contour_sigmas=contour_sigmas,
             **triangle_kwargs,
         )
 
@@ -610,10 +612,16 @@ class PosteriorSamplesInterface:
 
         truth_star = None
         if truth_deg is not None:
-            lon_deg, lat_deg = truth_deg
-            phi_rad = np.deg2rad(lon_deg)
-            lat_rad = np.deg2rad(lat_deg)
-            truth_star = [phi_rad, lat_rad]
+            if isinstance(truth_deg, (list, tuple)) and truth_deg and isinstance(truth_deg[0], (list, tuple)):
+                truth_star = [
+                    [np.deg2rad(pair[0]), np.deg2rad(pair[1])]
+                    for pair in truth_deg  # type: ignore[index]
+                ]
+            else:
+                lon_deg, lat_deg = truth_deg  # type: ignore[misc]
+                phi_rad = np.deg2rad(lon_deg)
+                lat_rad = np.deg2rad(lat_deg)
+                truth_star = [phi_rad, lat_rad]
 
         destination: Path | None
         if output_path is not None:
@@ -650,6 +658,7 @@ def save_corner_plot(
     weight_column: str = "weights",
     markers: Sequence[float] | None = None,
     filled: bool = True,
+    contour_sigmas: Sequence[float] | None = None,
     **triangle_kwargs: Any,
 ) -> Path:
     param_cols = list(param_columns) if param_columns is not None else samples.parameter_columns()
@@ -665,6 +674,19 @@ def save_corner_plot(
             )
             raise ValueError(msg)
 
+    contour_probs: list[float] | None = None
+    if contour_sigmas is not None:
+        sigma_array = np.asarray(list(contour_sigmas), dtype=np.float64)
+        if sigma_array.size == 0:
+            raise ValueError("contour_sigmas requires at least one entry.")
+        if not np.all(np.isfinite(sigma_array)):
+            raise ValueError("contour_sigmas must contain finite values.")
+        if np.any(sigma_array < 0):
+            raise ValueError("contour_sigmas must be non-negative.")
+        sigma_sorted = np.sort(sigma_array)
+        contour_probs = sigma_to_prob1D(sigma_sorted.tolist()).tolist()
+        mc_samples.updateSettings({"contours": contour_probs})
+
     plot_kwargs: dict[str, Any] = dict(triangle_kwargs)
     if "filled" not in plot_kwargs:
         plot_kwargs["filled"] = filled
@@ -672,6 +694,8 @@ def save_corner_plot(
         plot_kwargs["markers"] = marker_list
 
     plotter = plots.get_subplot_plotter()
+    if contour_probs is not None:
+        plotter.settings.num_plot_contours = len(contour_probs)
     plotter.triangle_plot([mc_samples], **plot_kwargs)
 
     destination = Path(output_path).expanduser()

@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 from getdist import plots
 
 from .posterior_samples import PosteriorSamplesInterface, PosteriorSamples
+from .utils import sigma_to_prob1D
+from .plotting import marker_cycle
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -56,6 +58,13 @@ def _build_parser() -> argparse.ArgumentParser:
         nargs="+",
         default=None,
         help="Optional marker values (e.g. ground truth) for the corner plot.",
+    )
+    parser.add_argument(
+        "--corner-sigmas",
+        type=float,
+        nargs="+",
+        default=None,
+        help="2D Gaussian sigma levels (e.g. 1 2 3) for corner plot contours.",
     )
     parser.add_argument(
         "--corner-unfilled",
@@ -123,10 +132,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sky-truth",
         type=float,
-        nargs=2,
-        metavar=("LON", "LAT"),
+        nargs="*",
         default=None,
-        help="Optional true dipole longitude/latitude in degrees for annotation.",
+        help="Optional true dipole directions in degrees as pairs LON LAT (multiple pairs allowed).",
+    )
+    parser.add_argument(
+        "--sky-truth-labels",
+        nargs="*",
+        default=None,
+        help="Legend labels for each sky truth marker (must match number of pairs).",
     )
     parser.add_argument(
         "--legend",
@@ -302,12 +316,29 @@ def main(argv: list[str] | None = None) -> int:
 
         plotter = plots.get_subplot_plotter()
         plotter.settings.progress = False
+        triangle_kwargs: dict[str, object] = {}
+        if args.corner_markers is not None:
+            triangle_kwargs["markers"] = args.corner_markers
+        contour_probs: list[float] | None = None
+        if args.corner_sigmas is not None:
+            sigma_array = np.asarray(args.corner_sigmas, dtype=np.float64)
+            if sigma_array.size == 0:
+                raise ValueError("--corner-sigmas requires at least one value.")
+            if not np.all(np.isfinite(sigma_array)):
+                raise ValueError("--corner-sigmas must contain finite values.")
+            if np.any(sigma_array < 0):
+                raise ValueError("--corner-sigmas must be non-negative.")
+            sigma_sorted = np.sort(sigma_array)
+            contour_probs = sigma_to_prob1D(sigma_sorted.tolist()).tolist()
+            for mc in mc_samples_list:
+                mc.updateSettings({"contours": contour_probs})
+            plotter.settings.num_plot_contours = len(contour_probs)
         plotter.triangle_plot(
             mc_samples_list,
             params=param_columns,
             filled=filled,
             legend_labels=labels,
-            markers=args.corner_markers,
+            **triangle_kwargs,
         )
         corner_path = Path(args.corner).expanduser()
         corner_path.parent.mkdir(parents=True, exist_ok=True)
@@ -344,7 +375,6 @@ def main(argv: list[str] | None = None) -> int:
                         console.print(f"  - {path}")
     if args.sky_prob is not None:
         try:
-            truth_tuple = tuple(args.sky_truth) if args.sky_truth is not None else None
             base_cycle = ['cornflowerblue', 'tomato']
             default_cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", [])
             remaining = [c for c in default_cycle if c not in base_cycle]
@@ -354,11 +384,25 @@ def main(argv: list[str] | None = None) -> int:
             legend_handles = []
             from matplotlib.lines import Line2D
 
+            truth_pairs: list[tuple[float, float]] = []
+            truth_labels: list[str] = []
+            if args.sky_truth:
+                if len(args.sky_truth) % 2 != 0:
+                    raise ValueError("--sky-truth must be supplied as lon/lat pairs.")
+                it = iter(args.sky_truth)
+                truth_pairs = [(float(lon), float(lat)) for lon, lat in zip(it, it)]
+                if args.sky_truth_labels:
+                    if len(args.sky_truth_labels) != len(truth_pairs):
+                        raise ValueError("--sky-truth-labels must match number of --sky-truth pairs.")
+                    truth_labels = list(args.sky_truth_labels)
+                else:
+                    truth_labels = [f"truth {i+1}" for i in range(len(truth_pairs))]
+
             for idx, (iface, s, label) in enumerate(zip(interfaces, samples_list, labels)):
                 color = color_cycle[idx % len(color_cycle)]
                 disable_mesh = idx > 0
                 no_axes = idx > 0
-                truth = truth_tuple if idx == 0 else None
+                truth = truth_pairs if idx == 0 else None
                 iface.plot_sky_probability(
                     output_path=None,
                     round_id=s.round_id,
@@ -375,8 +419,20 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 legend_handles.append(Line2D([0], [0], color=color, lw=2, label=label))
 
+            for idx, truth_label in enumerate(truth_labels):
+                legend_handles.append(
+                    Line2D(
+                        [0],
+                        [0],
+                        color="black",
+                        marker=marker_cycle[idx % len(marker_cycle)],
+                        linestyle="None",
+                        label=truth_label,
+                    )
+                )
+
             if legend_handles:
-                plt.legend(handles=legend_handles, loc="lower left")
+                plt.legend(handles=legend_handles, loc="lower right")
 
             sky_path = Path(args.sky_prob).expanduser()
             sky_path.parent.mkdir(parents=True, exist_ok=True)

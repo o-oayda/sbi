@@ -3,6 +3,7 @@ import healpy as hp
 from joblib import Parallel, delayed
 import numpy as np
 from scipy.interpolate import interp1d
+import math
 import os
 import sys
 from astropy.coordinates import SkyCoord
@@ -432,6 +433,12 @@ def sigma_to_prob2D(sigma: list) -> NDArray:
     :param sigma: the levels of significance
     :returns: the probability enclosed within each significance level'''
     return 1.0 - np.exp(-0.5 * np.asarray(sigma)**2)
+
+def sigma_to_prob1D(sigma: list) -> NDArray:
+    """Convert Gaussian sigma levels to enclosed probability for a 1D normal."""
+    sigma_arr = np.asarray(sigma, dtype=np.float64)
+    sqrt2 = np.sqrt(2.0)
+    return np.asarray([math.erf(val / sqrt2) for val in sigma_arr], dtype=np.float64)
 
 def compute_2D_contours(
         P_xy: NDArray,

@@ -9,6 +9,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from typing import Callable
 
+
+marker_cycle = ["*", "+", ".", "h"]
+
 try:  # optional torch dependency
     import torch
     from torch.types import Tensor
@@ -162,16 +165,22 @@ def sky_probability(
         colors=[color], zorder=1, extend='both'
     )
     if truth_star is not None:
-        phi_star, theta_star = truth_star[0], np.pi/2 - truth_star[1]
+        if isinstance(truth_star[0], (list, tuple, np.ndarray)):
+            truth_iter = truth_star  # type: ignore[assignment]
+        else:
+            truth_iter = [truth_star]  # type: ignore[list-item]
 
-        plt.scatter(
-            convert_to_l_dash(phi_star),
-            theta_star,
-            marker='*',
-            color='black',
-            s=150,
-            zorder=20
-        )
+        for idx, star in enumerate(truth_iter):
+            phi_star = star[0]
+            lat_star = star[1]
+            plt.scatter(
+                convert_to_l_dash(phi_star),
+                lat_star,
+                marker=marker_cycle[idx % len(marker_cycle)],
+                color='black',
+                s=100,
+                zorder=20
+            )
 
     # pcolormesh already rasterized via kwarg.
 
