@@ -585,7 +585,24 @@ class PosteriorSamplesInterface:
         if not np.any(finite_mask):
             raise ValueError("No finite dipole longitude/latitude samples available for sky probability plot.")
 
-        coords = np.column_stack([lon[finite_mask], lat[finite_mask]])
+        lon = lon[finite_mask]
+        lat = lat[finite_mask]
+
+        weights_col = samples.data.get("weights")
+        if weights_col is not None:
+            w = np.asarray(weights_col, dtype=np.float64)[finite_mask]
+            valid_w = np.isfinite(w) & (w > 0)
+            if np.any(valid_w):
+                w = w[valid_w]
+                lon = lon[valid_w]
+                lat = lat[valid_w]
+                w = w / w.sum()
+            else:
+                w = None
+        else:
+            w = None
+
+        coords = np.column_stack([lon, lat])
 
         truth_star = None
         if truth_deg is not None:
@@ -605,6 +622,7 @@ class PosteriorSamplesInterface:
             save_path=str(destination),
             show=False,
             truth_star=truth_star,
+            weights=w,
         )
         plt.close("all")
         return destination

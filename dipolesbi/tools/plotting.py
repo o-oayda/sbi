@@ -61,6 +61,7 @@ def sky_probability(
     show: bool = True,
     no_axes: bool = False,
     truth_star: list | None = None,
+    weights: NDArray | None = None,
     **kwargs
 ) -> Tensor:
     '''
@@ -107,8 +108,13 @@ def sky_probability(
             }
         )
 
-    pdens_map = samples_to_hpmap(phi, theta,
-        nside=nside, smooth=smooth, lonlat=lonlat
+    pdens_map = samples_to_hpmap(
+        phi,
+        theta,
+        lonlat=lonlat,
+        weights=weights,
+        nside=nside,
+        smooth=smooth,
     )
 
     X, Y, proj_map = hp.projview(
