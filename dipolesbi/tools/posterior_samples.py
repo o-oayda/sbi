@@ -287,9 +287,22 @@ def default_parameter_columns(columns: Sequence[str]) -> list[str]:
     return selected
 
 
+_LATEX_LABELS: dict[str, str] = {
+    "log10_n_initial_samples": r"\log_{10} N_{\mathrm{init}}",
+    "w1_extra_error": r"\eta_{W1,\mathrm{extra}}",
+    "observer_speed": r"v_{\mathrm{obs}}",
+    "dipole_longitude": r"\ell\ (^{\circ})",
+    "dipole_latitude": r"b\ (^{\circ})",
+    "log10_magnitude_error_shape_param": r"\log_{10} \xi_{\mathrm{student}}",
+}
+
+
 def format_label(name: str) -> str:
-    """Derive a simple LaTeX-friendly label for GetDist plots."""
-    return name.replace("_", r"\_")
+    """Derive a LaTeX-friendly label for GetDist plots."""
+    if name in _LATEX_LABELS:
+        return _LATEX_LABELS[name]
+    sanitized = name.replace("_", r"\_")
+    return rf"\mathrm{{{sanitized}}}"
 
 
 _CATWISE_PARAMETER_NAMES = [
