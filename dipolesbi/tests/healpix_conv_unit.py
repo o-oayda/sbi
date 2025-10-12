@@ -43,8 +43,4 @@ def test_conv_shape():
     params = tf.init(rng, dipole_map)
     output = tf.apply(params, rng, dipole_map)
 
-    output_np = np.asarray(output).flatten()
-    hp.projview(output_np)
-    plt.savefig('out_conv.pdf')
-
     assert output.shape == (1, cfg['output_dim'])
