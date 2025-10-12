@@ -459,54 +459,106 @@ def compute_2D_contours(
     t_contours = np.flip(f(sigma_to_prob2D(contour_levels)))
     return t_contours, P_levels, P_integral
 
-# def samples_to_hpmap(
-#         phi: Tensor,
-#         theta: Tensor,
-#         lonlat: bool = False,
-#         nside: int = 64,
-#         smooth: None | float = None
-#     ) -> Tensor:
-#     '''
-#     Turn numerical samples in phi-theta space to a healpy map, in the native
-#     coords of phi theta, defining the probability of a sample (phi_i, theta_i)
-#     lying in a given pixel.
-#
-#     :param phi: vector of phi samples in spherical coordinates: [0, 2pi)
-#     :param theta: vector of theta samples in spherical coordinates: [0, pi]
-#     :param lonlat: if True, phi ~ [0, 360] and theta ~ [-90, 90]; else,
-#         phi ~ [0, 2pi] and theta ~ [0, pi]
-#     :param weights: weights of each samples, defaults to None
-#     :param nside: nside (resolution) of binning of nested samples, i.e. the
-#         resolution of the posterior probability map
-#     '''
-#     # note: labels flip where lonlat=True... thanks healpy
-#     if lonlat:
-#         sample_pixel_indices = hp.ang2pix(
-#             nside=nside, theta=phi, phi=theta, lonlat=lonlat
-#         )
-#     else:
-#         sample_pixel_indices = hp.ang2pix(
-#             nside=nside, theta=theta, phi=phi
-#         )
-#     sample_count_map = np.bincount(
-#         sample_pixel_indices, minlength=hp.nside2npix(nside)
-#     )
-#
-#     # convert count to prob density
-#     map_total = np.sum(sample_count_map)
-#     sample_pdensity_map = sample_count_map / map_total
-#
-#     if smooth is not None:
-#         # healpy's smooth function (in samples_to_hpmap) works in sph
-#         # harmonic space, and produces a small number of very small
-#         # negative values; the sum is also not preserved.
-#         # correct by replacing negative values with 0 and renormalise.
-#         smooth_map = hp.sphtfunc.smoothing(sample_pdensity_map, sigma=smooth)
-#         smooth_map[smooth_map < 0] = 0
-#         smooth_map /= np.sum(smooth_map)
-#         return smooth_map
-#     else:
-#         return sample_pdensity_map
+def samples_to_hpmap(
+        phi: NDArray,
+        theta: NDArray,
+        lonlat: bool = False,
+        weights: NDArray | None = None,
+        nside: int = 64,
+        smooth: float | None = None
+) -> NDArray:
+    """Convert samples in spherical coordinates into a Healpix probability map.
+
+    Parameters
+    ----------
+    phi : array-like
+        Azimuthal angles. If ``lonlat`` is False, interpreted in radians over
+        ``[0, 2π)``; otherwise longitude in degrees.
+    theta : array-like
+        Polar angles. If ``lonlat`` is False, interpreted in radians over
+        ``[0, π]``; otherwise latitude in degrees.
+    lonlat : bool, optional
+        Interpret inputs as (longitude, latitude) in degrees when True.
+    weights : array-like, optional
+        Optional weights per sample. Non-positive or NaN weights are ignored.
+    nside : int, optional
+        Healpix NSIDE of the resulting map. Default is 64.
+    smooth : float, optional
+        Gaussian smoothing scale (sigma, radians) applied in harmonic space.
+
+    Returns
+    -------
+    numpy.ndarray
+        Probability density map of shape ``(12 * nside**2,)``.
+    """
+    # Convert to numpy arrays and ensure matching shapes.
+    phi_arr = np.asarray(phi, dtype=np.float64)
+    theta_arr = np.asarray(theta, dtype=np.float64)
+    if phi_arr.shape != theta_arr.shape:
+        raise ValueError("phi and theta must have the same shape.")
+
+    weights_arr: NDArray | None
+    if weights is not None:
+        weights_arr = np.asarray(weights, dtype=np.float64)
+        if weights_arr.shape != phi_arr.shape:
+            raise ValueError("weights must have the same shape as phi/theta.")
+        # Mimic resample_equal's behaviour by discarding non-positive or NaN
+        # weights and keeping only finite, strictly positive entries.
+        valid = np.isfinite(weights_arr) & (weights_arr > 0)
+        if not np.any(valid):
+            weights_arr = None
+        else:
+            phi_arr = phi_arr[valid]
+            theta_arr = theta_arr[valid]
+            weights_arr = weights_arr[valid]
+    else:
+        weights_arr = None
+
+    if phi_arr.size == 0:
+        # No valid samples; return an all-zero probability map.
+        return np.zeros(hp.nside2npix(nside), dtype=np.float64)
+
+    if lonlat:
+        pixel_indices = hp.ang2pix(
+            nside=nside,
+            theta=phi_arr,
+            phi=theta_arr,
+            lonlat=True,
+        )
+    else:
+        pixel_indices = hp.ang2pix(
+            nside=nside,
+            theta=theta_arr,
+            phi=phi_arr,
+            lonlat=False,
+        )
+
+    npix = hp.nside2npix(nside)
+    counts = np.zeros(npix, dtype=np.float64)
+    if weights_arr is None:
+        np.add.at(counts, pixel_indices, 1.0)
+    else:
+        np.add.at(counts, pixel_indices, weights_arr)
+
+    total = counts.sum()
+    if not np.isfinite(total) or total <= 0:
+        # Guard against degenerate cases (all weights filtered out).
+        return np.zeros_like(counts)
+
+    density_map = counts / total
+
+    if smooth is not None:
+        # healpy.smoothing works in harmonic space and can introduce small
+        # negative ringing; clip those out and renormalise so the map still
+        # integrates to one.
+        smoothed = hp.sphtfunc.smoothing(density_map, sigma=smooth)
+        smoothed = np.clip(smoothed, 0.0, None)
+        norm = smoothed.sum()
+        if norm > 0 and np.isfinite(norm):
+            smoothed /= norm
+        return smoothed
+
+    return density_map
 
 def omega_to_theta(omega: float) -> np.float64:
     '''

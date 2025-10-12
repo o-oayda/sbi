@@ -7,9 +7,14 @@ import healpy as hp
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
-from torch.types import Tensor
 from typing import Callable
+
+try:  # optional torch dependency
+    import torch
+    from torch.types import Tensor
+except ModuleNotFoundError:  # pragma: no cover - torch optional
+    torch = None  # type: ignore
+    Tensor = NDArray[np.float64]  # type: ignore
 
 def posterior_predictive_check(
         samples: Tensor,
@@ -17,7 +22,10 @@ def posterior_predictive_check(
         n_samples: int = 5,
         **projview_kwargs
 ) -> None:
-    random_integers = torch.randint(
+    if torch is None:
+        raise RuntimeError("Torch is required for posterior_predictive_check but is not installed.")
+
+    random_integers = torch.randint(  # type: ignore[union-attr]
         low=0,
         high=samples.shape[0],
         size=(n_samples,)
@@ -129,6 +137,15 @@ def sky_probability(
     )
 
     Xa, Ya = np.meshgrid(X, Y)
+    ax = plt.gca()
+    ax.set_rasterization_zorder(0)
+
+    if not disable_mesh:
+        plt.pcolormesh(
+            Xa, Ya, proj_P_map, cmap=cmaps,
+            rasterized=rasterize_pmesh,
+        )
+
     plt.contourf(
         Xa, Ya, proj_P_map, levels=t_contours, cmap=cmap_cont,
         zorder=1, extend='both'
@@ -149,11 +166,7 @@ def sky_probability(
             zorder=20
         )
 
-    if not disable_mesh:
-        plt.pcolormesh(
-            Xa, Ya, proj_P_map, cmap=cmaps,
-            rasterized=rasterize_pmesh,
-        )
+    # pcolormesh already rasterized via kwarg.
 
     if save_path is not None:
         plt.savefig(
