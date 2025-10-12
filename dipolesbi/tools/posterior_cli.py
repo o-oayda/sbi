@@ -6,8 +6,10 @@ from pathlib import Path
 import numpy as np
 from rich.console import Console
 from rich.table import Table
+import matplotlib.pyplot as plt
+from getdist import plots
 
-from .posterior_samples import PosteriorSamplesInterface, save_corner_plot
+from .posterior_samples import PosteriorSamplesInterface, PosteriorSamples
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -15,9 +17,10 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Inspect posterior samples produced by the multi-round inferer.",
     )
     parser.add_argument(
-        "experiment_dir",
+        "experiment_dirs",
         type=Path,
-        help="Directory containing samples_rnd-*.csv files (e.g. fiducial_50k/<run>).",
+        nargs="+",
+        help="One or more directories containing samples_rnd-*.csv files.",
     )
     parser.add_argument(
         "--round",
@@ -125,6 +128,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional true dipole longitude/latitude in degrees for annotation.",
     )
+    parser.add_argument(
+        "--legend",
+        nargs="+",
+        help="Legend labels corresponding to each experiment directory.",
+    )
     return parser
 
 
@@ -175,38 +183,86 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     console = Console()
-    interface = PosteriorSamplesInterface(args.experiment_dir, console=console)
-    samples = interface.load_round(
-        round_id=args.round_id,
-        show_table=not args.no_table,
-    )
+    interfaces = [PosteriorSamplesInterface(path, console=console) for path in args.experiment_dirs]
 
-    console.print(
-        f"[green]Loaded round {samples.round_id} "
-        f"from {samples.info.path} with {samples.n_samples} samples.[/green]"
-    )
-
-    columns = list(samples.columns)
-    if args.limit_columns is not None:
-        columns = columns[: args.limit_columns]
-
-    console.print(_column_summary_table(samples, columns=columns))
-
-    logz_mean, logz_err = samples.log_evidence()
-    if logz_err is not None:
-        console.print(f"logZ = {logz_mean:.4f} ± {logz_err:.4f}")
+    samples_list: list[PosteriorSamples] = []
+    if args.legend is not None:
+        if len(args.legend) != len(args.experiment_dirs):
+            raise ValueError("Number of legend labels must match number of experiment directories.")
+        labels = list(args.legend)
     else:
-        console.print(f"logZ = {logz_mean:.4f} (uncertainty unavailable)")
+        labels = [path.name for path in args.experiment_dirs]
+
+    for idx, iface in enumerate(interfaces):
+        samples_i = iface.load_round(
+            round_id=args.round_id,
+            show_table=not args.no_table,
+        )
+        samples_list.append(samples_i)
+        label = labels[idx]
+
+        console.print(
+            f"[green]Loaded round {samples_i.round_id} from {samples_i.info.path} "
+            f"with {samples_i.n_samples} samples.[/green]"
+        )
+
+        columns_i = list(samples_i.columns)
+        if args.limit_columns is not None:
+            columns_i = columns_i[: args.limit_columns]
+
+        console.print(_column_summary_table(samples_i, columns=columns_i))
+
+        logz_mean, logz_err = samples_i.log_evidence()
+        if logz_err is not None:
+            console.print(f"logZ ({label}) = {logz_mean:.4f} ± {logz_err:.4f}")
+        else:
+            console.print(f"logZ ({label}) = {logz_mean:.4f} (uncertainty unavailable)")
+
+    if not samples_list:
+        console.print("[red]No samples loaded.[/red]")
+        return 1
+
+    primary_samples = samples_list[0]
+    primary_interface = interfaces[0]
+    summary_columns = list(primary_samples.columns)
+    if args.limit_columns is not None:
+        summary_columns = summary_columns[: args.limit_columns]
 
     if args.corner is not None:
         filled = not args.corner_unfilled
-        corner_path = save_corner_plot(
-            samples,
-            args.corner,
-            param_columns=args.corner_columns,
-            markers=args.corner_markers,
+
+        if args.corner_columns is not None:
+            requested_params = list(args.corner_columns)
+            missing = [col for col in requested_params if any(col not in s.data for s in samples_list)]
+            if missing:
+                raise ValueError(f"Corner columns {missing} not found in all runs.")
+            param_columns = requested_params
+        else:
+            base_params = primary_samples.parameter_columns()
+            common_params = [col for col in base_params if all(col in s.data for s in samples_list)]
+            if not common_params:
+                raise ValueError("No common parameter columns found across runs for corner plot.")
+            param_columns = common_params
+
+        mc_samples_list = []
+        for s, label in zip(samples_list, labels):
+            mc = s.to_getdist(param_columns=param_columns, weight_column="weights")
+            mc.label = label  # type: ignore[attr-defined]
+            mc_samples_list.append(mc)
+
+        plotter = plots.get_subplot_plotter()
+        plotter.settings.progress = False
+        plotter.triangle_plot(
+            mc_samples_list,
+            params=param_columns,
             filled=filled,
+            legend_labels=labels,
+            markers=args.corner_markers,
         )
+        corner_path = Path(args.corner).expanduser()
+        corner_path.parent.mkdir(parents=True, exist_ok=True)
+        plotter.export(str(corner_path))
+        plt.close("all")
         console.print(f"[blue]Corner plot written to {corner_path}[/blue]")
 
     if args.ppc_count is not None:
@@ -214,9 +270,9 @@ def main(argv: list[str] | None = None) -> int:
             console.print("[red]--ppc-count must be positive.[/red]")
         else:
             try:
-                result = interface.posterior_predictive(
+                result = primary_interface.posterior_predictive(
                     count=args.ppc_count,
-                    round_id=samples.round_id,
+                    round_id=primary_samples.round_id,
                     seed=args.ppc_seed,
                     workers=args.ppc_workers,
                     output_path=args.ppc_output,
@@ -239,20 +295,47 @@ def main(argv: list[str] | None = None) -> int:
     if args.sky_prob is not None:
         try:
             truth_tuple = tuple(args.sky_truth) if args.sky_truth is not None else None
-            sky_path = interface.plot_sky_probability(
-                args.sky_prob,
-                round_id=samples.round_id,
-                lon_column=args.sky_lon_col,
-                lat_column=args.sky_lat_col,
-                nside=args.sky_nside,
-                smooth=args.sky_smooth,
-                truth_deg=truth_tuple,
-                show_table=False,
-            )
-        except Exception as exc:
-            console.print(f"[red]Failed to generate sky probability plot: {exc}[/red]")
-        else:
+            base_cycle = ['cornflowerblue', 'tomato']
+            default_cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", [])
+            remaining = [c for c in default_cycle if c not in base_cycle]
+            color_cycle = base_cycle + remaining + ["#2ca02c", "#d62728", "#9467bd", "#8c564b", "#17becf"]
+
+            plt.figure(figsize=(8, 4))
+            legend_handles = []
+            from matplotlib.lines import Line2D
+
+            for idx, (iface, s, label) in enumerate(zip(interfaces, samples_list, labels)):
+                color = color_cycle[idx % len(color_cycle)]
+                disable_mesh = idx > 0
+                no_axes = idx > 0
+                truth = truth_tuple if idx == 0 else None
+                iface.plot_sky_probability(
+                    output_path=None,
+                    round_id=s.round_id,
+                    lon_column=args.sky_lon_col,
+                    lat_column=args.sky_lat_col,
+                    nside=args.sky_nside,
+                    smooth=args.sky_smooth,
+                    truth_deg=truth,
+                    show_table=False,
+                    disable_mesh=disable_mesh,
+                    no_axes=no_axes,
+                    show=False,
+                    color=color,
+                )
+                legend_handles.append(Line2D([0], [0], color=color, lw=2, label=label))
+
+            if legend_handles:
+                plt.legend(handles=legend_handles, loc="lower left")
+
+            sky_path = Path(args.sky_prob).expanduser()
+            sky_path.parent.mkdir(parents=True, exist_ok=True)
+            plt.savefig(sky_path, dpi=300, bbox_inches="tight")
+            plt.close(plt.gcf())
             console.print(f"[green]Sky probability plot written to {sky_path}[/green]")
+        except Exception as exc:
+            plt.close(plt.gcf())
+            console.print(f"[red]Failed to generate sky probability plot: {exc}[/red]")
     return 0
 
 

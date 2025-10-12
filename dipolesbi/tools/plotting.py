@@ -53,7 +53,7 @@ def sky_probability(
     lonlat: bool = False,
     nside: int = 256,
     smooth: None | float = 0.05,
-    contour_levels: list[float] = [0.5, 1, 1.5, 2],
+    contour_levels: list[float] = [1., 2.],
     xsize: int = 500,
     rasterize_pmesh: bool = False,
     save_path: None | str = None,
@@ -62,6 +62,7 @@ def sky_probability(
     no_axes: bool = False,
     truth_star: list | None = None,
     weights: NDArray | None = None,
+    color: str = "tomato",
     **kwargs
 ) -> Tensor:
     '''
@@ -128,7 +129,7 @@ def sky_probability(
     proj_P_map /= np.sum(proj_P_map)
     t_contours, _, _ = compute_2D_contours(proj_P_map, contour_levels)
 
-    c_chosen = matplotlib.colors.to_rgba('tomato', alpha=0.4)
+    c_chosen = matplotlib.colors.to_rgba(color, alpha=0.4)
     c_white = matplotlib.colors.colorConverter.to_rgba(
         'white',alpha=0
     )
@@ -158,7 +159,7 @@ def sky_probability(
     )
     plt.contour(
         Xa, Ya, proj_P_map, levels=t_contours,
-        colors=['tomato'], zorder=1, extend='both'
+        colors=[color], zorder=1, extend='both'
     )
     if truth_star is not None:
         phi_star, theta_star = truth_star[0], np.pi/2 - truth_star[1]

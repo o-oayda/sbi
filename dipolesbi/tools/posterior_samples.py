@@ -562,7 +562,7 @@ class PosteriorSamplesInterface:
 
     def plot_sky_probability(
         self,
-        output_path: Path | str,
+        output_path: Path | str | None,
         *,
         round_id: int | None = None,
         lon_column: str = "dipole_longitude",
@@ -571,7 +571,11 @@ class PosteriorSamplesInterface:
         smooth: float | None = 0.05,
         truth_deg: tuple[float, float] | None = None,
         show_table: bool = True,
-    ) -> Path:
+        disable_mesh: bool = False,
+        no_axes: bool = False,
+        show: bool = True,
+        color: str | None = None,
+    ) -> Path | None:
         samples = self.load_round(round_id=round_id, show_table=show_table)
         try:
             lon = np.asarray(samples[lon_column], dtype=np.float64)
@@ -611,20 +615,30 @@ class PosteriorSamplesInterface:
             lat_rad = np.deg2rad(lat_deg)
             truth_star = [phi_rad, lat_rad]
 
-        destination = Path(output_path).expanduser()
-        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination: Path | None
+        if output_path is not None:
+            destination = Path(output_path).expanduser()
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            save_path = str(destination)
+        else:
+            destination = None
+            save_path = None
 
         sky_probability(
             coords,
             lonlat=True,
             nside=nside,
             smooth=smooth,
-            save_path=str(destination),
-            show=False,
+            save_path=save_path,
+            show=show,
             truth_star=truth_star,
             weights=w,
+            disable_mesh=disable_mesh,
+            no_axes=no_axes,
+            color=color or "tomato",
         )
-        plt.close("all")
+        if save_path is not None or show:
+            plt.close(plt.gcf())
         return destination
 
 
