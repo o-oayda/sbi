@@ -59,10 +59,9 @@ Key options:
   columns present in every run, labels each corner with the directory name (or
   the name supplied via `--legend`), and overlays them in the same figure.
 - `--sky-prob <path>` – draw the posterior sky probability (dipole direction)
-  using Healpix. The first run is rendered in `cornflowerblue` with the filled
-  map; additional runs are overlaid as contour outlines (default 1σ and 2σ for
-  a 2‑D Gaussian) using the colour sequence
-  `[cornflowerblue, tomato, #2ca02c, #d62728, ...]`.
+  using Healpix. Colours follow the GetDist filled-contour cycle
+  `[#006FED, #E03424, #808080, #009966, #000866, #336600, #006633, #FF00FF, #FF0000]`,
+  applied in reverse order when multiple runs are overlaid (so two runs appear red then blue).
 - `--sky-smooth <sigma>` – set the spherical smoothing width (radians) before
   the map is projected (default `0.05`).
 - `--legend <name ...>` – custom legend labels (must match the number of run

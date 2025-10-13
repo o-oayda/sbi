@@ -11,7 +11,7 @@ from getdist import plots
 
 from .posterior_samples import PosteriorSamplesInterface, PosteriorSamples
 from .utils import sigma_to_prob1D
-from .plotting import marker_cycle
+from .plotting import marker_cycle, SKY_PROBABILITY_COLOR_CYCLE
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -110,7 +110,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sky-nside",
         type=int,
-        default=64,
+        default=512,
         help="Healpix nside used to bin samples for the sky probability map.",
     )
     parser.add_argument(
@@ -375,10 +375,10 @@ def main(argv: list[str] | None = None) -> int:
                         console.print(f"  - {path}")
     if args.sky_prob is not None:
         try:
-            base_cycle = ['cornflowerblue', 'tomato']
-            default_cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", [])
-            remaining = [c for c in default_cycle if c not in base_cycle]
-            color_cycle = base_cycle + remaining + ["#2ca02c", "#d62728", "#9467bd", "#8c564b", "#17becf"]
+            color_cycle = SKY_PROBABILITY_COLOR_CYCLE
+            cycle_len = len(color_cycle)
+            plot_entries = list(zip(interfaces, samples_list, labels))
+            total_runs = len(plot_entries)
 
             plt.figure(figsize=(8, 4))
             legend_handles = []
@@ -398,8 +398,9 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     truth_labels = [f"truth {i+1}" for i in range(len(truth_pairs))]
 
-            for idx, (iface, s, label) in enumerate(zip(interfaces, samples_list, labels)):
-                color = color_cycle[idx % len(color_cycle)]
+            for idx, (iface, s, label) in enumerate(plot_entries):
+                reverse_idx = (total_runs - idx - 1) % cycle_len
+                color = color_cycle[reverse_idx]
                 disable_mesh = idx > 0
                 no_axes = idx > 0
                 truth = truth_pairs if idx == 0 else None

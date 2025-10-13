@@ -25,7 +25,7 @@ from dipolesbi.tools.configs import CatwiseConfig, ModelConfig
 from dipolesbi.catwise.maps import Catwise
 from dipolesbi.tools.utils import HidePrints, batch_simulate, sigma_to_prob1D
 from dipolesbi.tools.np_rngkey import NPKey
-from dipolesbi.tools.plotting import sky_probability
+from dipolesbi.tools.plotting import SKY_PROBABILITY_COLOR_CYCLE, sky_probability
 from dipolesbi.tools.maps import average_smooth_map
 
 _RUN_PATTERN = re.compile(r"samples_rnd-(\d+)\.csv$")
@@ -656,7 +656,7 @@ class PosteriorSamplesInterface:
             weights=w,
             disable_mesh=disable_mesh,
             no_axes=no_axes,
-            color=color or "tomato",
+            color=color or SKY_PROBABILITY_COLOR_CYCLE[0],
         )
         if save_path is not None or show:
             plt.close(plt.gcf())
