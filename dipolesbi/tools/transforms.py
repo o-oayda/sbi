@@ -555,7 +555,8 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
 
     def _forward_and_log_det_zscore(
         self,
-        theta: dict[str, jnp.ndarray] | jnp.ndarray
+        theta: dict[str, jnp.ndarray] | jnp.ndarray,
+        in_ns: bool = False
     ) -> tuple[jnp.ndarray,  jnp.ndarray]:
         assert self.theta_mean is not None
         assert self.theta_std is not None
@@ -598,7 +599,7 @@ class DipoleThetaTransform(InvertibleThetaTransformJax):
         t_transformed = jnp.stack(components, axis=-1)
         abslogdet_per_batch = abslogdet
 
-        if squeezed_input:
+        if squeezed_input or in_ns:
             t_transformed = jnp.squeeze(t_transformed, axis=0)
             abslogdet_per_batch = jnp.squeeze(abslogdet_per_batch, axis=0)
 
