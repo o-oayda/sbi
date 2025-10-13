@@ -6,6 +6,16 @@ Fit dipoles using simulation-based inference.
 
 ### Setup
 
+#### JAX backend selection
+
+`poetry install` installs the CPU-only JAX wheels, which is the right choice for macOS or other non-CUDA environments. For CUDA 12 support on a Linux workstation, opt in explicitly:
+
+```bash
+poetry install --with cuda
+```
+
+Regardless of the wheel you choose, export `JAX_PLATFORMS=cpu` when running tests or scripts in this repository so JAX never tries to initialise CUDA hardware in unsupported environments.
+
 Choose the appropriate setup based on your GPU:
 
 **For RTX 5070 Ti (or other latest GPUs requiring CUDA 12.8):**
