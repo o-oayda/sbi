@@ -209,6 +209,18 @@ if __name__ == '__main__':
             )
             theta_0.pop('w1_extra_error')
 
+        case 'free_students-t':
+            ERROR_DIST = 'students-t'
+            COMMON_ERROR = None
+            add_tdist_shape_param(prior)
+            simulator = partial(
+                simulator_wrapper,
+                w1_extra_error=None,
+                w2_extra_error=None
+            )
+            theta_0.pop('w1_extra_error')
+            theta_0['log10_magnitude_error_shape_param'] = 1.
+
         case 'cmb_dipole':
             ERROR_DIST = 'gaussian'
             COMMON_ERROR = True
