@@ -29,3 +29,5 @@ benchmark/*
 !dipolesbi/catwise/alpha_colors.fits
 
 *.png
+
+.DS_Store
