@@ -274,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
                         f"[cyan]Average logZ ({label}): {z_mean:.4f} ± {err_display:.4f}[/cyan]"
                     )
                 else:
-                    values = np.array([z for z, _ in round_values])
+                    values = np.array([z for z, _ in round_values]) # just z mean from one round
                     if args.logz_average_simple:
                         avg = float(np.mean(values))
                         std = float(np.std(values, ddof=0))

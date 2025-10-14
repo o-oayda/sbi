@@ -17,7 +17,7 @@ fi
 EXPERIMENT_ROOT=$(cd "${EXPERIMENT_ROOT}" && pwd)
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-PROJECT_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd)
+PROJECT_ROOT="${SCRIPT_DIR}"
 
 PYTHON_EXECUTABLE=${PYTHON_EXECUTABLE:-python}
 
@@ -72,20 +72,27 @@ if match:
 
     echo "Processing ${run_name} (model: ${model_identifier})"
 
+    command=(
+        "${PYTHON_EXECUTABLE}" -m dipolesbi.tools.posterior_cli
+        "${run_path}"
+        --corner "${corner_path}"
+        --sky-prob "${sky_path}"
+        --legend "${latexified_model}"
+        --sky-truth 264 45 238 29 237 42
+        --sky-truth-labels CMB Secrest+21 Dam+23
+        --sky-smooth 0.1
+        --logz-average-start 3 --logz-average-simple
+    )
+    if (( $# > 0 )); then
+        command+=("$@")
+    fi
+
     run_log=$(mktemp)
-    if ! (
-        cd "${PROJECT_ROOT}"
-        JAX_PLATFORMS=cpu "${PYTHON_EXECUTABLE}" -m dipolesbi.tools.posterior_cli \
-            "${run_path}" \
-            --corner "${corner_path}" \
-            --sky-prob "${sky_path}" \
-            --legend "${latexified_model}" \
-            --sky-truth 264 45 238 29 237 42 \
-            --sky-truth-labels CMB Secrest+21 Dam+23 \
-            --sky-smooth 0.1 \
-            --logz-average-start 3 --logz-average-simple \
-            "$@"
-    ) >"${run_log}" 2>&1; then
+    if ! "${PYTHON_EXECUTABLE}" -m dipolesbi.tools.cli_capture \
+        --log "${run_log}" \
+        --cwd "${PROJECT_ROOT}" \
+        --env "JAX_PLATFORMS=cpu" \
+        -- "${command[@]}"; then
         status=$?
         cat "${run_log}"
         echo "Error: posterior_cli failed for ${run_name} (exit ${status})." >&2

@@ -57,9 +57,9 @@ def write_tables(
     """
     sorted_entries = sorted(entries, key=lambda item: item[2], reverse=True)
 
-    md_lines = ["| Run | Model | log Z |", "| --- | --- | --- |"]
+    md_lines = ["| Run | Model | $\\ln \\mathcal{Z}$ |", "| --- | --- | --- |"]
     for run_name, label, mean, std in sorted_entries:
-        md_lines.append(f"| {run_name} | {label} | {mean:.1f} ± {std:.1f} |")
+        md_lines.append(f"| {run_name} | {label} | ${mean:.1f} \\pm {std:.1f}$ |")
 
     def latex_escape(text: str) -> str:
         replacements = {
@@ -79,7 +79,7 @@ def write_tables(
     tex_lines = [
         r"\begin{tabular}{lll}",
         r"\hline",
-        r"Run & Model & $\log Z$ \\",
+        r"Run & Model & $\ln \mathcal{Z}$ \\",
         r"\hline",
     ]
     for run_name, label, mean, std in sorted_entries:
