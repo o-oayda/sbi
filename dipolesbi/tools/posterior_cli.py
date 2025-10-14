@@ -153,6 +153,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Round index from which to compute weighted logZ averages (applies per run).",
     )
+    parser.add_argument(
+        "--logz-average-simple",
+        action="store_true",
+        help="Use simple mean/variance for logZ averaging instead of bootstrap resampling.",
+    )
     return parser
 
 
@@ -269,18 +274,23 @@ def main(argv: list[str] | None = None) -> int:
                         f"[cyan]Average logZ ({label}): {z_mean:.4f} ± {err_display:.4f}[/cyan]"
                     )
                 else:
-                    rng = np.random.default_rng(12345)
                     values = np.array([z for z, _ in round_values])
-                    boot_means = []
-                    for _ in range(2000):
-                        indices = rng.choice(len(values), size=len(values), replace=True)
-                        boot_means.append(values[indices].mean())
-                    boot_means = np.asarray(boot_means)
-                    avg = float(boot_means.mean())
-                    std = float(boot_means.std(ddof=1))
-                    console.print(
-                        f"[cyan]Bootstrap average logZ ({label}): {avg:.4f} ± {std:.4f}[/cyan]"
-                    )
+                    if args.logz_average_simple:
+                        avg = float(np.mean(values))
+                        std = float(np.std(values, ddof=0))
+                        console.print(f"[cyan]Average logZ ({label}): {avg:.4f} ± {std:.4f}[/cyan]")
+                    else:
+                        rng = np.random.default_rng(12345)
+                        boot_means = []
+                        for _ in range(2000):
+                            indices = rng.choice(len(values), size=len(values), replace=True)
+                            boot_means.append(values[indices].mean())
+                        boot_means = np.asarray(boot_means)
+                        avg = float(boot_means.mean())
+                        std = float(boot_means.std(ddof=1))
+                        console.print(
+                            f"[cyan]Bootstrap average logZ ({label}): {avg:.4f} ± {std:.4f}[/cyan]"
+                        )
 
     if not samples_list:
         console.print("[red]No samples loaded.[/red]")
@@ -342,7 +352,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         corner_path = Path(args.corner).expanduser()
         corner_path.parent.mkdir(parents=True, exist_ok=True)
-        plotter.export(str(corner_path))
+        plotter.export(str(corner_path), dpi=300)
         plt.close("all")
         console.print(f"[blue]Corner plot written to {corner_path}[/blue]")
 
