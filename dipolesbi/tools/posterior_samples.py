@@ -625,16 +625,23 @@ class PosteriorSamplesInterface:
 
         truth_star = None
         if truth_deg is not None:
-            if isinstance(truth_deg, (list, tuple)) and truth_deg and isinstance(truth_deg[0], (list, tuple)):
-                truth_star = [
-                    [np.deg2rad(pair[0]), np.deg2rad(pair[1])]
-                    for pair in truth_deg  # type: ignore[index]
-                ]
+            # Interpret non-empty sequences of lon/lat pairs or a single lon/lat tuple.
+            if isinstance(truth_deg, (list, tuple)) and len(truth_deg) == 0:  # type: ignore[arg-type]
+                truth_seq = None
             else:
-                lon_deg, lat_deg = truth_deg  # type: ignore[misc]
-                phi_rad = np.deg2rad(lon_deg)
-                lat_rad = np.deg2rad(lat_deg)
-                truth_star = [phi_rad, lat_rad]
+                truth_seq = truth_deg
+
+            if truth_seq is not None:
+                if isinstance(truth_seq, (list, tuple)) and isinstance(truth_seq[0], (list, tuple)):  # type: ignore[index]
+                    truth_star = [
+                        [np.deg2rad(pair[0]), np.deg2rad(pair[1])]
+                        for pair in truth_seq  # type: ignore[index]
+                    ]
+                else:
+                    lon_deg, lat_deg = truth_seq  # type: ignore[misc]
+                    phi_rad = np.deg2rad(lon_deg)
+                    lat_rad = np.deg2rad(lat_deg)
+                    truth_star = [phi_rad, lat_rad]
 
         destination: Path | None
         if output_path is not None:
