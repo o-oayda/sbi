@@ -7,11 +7,20 @@ import numpy as np
 from rich.console import Console
 from rich.table import Table
 import matplotlib.pyplot as plt
+from matplotlib.transforms import Bbox
 from getdist import plots
+from dipolesbi.style import paperplot
 
 from .posterior_samples import PosteriorSamplesInterface, PosteriorSamples
 from .utils import sigma_to_prob1D
-from .plotting import marker_cycle, SKY_PROBABILITY_COLOR_CYCLE
+from .plotting import (
+    marker_cycle,
+    SKY_PROBABILITY_COLOR_CYCLE,
+    get_top_quadrant_bbox,
+    quad_tick_labels,
+)
+
+plots.set_active_style(paperplot.style_name)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -118,6 +127,18 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.05,
         help="Gaussian smoothing sigma (radians) applied to the sky probability map.",
+    )
+    parser.add_argument(
+        "--sky-contours",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Sigma levels for sky probability contours (e.g. 1 2 3).",
+    )
+    parser.add_argument(
+        "--sky-top-quad",
+        action="store_true",
+        help="Crop the saved sky probability plot to the top-right quadrant.",
     )
     parser.add_argument(
         "--sky-lon-col",
@@ -427,6 +448,8 @@ def main(argv: list[str] | None = None) -> int:
                     no_axes=no_axes,
                     show=False,
                     color=color,
+                    top_quad=args.sky_top_quad,
+                    contour_levels=args.sky_contours,
                 )
                 legend_handles.append(Line2D([0], [0], color=color, lw=2, label=label))
 
@@ -442,12 +465,36 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
 
+            legend = None
             if legend_handles:
-                plt.legend(handles=legend_handles, loc="lower right")
+                legend_location = "lower right"
+                legend_kwargs: dict[str, object] = {}
+                if args.sky_top_quad:
+                    # Position the legend roughly below the b=0 line in the cropped panel.
+                    legend_location = "lower left"
+                    legend_kwargs["ncol"] = max(1, len(legend_handles))
+                    legend_kwargs.update(dict(loc=legend_location, bbox_to_anchor=(0.46, 0.41)))
+                else:
+                    legend_kwargs.update(dict(loc=legend_location))
+                legend = plt.legend(handles=legend_handles, **legend_kwargs)
 
             sky_path = Path(args.sky_prob).expanduser()
             sky_path.parent.mkdir(parents=True, exist_ok=True)
-            plt.savefig(sky_path, dpi=300, bbox_inches="tight")
+            bbox_inches: str | Bbox
+            if args.sky_top_quad:
+                ax = plt.gca()
+                fig = plt.gcf()
+                bbox_inches = get_top_quadrant_bbox(ax, fig)
+                x_labels, y_labels = quad_tick_labels()
+                ax.set_xticklabels(x_labels)
+                ax.set_yticklabels(y_labels)
+                ax.yaxis.tick_right()
+                if legend is not None:
+                    legend.set_bbox_to_anchor((0.46, 0.41))
+            else:
+                bbox_inches = "tight"
+
+            plt.savefig(sky_path, dpi=300, bbox_inches=bbox_inches)
             plt.close(plt.gcf())
             console.print(f"[green]Sky probability plot written to {sky_path}[/green]")
         except Exception as exc:

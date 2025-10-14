@@ -64,6 +64,9 @@ Key options:
   applied in reverse order when multiple runs are overlaid (so two runs appear red then blue).
 - `--sky-smooth <sigma>` – set the spherical smoothing width (radians) before
   the map is projected (default `0.05`).
+- `--sky-contours <σ ...>` – override the sky contour sigma levels (default `1 2`).
+- `--sky-top-quad` – crop the saved sky probability output to the top-right
+  quadrant of the Mollweide projection.
 - `--legend <name ...>` – custom legend labels (must match the number of run
   directories). Otherwise, the directory names are used.
 - `--round <n>` – inspect a specific inference round (defaults to the latest).

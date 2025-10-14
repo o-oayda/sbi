@@ -6,8 +6,9 @@ from dipolesbi.tools.maps import average_smooth_map
 import healpy as hp
 import matplotlib
 import matplotlib.pyplot as plt
+from matplotlib.transforms import Bbox
 import numpy as np
-from typing import Callable
+from typing import Callable, Sequence
 
 
 SKY_PROBABILITY_COLOR_CYCLE: list[str] = [
@@ -24,6 +25,38 @@ SKY_PROBABILITY_COLOR_CYCLE: list[str] = [
 
 
 marker_cycle = ["*", "+", ".", "h"]
+
+
+def quad_tick_labels() -> tuple[list[str], list[str]]:
+    """Return nice tick labels for the top-right sky quadrant."""
+    y_labels: list[str] = []
+    for idx in range(1, 6):
+        value = -90 + 30 * idx
+        if idx == 4:
+            y_labels.append(r"$b=" + f"{value}" + r"^\circ$")
+        else:
+            y_labels.append(r"$" + f"{value}" + r"^\circ$")
+
+    x_labels: list[str] = []
+    for idx in range(1, 12):
+        if idx < 6:
+            value = -180 + 30 * idx
+        if idx == 6:
+            x_labels.append(r"$l=0^\circ$")
+        else:
+            value = 540 - 30 * idx
+            x_labels.append(r"$" + f"{value}" + r"^\circ$")
+
+    return x_labels, y_labels
+
+
+def get_top_quadrant_bbox(ax: matplotlib.axes.Axes, fig: matplotlib.figure.Figure) -> Bbox:
+    """Calculate the bounding box for the top-right quadrant of a Mollweide projection."""
+    x0, x1 = -0.25, np.pi + 0.45
+    y0, y1 = -0.22, np.pi / 2
+    bbox = Bbox([[x0, y0], [x1, y1]])
+    return bbox.transformed(ax.transData).transformed(fig.dpi_scale_trans.inverted())
+
 
 try:  # optional torch dependency
     import torch
@@ -69,7 +102,7 @@ def sky_probability(
     lonlat: bool = False,
     nside: int = 256,
     smooth: None | float = 0.05,
-    contour_levels: list[float] = [1., 2.],
+    contour_levels: Sequence[float] | None = None,
     xsize: int = 500,
     rasterize_pmesh: bool = False,
     save_path: None | str = None,
@@ -79,6 +112,7 @@ def sky_probability(
     truth_star: list | None = None,
     weights: NDArray | None = None,
     color: str | None = None,
+    top_quad: bool = False,
     **kwargs
 ) -> Tensor:
     '''
@@ -89,7 +123,7 @@ def sky_probability(
     :param xsize: this specifies the resolution of the projection of the
         healpy map into matplotlib coords
     :param contour_levels: the significance levels (in units of sigma)
-        defining how the contours are drawm
+        defining how the contours are drawn (defaults to [1, 2] if None)
     :param colours: specify either a list of colours for each direction,
         or 'auto' to automatically assign colours
     :param rasterize_pmesh: specify whether or not to rasterize the
@@ -99,13 +133,11 @@ def sky_probability(
     :param disable_mesh: supress plotting of the pcolormesh
     :param show: whether or not to call plt.show()
     :param no_axes: if false, do not create a blank set of Mollweide axes
-    :param top_quad: if save_path has been specified, specifying top_quad
-        to true creates a bounding box which restricts the saved figure
-        to the top right quadrant of the Mollweide Axes
     :param truth_star: add star indicating direction of true dipole, accepts
         list [phi, theta] in longtiude and colatitude in radians
     :param only_nth_direction: for a model with n directions, choose to
         plot only the nth directional posterior
+    :param top_quad: crop saved output to the top-right quadrant of the Mollweide axes
     :param **kwargs: kwargs to be passed to hp.projview blank axes
     '''
     # convert samples into desired coordinate system
@@ -143,7 +175,8 @@ def sky_probability(
     proj_map[proj_map == -np.inf] = 0
     proj_P_map = np.copy(proj_map)
     proj_P_map /= np.sum(proj_P_map)
-    t_contours, _, _ = compute_2D_contours(proj_P_map, contour_levels)
+    levels = list(contour_levels) if contour_levels is not None else [1.0, 2.0]
+    t_contours, _, _ = compute_2D_contours(proj_P_map, levels)
 
     selected_color = color or SKY_PROBABILITY_COLOR_CYCLE[0]
     c_chosen = matplotlib.colors.to_rgba(selected_color, alpha=0.4)
@@ -198,9 +231,19 @@ def sky_probability(
 
     # pcolormesh already rasterized via kwarg.
 
+    bbox_inches: str | Bbox = 'tight'
+    if save_path is not None and top_quad:
+        fig = plt.gcf()
+        quad_bbox = get_top_quadrant_bbox(ax, fig)
+        x_labels, y_labels = quad_tick_labels()
+        ax.set_xticklabels(x_labels)
+        ax.set_yticklabels(y_labels)
+        ax.yaxis.tick_right()
+        bbox_inches = quad_bbox
+
     if save_path is not None:
         plt.savefig(
-            save_path, dpi=300, bbox_inches='tight'
+            save_path, dpi=300, bbox_inches=bbox_inches
         )
     if show:
         plt.show()

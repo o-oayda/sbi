@@ -590,6 +590,8 @@ class PosteriorSamplesInterface:
         no_axes: bool = False,
         show: bool = True,
         color: str | None = None,
+        top_quad: bool = False,
+        contour_levels: Sequence[float] | None = None,
     ) -> Path | None:
         samples = self.load_round(round_id=round_id, show_table=show_table)
         try:
@@ -664,6 +666,8 @@ class PosteriorSamplesInterface:
             disable_mesh=disable_mesh,
             no_axes=no_axes,
             color=color or SKY_PROBABILITY_COLOR_CYCLE[0],
+            top_quad=top_quad,
+            contour_levels=contour_levels,
         )
         if save_path is not None or show:
             plt.close(plt.gcf())
