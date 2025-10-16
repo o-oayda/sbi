@@ -6,9 +6,15 @@ import numpy as np
 from dipolesbi.catwise.maps import Catwise
 from dipolesbi.tools.configs import CatwiseConfig
 from dipolesbi.tools.utils import ParameterMap
+from dipolesbi.tools.plotting import smooth_map
 
 
 mpl.rcParams['text.usetex'] = True
+
+COLORBAR_FONTSIZE = {
+    'cbar_label': 20,
+    'cbar_tick_label': 18
+}
 
 
 config = CatwiseConfig(
@@ -40,20 +46,15 @@ error_fraction = np.divide(
 error_map = ParameterMap(pixel_indices, error_fraction, nside=64).get_map()
 error_map[~catwise.binary_mask] = np.nan
 
+plt.figure()
 hp.projview(
-    coverage_map, 
-    nest=True, 
-    norm='log', 
-    sub=121,
-    unit='W1 Coverage', 
-    format='%.3g'
-)
-hp.projview(
-    error_map, 
-    nest=True, 
-    sub=122, 
-    unit=r'W1 Error (\%)', 
-    format='%.3g'
+    coverage_map,
+    nest=True,
+    norm='log',
+    unit='W1 Coverage',
+    format='%.3g',
+    cmap='magma',
+    fontsize=COLORBAR_FONTSIZE
 )
 figure_dir = os.path.join(
     os.path.expanduser('~'),
@@ -63,8 +64,40 @@ figure_dir = os.path.join(
     'figures'
 )
 os.makedirs(figure_dir, exist_ok=True)
-figure_path = os.path.join(figure_dir, 'catwise_coverage_error.pdf')
+coverage_figure_path = os.path.join(figure_dir, 'catwise_coverage_map.pdf')
+print(f'Saving coverage plot to {coverage_figure_path}...')
 plt.savefig(
-    figure_path, 
+    coverage_figure_path,
     bbox_inches='tight'
 )
+plt.close()
+
+plt.figure()
+hp.projview(
+    error_map,
+    nest=True,
+    unit=r'W1 Error (\%)',
+    format='%.3g',
+    cmap='magma',
+    fontsize=COLORBAR_FONTSIZE
+)
+error_figure_path = os.path.join(figure_dir, 'catwise_error_map.pdf')
+print(f'Saving error plot to {error_figure_path}...')
+plt.savefig(
+    error_figure_path,
+    bbox_inches='tight'
+)
+plt.close()
+
+plt.figure()
+smooth_map(
+    catwise.real_density_map,
+    cmap='magma',
+    unit='Averaged source count',
+    format='%.3g',
+    fontsize=COLORBAR_FONTSIZE
+)
+figure_path = os.path.join(figure_dir, 'catwise_density_map.pdf')
+print(f'Saving density plot to {figure_path}...')
+plt.savefig(figure_path, bbox_inches='tight')
+plt.close()
