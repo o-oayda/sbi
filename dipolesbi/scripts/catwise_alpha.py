@@ -5,10 +5,12 @@ import healpy as hp
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.ticker import MaxNLocator
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 from dipolesbi.catwise.maps import Catwise
 from dipolesbi.tools.configs import CatwiseConfig
-from dipolesbi.tools.utils import HidePrints, ParameterMap
-from dipolesbi.tools.plotting import smooth_map
+from dipolesbi.tools.np_rngkey import NPKey
+from dipolesbi.tools.utils import HidePrints
 
 
 mpl.rcParams['text.usetex'] = True
@@ -22,17 +24,28 @@ parser.add_argument(
         '(do not additionally add the true alphas in CatSIM)'
     )
 )
+parser.add_argument(
+    '--save',
+    action='store_true',
+    help='Save the plot to the default figure directory instead of showing it'
+)
 args = parser.parse_args()
 
-def solid_edge_histogram(data, **kwargs) -> None:
+def solid_edge_histogram(data, ax=None, **kwargs) -> None:
+    if ax is None:
+        ax = plt.gca()
+
     label = kwargs.pop('label')
-    plt.hist(data, **{'alpha': 0.4, **kwargs})
+    alpha = kwargs.pop('alpha', 0.4)
 
-    # suppress kwargs not applicable for step
-    kwkeys = list(kwargs.keys())
-    if 'alpha' in kwkeys: del kwargs['alpha']
+    fill_kwargs = dict(kwargs)
+    fill_kwargs['alpha'] = alpha
+    ax.hist(data, label=None, **fill_kwargs)
 
-    plt.hist(data, histtype='step', label=label, **kwargs)
+    edge_kwargs = dict(kwargs)
+    edge_kwargs.pop('alpha', None)
+    edge_kwargs['histtype'] = 'step'
+    ax.hist(data, label=label, **edge_kwargs)
 
 
 def uniform_bins_with_alignment(
@@ -97,10 +110,12 @@ with HidePrints():
     )
     catwise = Catwise(config)
     catwise.initialise_data()
+rng_key = NPKey.from_seed(0)
 t0 = time.time()
 dmap, mask = catwise.generate_dipole(
     log10_n_initial_samples=7.55,
-    w1_extra_error=3.57
+    w1_extra_error=3.57,
+    rng_key=rng_key
 )
 t1 = time.time()
 print(t1 - t0)
@@ -161,10 +176,11 @@ if PLOT_TRUE:
 else:
     bins = np.linspace(min(real_spec_idxs), 7, 150)
 
-plt.figure(figsize=(4.5,5.))
+fig, ax = plt.subplots(figsize=(4.5, 5.0))
 if PLOT_TRUE:
     solid_edge_histogram(
-        sim_spec_idxs, 
+        sim_spec_idxs,
+        ax=ax,
         bins=bins,
         color=COL_SIM_TRUE,
         label=r'CatSIM (true $\alpha$)',
@@ -172,38 +188,126 @@ if PLOT_TRUE:
         lw=1.5,
         linestyle='--'
     )
-    # plt.axvline(mean_sim_true, c=COL_SIM_TRUE, ls='--')
 solid_edge_histogram(
     sim_meas_spec_idxs,
+    ax=ax,
     bins=bins,
     color=COL_SIM_MEAS,
     label=r'CatSIM (measured $\alpha$)',
     alpha=0.2,
     lw=1.5
 )
-# plt.axvline(mean_sim_meas, c=COL_SIM_MEAS, ls='--')
 solid_edge_histogram(
     real_spec_idxs,
+    ax=ax,
     bins=bins,
     color=COL_REAL_MEAS,
     label=r'CatWISE (measured $\alpha$)',
     alpha=0.2,
     lw=1.5
 )
-# plt.axvline(mean_real_meas, c=COL_REAL_MEAS, ls='--')
-plt.xlabel(r'Spectral index $\alpha$')
-plt.ylabel('Count')
-plt.yscale('log')
-plt.legend()
+ax.set_xlabel(r'Spectral index $\alpha$')
+ax.set_ylabel('Count')
+ax.set_yscale('log')
+ax.legend()
+x_min, x_max = bins[0], bins[-1]
+span = x_max - x_min
+main_x_pad_fraction = 0.05  # fraction of data span padded on either side of main axis
+main_x_pad_abs = 0.1
+pad = max(main_x_pad_fraction * span, main_x_pad_abs) if span > 0 else main_x_pad_abs
+ax.set_xlim(x_min - pad, x_max + pad)
+ax.xaxis.set_major_locator(MaxNLocator(integer=True))
 
-figure_dir = os.path.join(
-    os.path.expanduser('~'),
-    'Documents',
-    'papers',
-    'catwise_sbi',
-    'figures'
+counts_real, _ = np.histogram(real_spec_idxs, bins=bins)
+counts_sim_meas, _ = np.histogram(sim_meas_spec_idxs, bins=bins)
+counts_sim_true = None
+if PLOT_TRUE:
+    counts_sim_true, _ = np.histogram(sim_spec_idxs, bins=bins)
+
+zoom_left = 0.2
+zoom_right = 2.2
+zoom_y_margin = 1.1  # multiplicative slack for zoom inset upper limit
+
+max_count = 1
+def _max_in_range(counts: np.ndarray) -> float:
+    if not counts.size:
+        return 1.0
+    mask = (bins[:-1] >= zoom_left) & (bins[:-1] <= zoom_right)
+    if not np.any(mask):
+        return float(np.max(counts)) if counts.size else 1.0
+    return float(np.max(counts[mask])) if counts[mask].size else 1.0
+
+max_count = max(
+    max_count,
+    _max_in_range(counts_real),
+    _max_in_range(counts_sim_meas),
+    _max_in_range(counts_sim_true) if counts_sim_true is not None else 1,
 )
-os.makedirs(figure_dir, exist_ok=True)
-figure_path = os.path.join(figure_dir, 'catwise_alpha_histogram.pdf')
-print(f'Saving alpha plot to {figure_path}...')
-plt.savefig(figure_path, bbox_inches='tight')
+
+divider = make_axes_locatable(ax)
+inset_ax = divider.append_axes("top", size="50%", pad=0.0)
+if PLOT_TRUE:
+    solid_edge_histogram(
+        sim_spec_idxs,
+        ax=inset_ax,
+        bins=bins,
+        color=COL_SIM_TRUE,
+        label=r'CatSIM (true $\alpha$)',
+        alpha=0.2,
+        lw=1.5,
+        linestyle='--'
+    )
+solid_edge_histogram(
+    sim_meas_spec_idxs,
+    ax=inset_ax,
+    bins=bins,
+    color=COL_SIM_MEAS,
+    label=r'CatSIM (measured $\alpha$)',
+    alpha=0.2,
+    lw=1.5
+)
+solid_edge_histogram(
+    real_spec_idxs,
+    ax=inset_ax,
+    bins=bins,
+    color=COL_REAL_MEAS,
+    label=r'CatWISE (measured $\alpha$)',
+    alpha=0.2,
+    lw=1.5
+)
+inset_ax.set_xlim(zoom_left, zoom_right)
+inset_ax.set_yscale('log')
+lower_ylim = max(1, max_count / 5)
+inset_ax.set_ylim(lower_ylim, max_count * zoom_y_margin)
+inset_ax.tick_params(
+    axis='x',
+    which='both',
+    labelsize=8,
+    labelbottom=False,
+    labeltop=True,
+    top=True,
+    bottom=False
+)
+inset_ax.tick_params(axis='y', which='both', length=0, labelleft=False)
+inset_ax.xaxis.set_label_position('top')
+inset_ax.xaxis.set_ticks_position('top')
+inset_ax.set_xlabel(r'Spectral index $\alpha$ (zoom)')
+inset_indicator = ax.indicate_inset_zoom(inset_ax, edgecolor='gray')
+for connector in getattr(inset_indicator, 'connectors', []):
+    if connector is not None:
+        connector.set_visible(False)
+
+if args.save:
+    figure_dir = os.path.join(
+        os.path.expanduser('~'),
+        'Documents',
+        'papers',
+        'catwise_sbi',
+        'figures'
+    )
+    os.makedirs(figure_dir, exist_ok=True)
+    figure_path = os.path.join(figure_dir, 'catwise_alpha_histogram.pdf')
+    print(f'Saving alpha plot to {figure_path}...')
+    fig.savefig(figure_path, bbox_inches='tight')
+else:
+    plt.show()
