@@ -1,33 +1,209 @@
+import argparse
 import os
+import time
 import healpy as hp
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 from dipolesbi.catwise.maps import Catwise
 from dipolesbi.tools.configs import CatwiseConfig
-from dipolesbi.tools.utils import ParameterMap
+from dipolesbi.tools.utils import HidePrints, ParameterMap
 from dipolesbi.tools.plotting import smooth_map
 
 
-config = CatwiseConfig(
-    cat_w1_max=17.0, 
-    cat_w12_min=0.5,
-    magnitude_error_dist='gaussian',
-    store_final_samples=True
+mpl.rcParams['text.usetex'] = True
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    '--only_measured_alpha',
+    action='store_true',
+    help=(
+        'Plot only the measured spectral indices'
+        '(do not additionally add the true alphas in CatSIM)'
+    )
 )
-catwise = Catwise(config)
-catwise.initialise_data()
-dmap, mask = catwise.generate_dipole(log10_n_initial_samples=7.5)
-print(f'Number of sources: {int(np.nansum(dmap))}')
+args = parser.parse_args()
 
-spectral_idxs = catwise.final_alpha_samples
-print(f'Mean alpha: {np.mean(spectral_idxs)}')
-plt.hist(spectral_idxs, bins=100)
-plt.xlabel('Spectral index')
-plt.yscale('log')
-plt.show()
+def solid_edge_histogram(data, **kwargs) -> None:
+    label = kwargs.pop('label')
+    plt.hist(data, **{'alpha': 0.4, **kwargs})
 
-plt.hist(catwise.final_w12_samples, bins=100)
+    # suppress kwargs not applicable for step
+    kwkeys = list(kwargs.keys())
+    if 'alpha' in kwkeys: del kwargs['alpha']
+
+    plt.hist(data, histtype='step', label=label, **kwargs)
+
+
+def uniform_bins_with_alignment(
+    start_edge: float,
+    end_edge: float,
+    target_edge: float,
+    approx_edges: int,
+    edge_window: int = 10,
+) -> np.ndarray:
+    """
+    Return uniformly spaced bin edges between ``start_edge`` and ``end_edge`` where one edge
+    lies as close as practical to ``target_edge`` while keeping roughly ``approx_edges`` edges.
+
+    The routine searches edge counts within ``edge_window`` of ``approx_edges``, always produces a
+    uniform grid, and picks the option whose edge is nearest to the requested value (e.g. the
+    minimum measured spectral index). Use this when you need the binning to remain uniform and
+    near the original resolution but want an edge to align with a specific measurement.
+    """
+    approx_edges = max(approx_edges, 3)
+    edge_window = max(edge_window, 0)
+    start_edge = float(start_edge)
+    end_edge = float(end_edge)
+    target_edge = float(target_edge)
+
+    best_bins = None
+    best_error = np.inf
+    best_edge_count = None
+
+    search_min = max(3, approx_edges - edge_window)
+    search_max = approx_edges + edge_window + 1
+    for edge_count in range(search_min, search_max):
+        candidate_bins = np.linspace(start_edge, end_edge, edge_count)
+        idx = np.abs(candidate_bins - target_edge).argmin()
+        error = abs(candidate_bins[idx] - target_edge)
+
+        if error < best_error:
+            best_error = error
+            best_bins = candidate_bins
+            best_edge_count = edge_count
+        elif np.isclose(error, best_error):
+            if (
+                best_edge_count is None
+                or abs(edge_count - approx_edges) < abs(best_edge_count - approx_edges)
+            ):
+                best_error = error
+                best_bins = candidate_bins
+                best_edge_count = edge_count
+
+    if best_bins is None:
+        return np.linspace(start_edge, end_edge, approx_edges)
+
+    return best_bins
+
+# simulated data
+with HidePrints():
+    config = CatwiseConfig(
+        cat_w1_max=17.0, 
+        cat_w12_min=0.5,
+        magnitude_error_dist='gaussian',
+        store_final_samples=True,
+        use_common_extra_error=True
+    )
+    catwise = Catwise(config)
+    catwise.initialise_data()
+t0 = time.time()
+dmap, mask = catwise.generate_dipole(
+    log10_n_initial_samples=7.55,
+    w1_extra_error=3.57
+)
+t1 = time.time()
+print(t1 - t0)
+
+# empirical CatWISE2020 sample
+real_dmap, real_mask = catwise.make_real_sample()
+longitudes = catwise.real_catalogue['l']
+latitudes = catwise.real_catalogue['b']
+source_indices = hp.ang2pix(
+    64, longitudes, latitudes, lonlat=True, nest=True
+).astype(np.int32)
+source_ismasked = catwise.mask_map[source_indices] == 0
+masked_catalogue = catwise.real_catalogue[source_ismasked]
+
+print(
+    f'Number of sources (real): {int(np.nansum(dmap))}\n'
+    f'Number of sources (sim): {int(np.nansum(real_dmap))}'
+)
+
+assert catwise.final_w12_samples is not None
+sim_colour = catwise.final_w12_samples # after error
+real_colour = masked_catalogue['w12']
+bins = np.linspace(0.8, 3, 100)
+# solid_edge_histogram(sim_colour, bins=bins, color='tab:blue', label='Simulated')
+# solid_edge_histogram(real_colour, bins=bins, color='tab:orange', label='Real')
+# plt.yscale('log')
+# plt.ylabel('W12 colour')
+# plt.legend()
+# plt.show()
+
+sim_spec_idxs = catwise.final_alpha_samples
+real_spec_idxs = -masked_catalogue['alpha_W1']
+sim_meas_spec_idxs = catwise.final_measured_alpha_samples
+min_real_spec_idx = float(np.nanmin(real_spec_idxs))
+
+mean_sim_true = float(np.mean(sim_spec_idxs))
+mean_sim_meas = float(np.mean(sim_meas_spec_idxs))
+mean_real_meas = float(np.mean(real_spec_idxs))
+COL_SIM_TRUE = 'silver'
+COL_SIM_MEAS = 'tomato'
+COL_REAL_MEAS = 'cornflowerblue'
+PLOT_TRUE = not args.only_measured_alpha
+
+print(
+    f'Mean sim. alpha (true): {mean_sim_true} (n={len(sim_spec_idxs)})\n'
+    f'Mean sim. alpha (meas): {mean_sim_meas} (n={len(sim_meas_spec_idxs)})\n'
+    f'Mean real alpha: {mean_real_meas} (n={len(real_spec_idxs)})'
+)
+
+if PLOT_TRUE:
+    bins = uniform_bins_with_alignment(
+        start_edge=float(np.nanmin(sim_spec_idxs)),
+        end_edge=7.0,
+        target_edge=min_real_spec_idx,
+        approx_edges=150,
+        edge_window=10,
+    )
+else:
+    bins = np.linspace(min(real_spec_idxs), 7, 150)
+
+plt.figure(figsize=(4.5,5.))
+if PLOT_TRUE:
+    solid_edge_histogram(
+        sim_spec_idxs, 
+        bins=bins,
+        color=COL_SIM_TRUE,
+        label=r'CatSIM (true $\alpha$)',
+        alpha=0.2,
+        lw=1.5,
+        linestyle='--'
+    )
+    # plt.axvline(mean_sim_true, c=COL_SIM_TRUE, ls='--')
+solid_edge_histogram(
+    sim_meas_spec_idxs,
+    bins=bins,
+    color=COL_SIM_MEAS,
+    label=r'CatSIM (measured $\alpha$)',
+    alpha=0.2,
+    lw=1.5
+)
+# plt.axvline(mean_sim_meas, c=COL_SIM_MEAS, ls='--')
+solid_edge_histogram(
+    real_spec_idxs,
+    bins=bins,
+    color=COL_REAL_MEAS,
+    label=r'CatWISE (measured $\alpha$)',
+    alpha=0.2,
+    lw=1.5
+)
+# plt.axvline(mean_real_meas, c=COL_REAL_MEAS, ls='--')
+plt.xlabel(r'Spectral index $\alpha$')
+plt.ylabel('Count')
 plt.yscale('log')
-plt.ylabel('W12 colour')
-plt.show()
+plt.legend()
+
+figure_dir = os.path.join(
+    os.path.expanduser('~'),
+    'Documents',
+    'papers',
+    'catwise_sbi',
+    'figures'
+)
+os.makedirs(figure_dir, exist_ok=True)
+figure_path = os.path.join(figure_dir, 'catwise_alpha_histogram.pdf')
+print(f'Saving alpha plot to {figure_path}...')
+plt.savefig(figure_path, bbox_inches='tight')
