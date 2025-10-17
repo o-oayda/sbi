@@ -169,6 +169,7 @@ class Catwise:
         final_w2_list: list[NDArray[np.float32]] = []
         final_w12_list: list[NDArray[np.float32]] = []
         final_indices_list: list[NDArray[np.int32]] = []
+        final_alpha_list: list[NDArray[np.float32]] = []
 
         self.final_w1_samples = None
         self.final_w2_samples = None
@@ -297,6 +298,7 @@ class Catwise:
                 final_w2_list.append(cut_boosted_w2_samples.astype(np.float32))
                 final_w12_list.append(cut_boosted_w12_samples.astype(np.float32))
                 final_indices_list.append(cut_source_pixel_indices)
+                final_alpha_list.append(spectral_indices)
 
         self._density_map = density_accumulator.astype(np.float32)
 
@@ -306,11 +308,13 @@ class Catwise:
                 self.final_w2_samples = np.concatenate(final_w2_list)
                 self.final_w12_samples = np.concatenate(final_w12_list)
                 self.final_pixel_indices = np.concatenate(final_indices_list)
+                self.final_alpha_samples = np.concatenate(final_alpha_list)
             else:
                 self.final_w1_samples = np.empty(0, dtype=np.float32)
                 self.final_w2_samples = np.empty(0, dtype=np.float32)
                 self.final_w12_samples = np.empty(0, dtype=np.float32)
                 self.final_pixel_indices = np.empty(0, dtype=np.int32)
+                self.final_alpha_samples = np.empty(0, dtype=np.float32)
 
         output_map, output_mask = self._prepare_map_output(
             self._density_map,
