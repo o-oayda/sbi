@@ -1,7 +1,7 @@
 from jax.random import PRNGKey
 from dipolesbi.tools.healpix_helpers import downgrade_ignore_nan
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
-from dipolesbi.tools.configs import DataTransformSpec, Scenario
+from dipolesbi.tools.configs import DataTransformSpec, Scenario, SimpleDipoleMapConfig
 from dipolesbi.tools.np_rngkey import npkey_from_jax
 from dipolesbi.tools.maps import SimpleDipoleMap, SimpleDipoleMapJax
 import healpy as hp
@@ -44,6 +44,11 @@ if __name__ == '__main__':
         required=True,
         help='Diretory for simulation outputs.'
     )
+    parser.add_argument(
+        '--no_ui',
+        action='store_true',
+        help='Disable the Rich multi-round progress UI.'
+    )
     args = parser.parse_args()
 
     x0_rng_key = PRNGKey(42)
@@ -70,7 +75,10 @@ if __name__ == '__main__':
         'dipole_latitude': np.asarray(40.)
     }
 
-    model = SimpleDipoleMap(nside=NSIDE, downscale_nside=COARSE_NSIDE)
+    simpledipole_config = SimpleDipoleMapConfig(
+        nside=NSIDE, downscale_nside=COARSE_NSIDE
+    )
+    model = SimpleDipoleMap(simpledipole_config)
     model.catwise_mask()
     # these will be at the coarse resolution
     x0, coarse_mask = model.generate_dipole(npkey_from_jax(x0_rng_key), theta=theta0)
@@ -82,13 +90,13 @@ if __name__ == '__main__':
     assert coarse_mask.shape[-1] == 12 * COARSE_NSIDE * COARSE_NSIDE
     assert x0.shape[-1] == 12 * COARSE_NSIDE * COARSE_NSIDE
 
-    hp.projview(x0.squeeze() * coarse_mask.squeeze(), nest=True)
-    plt.savefig('example_sample_coarse.pdf', bbox_inches='tight')
-    plt.show()
-
-    hp.projview(native_dmap.squeeze() * native_mask.squeeze(), nest=True)
-    plt.savefig('example_sample_native.pdf', bbox_inches='tight')
-    plt.show()
+    # hp.projview(x0.squeeze() * coarse_mask.squeeze(), nest=True)
+    # plt.savefig('example_sample_coarse.pdf', bbox_inches='tight')
+    # plt.show()
+    #
+    # hp.projview(native_dmap.squeeze() * native_mask.squeeze(), nest=True)
+    # plt.savefig('example_sample_native.pdf', bbox_inches='tight')
+    # plt.show()
 
     prior = DipolePriorNP(
         mean_count_range=[float(0.95*MEAN_DENSITY), float(1.05*MEAN_DENSITY)],
@@ -124,7 +132,7 @@ if __name__ == '__main__':
                         'prng_integer_seed': args.ssnle_seed,
                         'plot_save_dir': args.out_dir,
                         'simulation_budget': 50_000,
-                        'n_rounds': 10,
+                        'n_rounds': 15,
                         'likelihood_chunk_size_gb': 0.5,
                         'n_likelihood_samples': 5_000
                     },
@@ -133,7 +141,6 @@ if __name__ == '__main__':
                         'decoder_n_layers': 4,
                         'architecture': 4 * ['MAF'] + ['surjective_MAF'] + 6 * ['MAF'],
                         'data_reduction_factor': 0.5,
-                        # 'architecture': 12 * ['MAF']
                     },
                     data_spec=data_spec
                 )
@@ -162,7 +169,9 @@ if __name__ == '__main__':
             multi_round_config=cur_cfg.multiround,
             transform_config=cur_cfg.transforms,
             nflow_config=cur_cfg.flow,
-            train_config=cur_cfg.training
+            train_config=cur_cfg.training,
+            use_ui=not args.no_ui,
+            model_config=simpledipole_config
         )
         inferer.run()
 

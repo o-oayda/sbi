@@ -1,7 +1,7 @@
 from abc import ABC
 from dataclasses import dataclass, field, fields, make_dataclass, replace
 from typing import Optional, Literal
-from numpy.typing import NDArray
+from numpy.typing import DTypeLike, NDArray
 from dipolesbi.tools.priors_jax import DipolePriorJax
 from dipolesbi.tools.transforms import (
     DipoleBijectorWrapper,
@@ -40,6 +40,38 @@ def _make_override_class(base_cls):
 @dataclass
 class ModelConfig(ABC):
     pass
+
+@dataclass 
+class SimpleDipoleMapConfig(ModelConfig):
+    '''
+    :param nside: Nside of native data to generate dipole in.
+    :param dtype: Dtype of output maps. Though we generate Poisson deviates,
+        this shouldn't be an integer since we use nan to fill in unseen pixels.
+    :param reference_data: Healpy map of Poisson deviates at the downscaled Nside.
+    :param reference_mask: Healpy map of binary mask at the native Nside.
+    :param is_masked_val: Value to insert into masked pixels for safety.
+    :param downscale_nside: Nside to downscale the map to, ignoring nan pixels.
+        See the note below for more detail. If this is set, the output of
+        generate dipole will be at the coarser Nside, and log likelihood
+        calculations will be done at that coarse resolution.
+
+    # Downscale Nside
+    For a map `x` with mask `m` where the entries of `x` are Poisson deviates,
+    the sum of entries of `x` will also be a Poisson deviate with rate parameter
+    equal to the sum of the rate parameters of the entries.
+
+    Thus, when downscaling a map, we can compute the explicit log likelihood
+    of the coarse map given the log likelihood of the finer map.
+    Unseen pixels are simply ignored. For example, in a four-block with 2
+    masked pixels, the sum will be over the 2 seen pixels, yielding a total
+    coarse rate parameter less than that if all the pixels were seen.
+    '''
+    nside: int
+    downscale_nside: int
+    dtype: DTypeLike = np.float32
+    reference_data: Optional[NDArray] = None
+    reference_mask: Optional[NDArray[np.bool_]] = None
+    is_masked_val: float = np.nan
 
 @dataclass
 class CatwiseConfig(ModelConfig):
