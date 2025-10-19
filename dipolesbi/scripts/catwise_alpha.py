@@ -10,10 +10,16 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from dipolesbi.catwise.maps import Catwise
 from dipolesbi.tools.configs import CatwiseConfig
 from dipolesbi.tools.np_rngkey import NPKey
+from dipolesbi.tools.plotting import smooth_map
 from dipolesbi.tools.utils import HidePrints
 
 
 mpl.rcParams['text.usetex'] = True
+COLORBAR_FONTSIZE = {
+    'cbar_label': 20,
+    'cbar_tick_label': 18
+}
+rng_key = NPKey.from_seed(7)
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -110,11 +116,13 @@ with HidePrints():
     )
     catwise = Catwise(config)
     catwise.initialise_data()
-rng_key = NPKey.from_seed(0)
 t0 = time.time()
-dmap, mask = catwise.generate_dipole(
+dmap, mask = catwise.generate_dipole( # median params from free gauss extra err
     log10_n_initial_samples=7.55,
     w1_extra_error=3.57,
+    observer_speed=2.07,
+    dipole_longitude=221.,
+    dipole_latitude=44.,
     rng_key=rng_key
 )
 t1 = time.time()
@@ -309,5 +317,58 @@ if args.save:
     figure_path = os.path.join(figure_dir, 'catwise_alpha_histogram.pdf')
     print(f'Saving alpha plot to {figure_path}...')
     fig.savefig(figure_path, bbox_inches='tight')
-else:
-    plt.show()
+    plt.close(fig)
+
+w1_values = masked_catalogue['w1']
+valid_real_alpha = np.isfinite(real_spec_idxs)
+mag_selection = (
+    (w1_values >= 16.3)
+    & (w1_values < 16.4)
+    & valid_real_alpha
+)
+selected_real_alphas = real_spec_idxs[mag_selection]
+print(
+    f'Number of CatWISE sources with 16.3 ≤ W1 < 16.4: '
+    f'{selected_real_alphas.size}'
+)
+
+if selected_real_alphas.size > 0:
+    fig_mag, ax_mag = plt.subplots(figsize=(4.5, 3.8))
+    solid_edge_histogram(
+        selected_real_alphas,
+        ax=ax_mag,
+        bins=40,
+        color=COL_REAL_MEAS,
+        label=r'CatWISE (measured $\alpha$)',
+        alpha=0.3,
+        lw=1.2
+    )
+    ax_mag.set_xlabel(r'Spectral index $\alpha$')
+    ax_mag.set_ylabel('Count')
+    ax_mag.set_yscale('log')
+    ax_mag.set_title(r'CatWISE $\alpha$ for $16.3 \leq W1 < 16.4$')
+    ax_mag.legend()
+    print(np.mean(selected_real_alphas))
+    plt.close(fig_mag)
+
+smooth_map(
+    dmap,
+    cmap='magma',
+    unit='Averaged source count (CatSIM)',
+    format='%.3g',
+    fontsize=COLORBAR_FONTSIZE
+)
+if args.save:
+    figure_dir = os.path.join(
+        os.path.expanduser('~'),
+        'Documents',
+        'papers',
+        'catwise_sbi',
+        'figures'
+    )
+    os.makedirs(figure_dir, exist_ok=True)
+    figure_path = os.path.join(figure_dir, 'catsim_dmap.pdf')
+    print(f'Saving catsim dmap plot to {figure_path}...')
+    plt.savefig(figure_path, bbox_inches='tight')
+    plt.close()
+plt.show()

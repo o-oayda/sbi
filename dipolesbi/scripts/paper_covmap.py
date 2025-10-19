@@ -93,7 +93,7 @@ plt.figure()
 smooth_map(
     catwise.real_density_map,
     cmap='magma',
-    unit='Averaged source count',
+    unit='Averaged source count (CatWISE)',
     format='%.3g',
     fontsize=COLORBAR_FONTSIZE
 )

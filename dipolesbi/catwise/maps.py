@@ -170,6 +170,7 @@ class Catwise:
         final_w12_list: list[NDArray[np.float32]] = []
         final_indices_list: list[NDArray[np.int32]] = []
         final_alpha_list: list[NDArray[np.float32]] = []
+        final_measured_alpha_list: list[NDArray[np.float32]] = []
 
         self.final_w1_samples = None
         self.final_w2_samples = None
@@ -269,6 +270,7 @@ class Catwise:
                 noise_buffers=current_noise_buffers
             )
 
+            # after adding error
             boosted_w12_samples = boosted_w1_samples - boosted_w2_samples
 
             cut = self.magnitude_cut_boolean(
@@ -287,6 +289,13 @@ class Catwise:
             cut_boosted_w12_samples = boosted_w12_samples[cut]
             cut_source_pixel_indices = source_pixel_indices[cut].astype(np.int32, copy=False)
 
+            # these are the 'true' spectral indices, i.e. the ones we actually
+            # measure are after error has been added to w1 and w2
+            true_cut_spectral_indices = spectral_indices[cut]
+            measured_cut_spectral_indices = -self.spectral_lookup.fit_alpha(
+                cut_boosted_w12_samples
+            )
+
             chunk_density = np.bincount(
                 cut_source_pixel_indices,
                 minlength=n_pix
@@ -298,7 +307,8 @@ class Catwise:
                 final_w2_list.append(cut_boosted_w2_samples.astype(np.float32))
                 final_w12_list.append(cut_boosted_w12_samples.astype(np.float32))
                 final_indices_list.append(cut_source_pixel_indices)
-                final_alpha_list.append(spectral_indices)
+                final_alpha_list.append(true_cut_spectral_indices)
+                final_measured_alpha_list.append(measured_cut_spectral_indices)
 
         self._density_map = density_accumulator.astype(np.float32)
 
@@ -309,12 +319,16 @@ class Catwise:
                 self.final_w12_samples = np.concatenate(final_w12_list)
                 self.final_pixel_indices = np.concatenate(final_indices_list)
                 self.final_alpha_samples = np.concatenate(final_alpha_list)
+                self.final_measured_alpha_samples = np.concatenate(
+                    final_measured_alpha_list
+                )
             else:
                 self.final_w1_samples = np.empty(0, dtype=np.float32)
                 self.final_w2_samples = np.empty(0, dtype=np.float32)
                 self.final_w12_samples = np.empty(0, dtype=np.float32)
                 self.final_pixel_indices = np.empty(0, dtype=np.int32)
                 self.final_alpha_samples = np.empty(0, dtype=np.float32)
+                self.final_measured_alpha_samples = np.empty(0, np.float32)
 
         output_map, output_mask = self._prepare_map_output(
             self._density_map,
