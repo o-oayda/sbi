@@ -47,7 +47,7 @@ fi
 
 for SEED in {0..24}; do
     echo "Running lnB_exp.py with ssnle_seed=${SEED}"
-    JAX_PLATFORMS=cpu python dipolesbi/scripts/lnB_exp.py \
+    python dipolesbi/scripts/lnB_exp.py \
         --nside "${NSIDE}" \
         --downscale_nside "${COARSE_NSIDE}" \
         --ssnle_seed "${SEED}" \
