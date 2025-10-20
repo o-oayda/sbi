@@ -71,8 +71,7 @@ if __name__ == '__main__':
     x0, coarse_mask = model.generate_dipole(x0_rng_key_np, theta=theta0)
     native_dmap, native_mask = model.dmap_and_mask
     true_model_jax = SimpleDipoleMapJax( # yeah this is jank but deal with it
-        nside=NSIDE,
-        downscale_nside=COARSE_NSIDE,
+        nside=NSIDE, # don't downscale this --- for high Nside results
         reference_data=jax.device_put(native_dmap).squeeze(),
         reference_mask=jax.device_put(native_mask).squeeze()
     )
