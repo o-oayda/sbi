@@ -255,6 +255,7 @@ def smooth_map(
         weights: NDArray | None = None,
         angle_scale: float = 1.,
         only_return_data: bool = False,
+        fig: matplotlib.figure.Figure | None = None,
         **kwargs
     ) -> NDArray | None:
     smoothed_map_to_plot = average_smooth_map(
@@ -269,5 +270,7 @@ def smooth_map(
     hp.projview(
         smoothed_map_to_plot,
         nest=True,
+        fig=fig.number if fig is not None else None,
         **kwargs
     )
+    return None
