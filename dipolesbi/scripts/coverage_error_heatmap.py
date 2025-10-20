@@ -100,13 +100,15 @@ def plot_panel(
     vline: float,
     cmap_norm: Normalize,
 ) -> None:
-    mesh = ax.pcolormesh(
-        mag_edges,
-        log_cov_edges,
+    extent = [mag_edges[0], mag_edges[-1], log_cov_edges[0], log_cov_edges[-1]]
+    mesh = ax.imshow(
         grid.T,
-        shading="auto",
-        cmap="plasma",
+        origin="lower",
+        extent=extent,
+        cmap="magma",
         norm=cmap_norm,
+        interpolation="nearest",
+        aspect="auto",
     )
     if vline is not None:
         ax.axvline(vline, linestyle="--", color="black", linewidth=1)
@@ -187,8 +189,8 @@ def main() -> None:
         y_min_lim = max(args.logcov_min, y_min_lim - buffer)
         y_max_lim = min(args.logcov_max, y_max_lim + buffer)
 
-    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.0), sharex=True, sharey=True)
-    for idx, (ax, grid) in enumerate(zip(axes, panels)):
+    fig, axes = plt.subplots(2, 1, figsize=(3, 5), sharex=True, sharey=True)
+    for idx, (ax, grid) in enumerate(zip(axes, panels[::-1])):  # top: unmasked
         mesh = plot_panel(
             ax,
             mag_edges,
@@ -197,53 +199,45 @@ def main() -> None:
             vline=args.vline_mag,
             cmap_norm=norm,
         )
-        if idx == 0:
-            ax.set_ylabel(r"$\log_{10} C_{W_1}$")
+        ax.set_ylabel(r"$\log_{10} C_{W1}$")
 
     xticks = np.arange(np.ceil(args.mag_min), np.floor(args.mag_max) + 1)
-    axes[0].set_xticks(xticks)
     axes[1].set_xticks(xticks)
-    axes[0].set_xticklabels([f"{tick:.0f}" for tick in xticks])
     axes[1].set_xticklabels([f"{tick:.0f}" for tick in xticks])
+    axes[0].tick_params(labelbottom=False)
 
     yticks = np.linspace(y_min_lim, y_max_lim, 7)
     axes[0].set_yticks(yticks)
     axes[0].set_yticklabels([f"{tick:.1f}" for tick in yticks])
-    axes[1].tick_params(left=False, labelleft=False)
-
-    axes[0].tick_params(which="both", direction="out")
+    axes[1].set_yticks(yticks)
+    axes[1].set_yticklabels([f"{tick:.1f}" for tick in yticks])
     axes[1].tick_params(which="both", direction="out")
-    left_xticks = axes[0].get_xticklabels()
-    right_xticks = axes[1].get_xticklabels()
-    if left_xticks:
-        left_xticks[-1].set_visible(False)
-    if right_xticks:
-        right_xticks[0].set_visible(False)
+    axes[0].tick_params(which="both", direction="out")
+    top_yticks = axes[0].get_yticklabels()
+    bottom_yticks = axes[1].get_yticklabels()
+    if top_yticks:
+        top_yticks[0].set_visible(False)
+    if bottom_yticks:
+        bottom_yticks[-1].set_visible(False)
 
     axes[0].set_xlim(args.mag_min, args.mag_max)
     axes[1].set_xlim(args.mag_min, args.mag_max)
     axes[0].set_ylim(y_min_lim, y_max_lim)
     axes[1].set_ylim(y_min_lim, y_max_lim)
 
-    fig.subplots_adjust(left=0.1, right=0.88, bottom=0.16, top=0.92, wspace=0.0)
-    cax = fig.add_axes([0.9, 0.16, 0.02, 0.72])
-    cbar = fig.colorbar(mesh, cax=cax)
+    fig.subplots_adjust(left=0.12, right=0.96, bottom=0.1, top=0.95, hspace=0.0)
+    cax = fig.add_axes([0.12, 0.955, 0.84, 0.03])
+    cbar = fig.colorbar(mesh, cax=cax, orientation="horizontal")
+    cbar.ax.tick_params(labelsize=8)
 
     # because matplotlib sucks major ass, I have to do this bullshit
     ticks = [0.012, 0.02, 0.03, 0.04, 0.05, 0.06]
     tick_labels = [str(tick) for tick in ticks]
     cbar.set_ticks(ticks=ticks, labels=tick_labels)
 
-    if args.log_color and isinstance(norm, LogNorm):
-        pass
-        # tick_values = np.geomspace(norm.vmin, norm.vmax, num=6)
-        # labels = []
-        # for val in tick_values:
-        #     label = f"{val:.6f}".rstrip("0").rstrip(".")
-        #     labels.append(label if label else "0")
-        # cbar.set_ticks(tick_values)
-        # cbar.set_ticklabels(labels)
-    cbar.set_label("W1 error")
+    cbar.ax.xaxis.set_ticks_position('top')
+    cbar.ax.xaxis.set_label_position('top')
+    cbar.set_label("Median W1 error", labelpad=4)
 
     if args.save_plot:
         out_dir = os.path.join(
