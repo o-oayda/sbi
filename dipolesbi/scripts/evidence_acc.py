@@ -238,7 +238,7 @@ def main():
     # Highlight mean true $\ln \mathcal{Z}$ ± 1 sigma on left panel
     lower = true_lnZ_mean - true_lnZ_std
     upper = true_lnZ_mean + true_lnZ_std
-    ax0.axhspan(lower, upper, color='grey', alpha=0.3, label=r'True $\ln \mathcal{Z} \pm 1\sigma$ (known likelihood)')
+    ax0.axhspan(lower, upper, color='grey', alpha=0.4, label=r'True $\ln \mathcal{Z} \pm 1\sigma$ (known likelihood)')
     ax0.legend(loc='lower right')
     
     plt.tight_layout()
