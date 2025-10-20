@@ -23,6 +23,7 @@ fiducial_50k/*
 *.npz
 *.csv
 *.npy
+*.json
 
 !dipolesbi/catwise/0p5_17p0/data/**
 !dipolesbi/catwise/0p7_16p8/data/**
