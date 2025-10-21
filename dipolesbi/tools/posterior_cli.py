@@ -81,6 +81,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Render corner contours without filling.",
     )
     parser.add_argument(
+        "--corner-no-legend",
+        action="store_true",
+        help="Suppress the legend in the corner plot.",
+    )
+    parser.add_argument(
         "--ppc-count",
         type=int,
         default=None,
@@ -364,12 +369,15 @@ def main(argv: list[str] | None = None) -> int:
             for mc in mc_samples_list:
                 mc.updateSettings({"contours": contour_probs})
             plotter.settings.num_plot_contours = len(contour_probs)
+        legend_labels = None if args.corner_no_legend else labels
+        triangle_kwargs_local = dict(triangle_kwargs)
+        if legend_labels is not None:
+            triangle_kwargs_local["legend_labels"] = legend_labels
         plotter.triangle_plot(
             mc_samples_list,
             params=param_columns,
             filled=filled,
-            legend_labels=labels,
-            **triangle_kwargs,
+            **triangle_kwargs_local,
         )
         corner_path = Path(args.corner).expanduser()
         corner_path.parent.mkdir(parents=True, exist_ok=True)

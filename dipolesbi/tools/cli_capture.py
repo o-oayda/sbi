@@ -5,6 +5,7 @@ import os
 import pathlib
 import pty
 import sys
+import subprocess
 from typing import List
 
 
@@ -30,6 +31,7 @@ def run_with_logging(
     if env_updates:
         env.update(env_updates)
 
+    original_cwd = pathlib.Path.cwd()
     if cwd is not None:
         os.chdir(cwd)
 
@@ -48,10 +50,32 @@ def run_with_logging(
                     log_file.flush()
                 return data
 
-            status = pty.spawn(command, master_read=master_read)  # type: ignore[arg-type]
+            try:
+                status = pty.spawn(command, master_read=master_read)  # type: ignore[arg-type]
+            except OSError:
+                # Fallback: run without PTY while streaming output.
+                log_file.flush()
+                process = subprocess.Popen(
+                    command,
+                    cwd=os.getcwd(),
+                    env=os.environ.copy(),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    bufsize=0,
+                )
+                assert process.stdout is not None
+                for chunk in iter(lambda: process.stdout.readline(), b""):
+                    if not chunk:
+                        break
+                    sys.stdout.buffer.write(chunk)
+                    sys.stdout.buffer.flush()
+                    log_file.write(chunk)
+                    log_file.flush()
+                status = process.wait()
     finally:
         os.environ.clear()
         os.environ.update(original_env)
+        os.chdir(original_cwd)
 
     return _waitstatus_to_exitcode(status)
 

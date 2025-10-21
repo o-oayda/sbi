@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import pathlib
 import re
 import sys
@@ -49,7 +50,7 @@ def parse_logz_from_log(file_path: pathlib.Path) -> Tuple[float, float]:
 
 
 def write_tables(
-    entries: Sequence[Tuple[str, str, float, float]],
+    entries: Sequence[Tuple[str, str, float, float, str]],
     output_dir: pathlib.Path,
 ) -> None:
     """
@@ -58,7 +59,7 @@ def write_tables(
     sorted_entries = sorted(entries, key=lambda item: item[2], reverse=True)
 
     md_lines = ["| Run | Model | $\\ln \\mathcal{Z}$ |", "| --- | --- | --- |"]
-    for run_name, label, mean, std in sorted_entries:
+    for run_name, label, mean, std, _ in sorted_entries:
         md_lines.append(f"| {run_name} | {label} | ${mean:.1f} \\pm {std:.1f}$ |")
 
     def latex_escape(text: str) -> str:
@@ -82,15 +83,91 @@ def write_tables(
         r"Run & Model & $\ln \mathcal{Z}$ \\",
         r"\hline",
     ]
-    for run_name, label, mean, std in sorted_entries:
+    for run_name, label, mean, std, _ in sorted_entries:
         run_tex = latex_escape(run_name)
         label_tex = label  # label may contain LaTeX already
-        tex_lines.append(f"{run_tex} & {label_tex} & {mean:.1f} \\pm {std:.1f} \\\\")
+        tex_lines.append(f"{run_tex} & {label_tex} & \\num{{{mean:.1f} +- {std:.1f}}} \\\\")
     tex_lines.extend([r"\hline", r"\end{tabular}"])
 
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "logz_summary.md").write_text("\n".join(md_lines) + "\n", encoding="utf-8")
     (output_dir / "logz_summary.tex").write_text("\n".join(tex_lines) + "\n", encoding="utf-8")
+
+    if sorted_entries:
+        best_mean = sorted_entries[0][2]
+        best_std = sorted_entries[0][3]
+
+        md_b_lines = ["| Model | $\\Delta \\ln \\mathcal{Z}$ |", "| --- | --- |"]
+        tex_b_lines = [
+            r"\begin{tabular}{l r@{\,\,\pm\,\,}l}",
+            r"\hline",
+            r"Model & \multicolumn{2}{c}{$\ln B$} \\",
+            r"\hline",
+        ]
+
+        CUSTOM_LNB_LABELS = {
+            "cmb_direction": (
+                "CMB direction, free velocity", 
+                "CMB direction, free velocity"
+            ),
+            "cmb_velocity": (
+                "CMB velocity, free direction", 
+                "CMB velocity, free direction"
+            ),
+            "cmb_dipole": (
+                "CMB velocity & direction", 
+                "CMB velocity \\& direction"
+            ),
+            "free_gauss": (
+                "Free dipole, no extra error, Gaussian", 
+                "Free dipole, no extra error, Gaussian"
+            ),
+            "free_gauss_extra_err": (
+                "Free dipole, extra error, Gaussian", 
+                "Free dipole, extra error, Gaussian"
+            ),
+            "free_students-t_extra_err": (
+                "Free dipole, extra error, Student's $t$",
+                "Free dipole, extra error, Student's $t$",
+            ),
+            "free_students-t": (
+                "Free dipole, no extra error, Student's $t$",
+                "Free dipole, no extra error, Student's $t$",
+            ),
+        }
+        SKIP_IDENTIFIERS = {"secrest2021", "dam2023"}
+        logged_skips: set[str] = set()
+
+        def resolve_bayes_label(label: str, identifier: str) -> tuple[str, str]:
+            if identifier in CUSTOM_LNB_LABELS:
+                return CUSTOM_LNB_LABELS[identifier]
+            if identifier in SKIP_IDENTIFIERS and identifier not in logged_skips:
+                print(
+                    f"[logz_summary] Skipping custom label for Bayes factor table: '{identifier}' not yet available.",
+                    file=sys.stderr,
+                )
+                logged_skips.add(identifier)
+            return label, label
+
+        for idx, (run_name, label, mean, std, identifier) in enumerate(sorted_entries):
+            delta_mean = mean - best_mean
+            delta_std = math.sqrt(std * std + best_std * best_std)
+            display_label_md, display_label_tex = resolve_bayes_label(label, identifier)
+            if idx == 0:
+                md_b_lines.append(f"| {display_label_md} | $0.0$ |")
+                tex_b_lines.append(f"{display_label_tex} & $0$ & $0$ \\\\")
+            else:
+                md_b_lines.append(
+                    f"| {display_label_md} | ${delta_mean:.1f} \\pm {delta_std:.1f}$ |"
+                )
+                tex_b_lines.append(
+                    f"{display_label_tex} & ${delta_mean:.1f}$ & ${delta_std:.1f}$ \\\\"
+                )
+
+        tex_b_lines.extend([r"\hline", r"\end{tabular}"])
+
+        (output_dir / "logb_summary.md").write_text("\n".join(md_b_lines) + "\n", encoding="utf-8")
+        (output_dir / "logb_summary.tex").write_text("\n".join(tex_b_lines) + "\n", encoding="utf-8")
 
 
 def _cmd_extract(log_file: pathlib.Path) -> int:
@@ -104,16 +181,23 @@ def _cmd_extract(log_file: pathlib.Path) -> int:
 
 
 def _cmd_write(output_dir: pathlib.Path, lines: Iterable[str]) -> int:
-    entries: List[Tuple[str, str, float, float]] = []
+    entries: List[Tuple[str, str, float, float, str]] = []
     for line in lines:
         line = line.rstrip("\n")
         if not line:
             continue
         try:
-            run_name, label, mean_str, std_str = line.split("\t")
+            parts = line.split("\t")
+            if len(parts) == 5:
+                run_name, label, mean_str, std_str, identifier = parts
+            elif len(parts) == 4:
+                run_name, label, mean_str, std_str = parts
+                identifier = ""
+            else:
+                continue
         except ValueError:
             continue
-        entries.append((run_name, label, float(mean_str), float(std_str)))
+        entries.append((run_name, label, float(mean_str), float(std_str), identifier))
     write_tables(entries, output_dir)
     return 0
 

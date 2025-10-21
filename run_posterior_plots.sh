@@ -67,7 +67,7 @@ if match:
 
     sanitized_model=$(echo "${model_identifier}" | tr -c '[:alnum:]_-' '_')
     latexified_model=$("${PYTHON_EXECUTABLE}" -m dipolesbi.tools.model_labels "${model_identifier}")
-    corner_path="${RESULTS_DIR}/${sanitized_model}${run_name}_corner.png"
+    corner_path="${RESULTS_DIR}/${sanitized_model}${run_name}_corner.pdf"
     sky_path="${RESULTS_DIR}/${sanitized_model}${run_name}_sky.png"
 
     echo "Processing ${run_name} (model: ${model_identifier})"
@@ -80,6 +80,7 @@ if match:
         --legend "${latexified_model}"
         --sky-truth 264 45 238 29 237 42
         --sky-truth-labels CMB Secrest+21 Dam+23
+        --corner-no-legend
         --sky-smooth 0.1
         --logz-average-start 3 --logz-average-simple
     )
@@ -95,9 +96,9 @@ if match:
         -- "${command[@]}"; then
         status=$?
         cat "${run_log}"
-        echo "Error: posterior_cli failed for ${run_name} (exit ${status})." >&2
+        echo "Error: posterior_cli failed for ${run_name} (exit ${status}). Skipping." >&2
         rm -f "${run_log}"
-        exit "${status}"
+        continue
     fi
 
     cat "${run_log}"
@@ -111,11 +112,39 @@ if match:
     fi
 
     IFS=$'\t' read -r parsed_mean parsed_std <<<"${parse_output}"
-    printf -v logz_row '%s\t%s\t%s\t%s' "$run_name" "$latexified_model" "$parsed_mean" "$parsed_std"
+    printf -v logz_row '%s\t%s\t%s\t%s\t%s' "$run_name" "$latexified_model" "$parsed_mean" "$parsed_std" "$model_identifier"
     logz_rows+=("$logz_row")
     rm -f "${run_log}"
 done
 
 if (( ${#logz_rows[@]} )); then
     printf '%s\n' "${logz_rows[@]}" | "${PYTHON_EXECUTABLE}" -m dipolesbi.tools.logz_summary write --output-dir "${RESULTS_DIR}"
+    cp -f "${RESULTS_DIR}/logb_summary.tex" "${HOME}/Documents/papers/catwise_sbi/logb_summary.tex"
+fi
+
+best_corner=$(ls "${RESULTS_DIR}"/free_gauss_extra_err_*_corner.pdf 2>/dev/null | head -n 1 || true)
+if [[ -z "${best_corner}" ]]; then
+    best_run_dir=$(for dir_path in "${run_dirs[@]}"; do
+        dir_base=${dir_path%/}
+        dir_base=${dir_base##*/}
+        if [[ "${dir_base}" == *"free_gauss_extra_err"* ]]; then
+            printf '%s\n' "${dir_base}"
+        fi
+    done | head -n 1)
+    if [[ -n "${best_run_dir}" ]]; then
+        candidate="${RESULTS_DIR}/free_gauss_extra_err_${best_run_dir}_corner.pdf"
+        if [[ -f "${candidate}" ]]; then
+            best_corner="${candidate}"
+        fi
+    fi
+fi
+
+if [[ -f "${best_corner}" ]]; then
+    papers_figures_dir="${HOME}/Documents/papers/catwise_sbi/figures"
+    mkdir -p "${papers_figures_dir}"
+    dest_corner="${papers_figures_dir}/free_gauss_extra_err_corner.pdf"
+    cp -f "${best_corner}" "${dest_corner}"
+    echo "Copied free_gauss_extra_err corner plot to ${dest_corner}"
+else
+    echo "Warning: free_gauss_extra_err corner plot not found; skipped copy." >&2
 fi

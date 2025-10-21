@@ -34,8 +34,15 @@ def format_model_label(name: str) -> str:
 
 
 DEFAULT_RESULTS_DIR = Path("lnB_exp")
-DEFAULT_OUTPUT = Path("lnB_exp/bayes_factor_scatter.pdf")
-
+DEFAULT_FILENAME = 'ln_B_scatter.pdf'
+DEFAULT_PATH = os.path.join(
+    os.path.expanduser('~'),
+    'Documents',
+    'papers',
+    'catwise_sbi',
+    'figures'
+)
+os.makedirs(DEFAULT_PATH, exist_ok=True)
 
 def gather_bayes_factors(results_root: Path):
     """Load lnZ results from each run and accumulate ln Bayes factors."""
@@ -73,7 +80,7 @@ def gather_bayes_factors(results_root: Path):
     return bf_data
 
 
-def make_scatter_plot(bf_data, output_path: Path):
+def make_scatter_plot(bf_data):
     """Create the column scatter plot comparing true and nle ln Bayes factors."""
     models = sorted({model for key in bf_data for model in bf_data[key]})
     if "free_dipole" in models:
@@ -135,8 +142,8 @@ def make_scatter_plot(bf_data, output_path: Path):
 
     plt.tight_layout()
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    output = os.path.join(DEFAULT_PATH, DEFAULT_FILENAME)
+    plt.savefig(output, dpi=300, bbox_inches="tight")
     plt.close()
 
 
@@ -150,12 +157,6 @@ def main():
         default=DEFAULT_RESULTS_DIR,
         help="Directory containing run subdirectories with lnZ_results.json files.",
     )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=DEFAULT_OUTPUT,
-        help="Path to save the generated plot.",
-    )
     args = parser.parse_args()
 
     bf_data = gather_bayes_factors(args.results_dir)
@@ -165,7 +166,7 @@ def main():
             "Ensure lnZ_results.json files are present."
         )
 
-    make_scatter_plot(bf_data, args.output)
+    make_scatter_plot(bf_data)
 
 
 if __name__ == "__main__":
