@@ -254,6 +254,42 @@ if __name__ == '__main__':
             assert prior.ndim == 4
             theta_0.pop('observer_speed')
 
+        case 'secrest+21':
+            ERROR_DIST = 'gaussian'
+            COMMON_ERROR = True
+            simulator = partial(
+                simulator_wrapper,
+                observer_speed=2.156, # from CatWISE_Dipole_results.ipynb in secrest's code
+                dipole_longitude=238.2,
+                dipole_latitude=28.8
+            )
+            prior.remove_prior('D')
+            prior.remove_prior('phi')
+            prior.remove_prior('theta')
+            add_error_scale('etaWX', prior)
+            theta_0.pop('observer_speed')
+            theta_0.pop('dipole_longitude')
+            theta_0.pop('dipole_latitude')
+            assert prior.ndim == 2
+
+        case 'dam+23':
+            ERROR_DIST = 'gaussian'
+            COMMON_ERROR = True
+            simulator = partial(
+                simulator_wrapper,
+                observer_speed=2.68, # from CatWISE_Dipole_results.ipynb in secrest's code
+                dipole_longitude=237.2,
+                dipole_latitude=41.8
+            )
+            prior.remove_prior('D')
+            prior.remove_prior('phi')
+            prior.remove_prior('theta')
+            add_error_scale('etaWX', prior)
+            theta_0.pop('observer_speed')
+            theta_0.pop('dipole_longitude')
+            theta_0.pop('dipole_latitude')
+            assert prior.ndim == 2
+
         case _:
             raise KeyError(f'Model {args.model} not recognised.')
 
