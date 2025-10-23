@@ -74,9 +74,14 @@ def _get_mollweide_projector() -> hp.projector.MollweideProj:
     return projector
 
 
+_MOLLWEIDE_PROJECTOR = hp.projector.MollweideProj()
+
+
 def _project_lonlat(
     lon_deg: Sequence[float] | float,
     lat_deg: Sequence[float] | float,
+    *,
+    wrap: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Project Galactic lon/lat in degrees onto Mollweide x/y coordinates."""
     lon_arr = np.atleast_1d(lon_deg).astype(np.float64)
@@ -85,7 +90,8 @@ def _project_lonlat(
     x_proj, y_proj = projector.ang2xy(lon_arr.tolist(), lat_arr.tolist(), lonlat=True)
     x_vals = (np.pi / 2.0) * np.asarray(x_proj, dtype=np.float64)
     y_vals = (np.pi / 2.0) * np.asarray(y_proj, dtype=np.float64)
-    x_vals = np.where(x_vals < 0.0, x_vals + 2.0 * np.pi, x_vals)
+    if wrap:
+        x_vals = np.where(x_vals < 0.0, x_vals + 2.0 * np.pi, x_vals)
     x_vals = np.atleast_1d(x_vals)
     y_vals = np.atleast_1d(y_vals)
     return x_vals, y_vals
@@ -93,23 +99,11 @@ def _project_lonlat(
 
 def _build_top_quadrant_patch(ax: matplotlib.axes.Axes) -> PathPatch:
     """Construct a patch tracing the true top-right Mollweide quadrant boundary."""
-    n_points = 1024
-    latitudes = np.linspace(0.0, np.pi / 2.0, n_points)
-
-    left_edge = np.column_stack([np.zeros_like(latitudes), latitudes])
-    top_edge = np.column_stack([np.full_like(latitudes, np.pi), latitudes[::-1]])
-    bottom_edge = np.column_stack(
-        [np.linspace(np.pi, 0.0, n_points), np.zeros_like(latitudes)]
-    )
-
-    verts = np.vstack(
-        [
-            left_edge,
-            top_edge[1:],  # avoid duplicating corner
-            bottom_edge[1:],
-            left_edge[:1],
-        ]
-    )
+    t_vals = np.linspace(0.0, np.pi / 2.0, 1024)
+    x_vals = np.pi * np.cos(t_vals)
+    y_vals = (np.pi / 2.0) * np.sin(t_vals)
+    arc_points = list(zip(x_vals[::-1], y_vals[::-1]))
+    verts = [(0.0, 0.0), (0.0, np.pi / 2.0)] + arc_points + [(np.pi, 0.0), (0.0, 0.0)]
     codes = [Path.MOVETO] + [Path.LINETO] * (len(verts) - 2) + [Path.CLOSEPOLY]
     path = Path(verts, codes)
     return PathPatch(
@@ -137,20 +131,18 @@ def _ensure_top_quadrant_setup(ax: matplotlib.axes.Axes) -> PathPatch:
         ax.tick_params(axis="both", which="both", length=0)
 
         longitude_ticks = [330, 300, 270, 240, 210]
-        xtick_positions, _ = _project_lonlat(longitude_ticks, [0] * len(longitude_ticks))
+        xtick_positions, _ = _project_lonlat(longitude_ticks, [0] * len(longitude_ticks), wrap=False)
         xtick_labels: list[str] = []
         for value in longitude_ticks:
             if value == 330:
                 xtick_labels.append(r"$\ell = 330^\circ$")
-            elif value == 270:
-                xtick_labels.append(r"$\ell = 270^\circ$")
             else:
                 xtick_labels.append(rf"${value}^\circ$")
         ax.set_xticks(xtick_positions)
         ax.set_xticklabels(xtick_labels)
 
         latitude_ticks = [0, 30, 60]
-        _, ytick_positions = _project_lonlat([longitude_ticks[0]] * len(latitude_ticks), latitude_ticks)
+        _, ytick_positions = _project_lonlat([longitude_ticks[0]] * len(latitude_ticks), latitude_ticks, wrap=False)
         ytick_labels: list[str] = []
         for value in latitude_ticks:
             if value == 30:
@@ -165,8 +157,8 @@ def _ensure_top_quadrant_setup(ax: matplotlib.axes.Axes) -> PathPatch:
         graticule_lines: list[matplotlib.lines.Line2D] = []
         for lat_val in latitude_ticks:
             x_vals, y_vals = _project_lonlat(
-            longitude_curve, np.full_like(longitude_curve, lat_val)
-        )
+                longitude_curve, np.full_like(longitude_curve, lat_val), wrap=False
+            )
             mask = (x_vals >= 0.0) & (x_vals <= np.pi) & (y_vals >= 0.0) & (y_vals <= np.pi / 2.0)
             (line,) = ax.plot(
                 x_vals[mask],
@@ -181,7 +173,7 @@ def _ensure_top_quadrant_setup(ax: matplotlib.axes.Axes) -> PathPatch:
 
         for lon_deg in longitude_ticks:
             x_vals, y_vals = _project_lonlat(
-                np.full_like(latitude_curve, lon_deg), latitude_curve
+                np.full_like(latitude_curve, lon_deg), latitude_curve, wrap=False
             )
             mask = (x_vals >= 0.0) & (x_vals <= np.pi) & (y_vals >= 0.0) & (y_vals <= np.pi / 2.0)
             (line,) = ax.plot(
@@ -307,33 +299,8 @@ def sky_probability(
     if chosen_mode not in {"none", "legacy", "modern"}:
         raise ValueError(f"Unsupported top_quadrant mode '{chosen_mode}'.")
 
-    # convert samples into desired coordinate system
     phi = X[:, -2]
     theta = X[:, -1]
-
-    if not no_axes:
-        projview_kwargs = {
-            'longitude_grid_spacing': 30,
-            'color': 'white',
-            'graticule': True,
-            'graticule_labels': True,
-            'cbar': False,
-            **kwargs,
-        }
-        if chosen_mode == "modern":
-            projview_kwargs.update(
-                {
-                    'graticule': False,
-                    'graticule_labels': False,
-                }
-            )
-        hp.projview(
-            np.zeros(12),
-            **projview_kwargs,
-        )
-
-    ax = plt.gca()
-    ax.set_rasterization_zorder(0)
 
     pdens_map = samples_to_hpmap(
         phi,
@@ -344,52 +311,127 @@ def sky_probability(
         smooth=smooth,
     )
 
-    X, Y, proj_map = hp.projview(
-        pdens_map, return_only_data=True, xsize=xsize
-    )
-
-    # the proj_map will have more bins therefore will not sum to one
-    # it also has -infs; remove these and renormalise
-    proj_map[proj_map == -np.inf] = 0
-    proj_P_map = np.copy(proj_map)
-    proj_P_map /= np.sum(proj_P_map)
-    levels = list(contour_levels) if contour_levels is not None else [1.0, 2.0]
-    t_contours, _, _ = compute_2D_contours(proj_P_map, levels)
-
     selected_color = color or SKY_PROBABILITY_COLOR_CYCLE[0]
     c_chosen = matplotlib.colors.to_rgba(selected_color, alpha=0.4)
-    c_white = matplotlib.colors.colorConverter.to_rgba(
-        'white',alpha=0
-    )
-    c_white_contourf = matplotlib.colors.colorConverter.to_rgba(
-        'white',alpha=0
-    )
+    c_white = matplotlib.colors.colorConverter.to_rgba('white', alpha=0)
+    c_white_contourf = matplotlib.colors.colorConverter.to_rgba('white', alpha=0)
     cmap_cont = matplotlib.colors.LinearSegmentedColormap.from_list(
-                'rb_cmap',[c_white_contourf, c_chosen], 512
+        'rb_cmap', [c_white_contourf, c_chosen], 512
     )
     cmaps = matplotlib.colors.LinearSegmentedColormap.from_list(
-        'rb_cmap',[c_white, c_chosen], 512
+        'rb_cmap', [c_white, c_chosen], 512
     )
 
-    Xa, Ya = np.meshgrid(X, Y)
+    use_modern = chosen_mode == "modern"
+    ax = plt.gca()
+    ax.set_rasterization_zorder(0)
 
-    if not disable_mesh:
-        plt.pcolormesh(
+    if use_modern:
+        base_ax = ax
+        proj_map = hp.mollview(
+            pdens_map,
+            return_projected_map=True,
+            xsize=xsize,
+            title="",
+            cbar=False,
+        )
+        plt.close()
+
+        proj_map = np.asarray(proj_map, dtype=np.float64)
+        proj_map = np.nan_to_num(proj_map, nan=0.0, neginf=0.0, posinf=0.0)
+        proj_map = np.clip(proj_map, 0.0, None)
+
+        xx = np.linspace(-np.pi, np.pi, proj_map.shape[1])
+        yy = np.linspace(-np.pi / 2.0, np.pi / 2.0, proj_map.shape[0])
+        x_mask = xx >= 0.0
+        y_mask = yy >= 0.0
+        xx_quad = xx[x_mask]
+        yy_quad = yy[y_mask]
+        proj_map_quad = proj_map[np.ix_(y_mask, x_mask)]
+
+        quad_sum = proj_map_quad.sum()
+        if quad_sum > 0 and np.isfinite(quad_sum):
+            proj_P_quad = proj_map_quad / quad_sum
+        else:
+            proj_P_quad = proj_map_quad
+
+        Xa, Ya = np.meshgrid(xx_quad, yy_quad)
+        levels = list(contour_levels) if contour_levels is not None else [1.0, 2.0]
+        t_contours, _, _ = compute_2D_contours(proj_P_quad, levels)
+        ax = base_ax
+
+        if not no_axes:
+            ax.cla()
+            ax.set_facecolor("white")
+            ax.set_rasterization_zorder(0)
+        if not disable_mesh:
+            im = ax.imshow(
+                proj_P_quad,
+                origin="lower",
+                extent=[xx_quad.min(), xx_quad.max(), yy_quad.min(), yy_quad.max()],
+                cmap=cmaps,
+                rasterized=rasterize_pmesh,
+                zorder=0,
+            )
+        contourf = ax.contourf(
             Xa,
             Ya,
-            proj_P_map,
-            cmap=cmaps,
-            rasterized=rasterize_pmesh,
+            proj_P_quad,
+            levels=t_contours,
+            cmap=cmap_cont,
+            zorder=1,
+            extend="both",
         )
+        contour = ax.contour(
+            Xa,
+            Ya,
+            proj_P_quad,
+            levels=t_contours,
+            colors=[selected_color],
+            zorder=1,
+            extend="both",
+        )
+    else:
+        if not no_axes:
+            projview_kwargs = {
+                'longitude_grid_spacing': 30,
+                'color': 'white',
+                'graticule': True,
+                'graticule_labels': True,
+                'cbar': False,
+                **kwargs,
+            }
+            hp.projview(
+                np.zeros(12),
+                **projview_kwargs,
+            )
 
-    plt.contourf(
-        Xa, Ya, proj_P_map, levels=t_contours, cmap=cmap_cont,
-        zorder=1, extend='both'
-    )
-    plt.contour(
-        Xa, Ya, proj_P_map, levels=t_contours,
-        colors=[selected_color], zorder=1, extend='both'
-    )
+        X_grid, Y_grid, proj_map = hp.projview(
+            pdens_map, return_only_data=True, xsize=xsize
+        )
+        proj_map[proj_map == -np.inf] = 0.0
+        proj_P_map = np.copy(proj_map)
+        proj_P_map /= np.sum(proj_P_map)
+        levels = list(contour_levels) if contour_levels is not None else [1.0, 2.0]
+        t_contours, _, _ = compute_2D_contours(proj_P_map, levels)
+
+        Xa, Ya = np.meshgrid(X_grid, Y_grid)
+        if not disable_mesh:
+            plt.pcolormesh(
+                Xa,
+                Ya,
+                proj_P_map,
+                cmap=cmaps,
+                rasterized=rasterize_pmesh,
+            )
+        contourf = plt.contourf(
+            Xa, Ya, proj_P_map, levels=t_contours, cmap=cmap_cont,
+            zorder=1, extend='both'
+        )
+        contour = plt.contour(
+            Xa, Ya, proj_P_map, levels=t_contours,
+            colors=[selected_color], zorder=1, extend='both'
+        )
 
     scatter_artists: list[Artist] = []
     if truth_star is not None:
@@ -401,10 +443,10 @@ def sky_probability(
         for idx, star in enumerate(truth_iter):
             phi_star = star[0]
             lat_star = star[1]
-            if chosen_mode == "modern":
+            if use_modern:
                 lon_deg = np.rad2deg(phi_star)
                 lat_deg = np.rad2deg(lat_star)
-                x_proj, y_proj = _project_lonlat(lon_deg, lat_deg)
+                x_proj, y_proj = _project_lonlat(lon_deg, lat_deg, wrap=False)
                 x_plot = float(x_proj[0])
                 y_plot = float(y_proj[0])
             else:
@@ -420,8 +462,6 @@ def sky_probability(
             )
             scatter_artists.append(scatter)
 
-    # pcolormesh already rasterized via kwarg.
-
     bbox_inches: str | Bbox = 'tight'
     if chosen_mode == "legacy" and save_path is not None:
         fig = plt.gcf()
@@ -431,19 +471,26 @@ def sky_probability(
         ax.set_yticklabels(y_labels)
         ax.yaxis.tick_right()
         bbox_inches = quad_bbox
-    elif chosen_mode == "modern":
+    elif use_modern:
+        ax.set_xlim(0.0, np.pi)
+        ax.set_ylim(0.0, np.pi / 2.0)
         patch = _ensure_top_quadrant_setup(ax)
         _clip_artists_to_patch(ax, patch)
+        if not disable_mesh and 'im' in locals():
+            im.set_clip_path(patch)
+        for coll in getattr(contourf, "collections", []):
+            coll.set_clip_path(patch)
+        for coll in getattr(contour, "collections", []):
+            coll.set_clip_path(patch)
         for scatter in scatter_artists:
             scatter.set_clip_path(patch)
-        if save_path is not None:
-            fig = plt.gcf()
-            quad_bbox = get_top_quadrant_bbox(ax, fig)
-            bbox_inches = quad_bbox
 
     if save_path is not None:
         plt.savefig(
-            save_path, dpi=300, bbox_inches=bbox_inches
+            save_path,
+            dpi=300,
+            bbox_inches=bbox_inches,
+            pad_inches=0.0,
         )
     if show:
         plt.show()

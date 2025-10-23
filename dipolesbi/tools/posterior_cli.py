@@ -426,7 +426,7 @@ def main(argv: list[str] | None = None) -> int:
             plot_entries = list(zip(interfaces, samples_list, labels))
             total_runs = len(plot_entries)
 
-            plt.figure(figsize=(8, 4))
+            plt.figure(figsize=(5, 3))
             legend_handles = []
             from matplotlib.lines import Line2D
 
@@ -474,7 +474,8 @@ def main(argv: list[str] | None = None) -> int:
                     top_quad_mode=quad_mode,
                     contour_levels=args.sky_contours,
                 )
-                legend_handles.append(Line2D([0], [0], color=color, lw=2, label=label))
+                entry_label = label if idx == 0 else " "
+                legend_handles.append(Line2D([0], [0], color=color, lw=2, label=entry_label))
 
             for idx, truth_label in enumerate(truth_labels):
                 legend_handles.append(
@@ -490,16 +491,26 @@ def main(argv: list[str] | None = None) -> int:
 
             legend = None
             if legend_handles:
-                legend_location = "lower right"
                 legend_kwargs: dict[str, object] = {}
-                if quad_mode in {"modern", "legacy"}:
-                    # Position the legend roughly within the cropped panel.
-                    legend_location = "lower left"
+                if quad_mode == "modern":
+                    legend_kwargs.update(
+                        dict(
+                            loc="center left",
+                            bbox_to_anchor=(1.02, 0.75),
+                            frameon=False,
+                            borderaxespad=0.2,
+                        )
+                    )
+                elif quad_mode == "legacy":
                     legend_kwargs["ncol"] = max(1, len(legend_handles))
-                    legend_kwargs.update(dict(loc=legend_location, bbox_to_anchor=(0.46, 0.41)))
+                    legend_kwargs.update(
+                        dict(loc="lower left", bbox_to_anchor=(0.46, 0.41))
+                    )
                 else:
-                    legend_kwargs.update(dict(loc=legend_location))
+                    legend_kwargs.update(dict(loc="lower right"))
                 legend = plt.legend(handles=legend_handles, **legend_kwargs)
+                if quad_mode == "modern":
+                    legend.set_frame_on(False)
 
             sky_path = Path(args.sky_prob).expanduser()
             sky_path.parent.mkdir(parents=True, exist_ok=True)
@@ -513,7 +524,7 @@ def main(argv: list[str] | None = None) -> int:
                     ax.set_xticklabels(x_labels)
                     ax.set_yticklabels(y_labels)
                     ax.yaxis.tick_right()
-                if legend is not None:
+                if legend is not None and quad_mode == "legacy":
                     legend.set_bbox_to_anchor((0.46, 0.41))
             else:
                 bbox_inches = "tight"
