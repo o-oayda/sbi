@@ -143,7 +143,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sky-top-quad",
         action="store_true",
-        help="Crop the saved sky probability plot to the top-right quadrant.",
+        help="Render the sky probability plot in the top-right Mollweide quadrant (curved boundary).",
+    )
+    parser.add_argument(
+        "--sky-top-quad-legacy",
+        action="store_true",
+        help="Use the legacy rectangular crop of the top-right quadrant (matches previous behaviour).",
     )
     parser.add_argument(
         "--sky-lon-col",
@@ -232,6 +237,8 @@ def _column_summary_table(samples, columns: list[str] | None = None) -> Table:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.sky_top_quad and args.sky_top_quad_legacy:
+        raise ValueError("Cannot combine --sky-top-quad with --sky-top-quad-legacy.")
 
     console = Console()
     interfaces = [PosteriorSamplesInterface(path, console=console) for path in args.experiment_dirs]
@@ -423,6 +430,13 @@ def main(argv: list[str] | None = None) -> int:
             legend_handles = []
             from matplotlib.lines import Line2D
 
+            if args.sky_top_quad_legacy:
+                quad_mode = "legacy"
+            elif args.sky_top_quad:
+                quad_mode = "modern"
+            else:
+                quad_mode = "none"
+
             truth_pairs: list[tuple[float, float]] = []
             truth_labels: list[str] = []
             if args.sky_truth:
@@ -456,7 +470,8 @@ def main(argv: list[str] | None = None) -> int:
                     no_axes=no_axes,
                     show=False,
                     color=color,
-                    top_quad=args.sky_top_quad,
+                    top_quad=(quad_mode == "modern"),
+                    top_quad_mode=quad_mode,
                     contour_levels=args.sky_contours,
                 )
                 legend_handles.append(Line2D([0], [0], color=color, lw=2, label=label))
@@ -477,8 +492,8 @@ def main(argv: list[str] | None = None) -> int:
             if legend_handles:
                 legend_location = "lower right"
                 legend_kwargs: dict[str, object] = {}
-                if args.sky_top_quad:
-                    # Position the legend roughly below the b=0 line in the cropped panel.
+                if quad_mode in {"modern", "legacy"}:
+                    # Position the legend roughly within the cropped panel.
                     legend_location = "lower left"
                     legend_kwargs["ncol"] = max(1, len(legend_handles))
                     legend_kwargs.update(dict(loc=legend_location, bbox_to_anchor=(0.46, 0.41)))
@@ -489,14 +504,15 @@ def main(argv: list[str] | None = None) -> int:
             sky_path = Path(args.sky_prob).expanduser()
             sky_path.parent.mkdir(parents=True, exist_ok=True)
             bbox_inches: str | Bbox
-            if args.sky_top_quad:
+            if quad_mode in {"legacy", "modern"}:
                 ax = plt.gca()
                 fig = plt.gcf()
                 bbox_inches = get_top_quadrant_bbox(ax, fig)
-                x_labels, y_labels = quad_tick_labels()
-                ax.set_xticklabels(x_labels)
-                ax.set_yticklabels(y_labels)
-                ax.yaxis.tick_right()
+                if quad_mode == "legacy":
+                    x_labels, y_labels = quad_tick_labels()
+                    ax.set_xticklabels(x_labels)
+                    ax.set_yticklabels(y_labels)
+                    ax.yaxis.tick_right()
                 if legend is not None:
                     legend.set_bbox_to_anchor((0.46, 0.41))
             else:

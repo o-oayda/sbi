@@ -1,14 +1,21 @@
 from numpy.typing import NDArray
-from dipolesbi.tools.utils import (
-    compute_2D_contours, convert_to_l_dash, samples_to_hpmap
-)
-from dipolesbi.tools.maps import average_smooth_map
 import healpy as hp
 import matplotlib
 import matplotlib.pyplot as plt
+from matplotlib.artist import Artist
+from matplotlib.lines import Line2D
+from matplotlib.patches import PathPatch
+from matplotlib.path import Path
 from matplotlib.transforms import Bbox
 import numpy as np
-from typing import Callable, Sequence
+from typing import Callable, Sequence, Literal
+
+from dipolesbi.tools.maps import average_smooth_map
+from dipolesbi.tools.utils import (
+    compute_2D_contours,
+    convert_to_l_dash,
+    samples_to_hpmap,
+)
 
 
 SKY_PROBABILITY_COLOR_CYCLE: list[str] = [
@@ -56,6 +63,156 @@ def get_top_quadrant_bbox(ax: matplotlib.axes.Axes, fig: matplotlib.figure.Figur
     y0, y1 = -0.22, np.pi / 2
     bbox = Bbox([[x0, y0], [x1, y1]])
     return bbox.transformed(ax.transData).transformed(fig.dpi_scale_trans.inverted())
+
+
+def _get_mollweide_projector() -> hp.projector.MollweideProj:
+    """Return a cached Mollweide projector."""
+    projector = getattr(_get_mollweide_projector, "_cached", None)
+    if projector is None:
+        projector = hp.projector.MollweideProj()
+        setattr(_get_mollweide_projector, "_cached", projector)
+    return projector
+
+
+def _project_lonlat(
+    lon_deg: Sequence[float] | float,
+    lat_deg: Sequence[float] | float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Project Galactic lon/lat in degrees onto Mollweide x/y coordinates."""
+    lon_arr = np.atleast_1d(lon_deg).astype(np.float64)
+    lat_arr = np.atleast_1d(lat_deg).astype(np.float64)
+    projector = _get_mollweide_projector()
+    x_proj, y_proj = projector.ang2xy(lon_arr.tolist(), lat_arr.tolist(), lonlat=True)
+    x_vals = (np.pi / 2.0) * np.asarray(x_proj, dtype=np.float64)
+    y_vals = (np.pi / 2.0) * np.asarray(y_proj, dtype=np.float64)
+    x_vals = np.where(x_vals < 0.0, x_vals + 2.0 * np.pi, x_vals)
+    x_vals = np.atleast_1d(x_vals)
+    y_vals = np.atleast_1d(y_vals)
+    return x_vals, y_vals
+
+
+def _build_top_quadrant_patch(ax: matplotlib.axes.Axes) -> PathPatch:
+    """Construct a patch tracing the true top-right Mollweide quadrant boundary."""
+    n_points = 1024
+    latitudes = np.linspace(0.0, np.pi / 2.0, n_points)
+
+    left_edge = np.column_stack([np.zeros_like(latitudes), latitudes])
+    top_edge = np.column_stack([np.full_like(latitudes, np.pi), latitudes[::-1]])
+    bottom_edge = np.column_stack(
+        [np.linspace(np.pi, 0.0, n_points), np.zeros_like(latitudes)]
+    )
+
+    verts = np.vstack(
+        [
+            left_edge,
+            top_edge[1:],  # avoid duplicating corner
+            bottom_edge[1:],
+            left_edge[:1],
+        ]
+    )
+    codes = [Path.MOVETO] + [Path.LINETO] * (len(verts) - 2) + [Path.CLOSEPOLY]
+    path = Path(verts, codes)
+    return PathPatch(
+        path,
+        transform=ax.transData,
+        facecolor="none",
+        edgecolor="black",
+        linewidth=0.7,
+        zorder=5,
+    )
+
+
+def _ensure_top_quadrant_setup(ax: matplotlib.axes.Axes) -> PathPatch:
+    """Configure the current axes for the modern top-quadrant view."""
+    patch = getattr(ax, "_sbi_top_quad_patch", None)
+    if patch is None:
+        patch = _build_top_quadrant_patch(ax)
+        ax.add_patch(patch)
+        ax._sbi_top_quad_patch = patch  # type: ignore[attr-defined]
+
+        ax.patch.set_facecolor("white")
+        ax.patch.set_edgecolor("none")
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax.tick_params(axis="both", which="both", length=0)
+
+        longitude_ticks = [330, 300, 270, 240, 210]
+        xtick_positions, _ = _project_lonlat(longitude_ticks, [0] * len(longitude_ticks))
+        xtick_labels: list[str] = []
+        for value in longitude_ticks:
+            if value == 330:
+                xtick_labels.append(r"$\ell = 330^\circ$")
+            elif value == 270:
+                xtick_labels.append(r"$\ell = 270^\circ$")
+            else:
+                xtick_labels.append(rf"${value}^\circ$")
+        ax.set_xticks(xtick_positions)
+        ax.set_xticklabels(xtick_labels)
+
+        latitude_ticks = [0, 30, 60]
+        _, ytick_positions = _project_lonlat([longitude_ticks[0]] * len(latitude_ticks), latitude_ticks)
+        ytick_labels: list[str] = []
+        for value in latitude_ticks:
+            if value == 30:
+                ytick_labels.append(r"$b = 30^\circ$")
+            else:
+                ytick_labels.append(rf"${value}^\circ$")
+        ax.set_yticks(ytick_positions)
+        ax.set_yticklabels(ytick_labels, rotation=90, va="center")
+
+        longitude_curve = np.linspace(0.0, 360.0, 1440)
+        latitude_curve = np.linspace(0.0, 90.0, 720)
+        graticule_lines: list[matplotlib.lines.Line2D] = []
+        for lat_val in latitude_ticks:
+            x_vals, y_vals = _project_lonlat(
+            longitude_curve, np.full_like(longitude_curve, lat_val)
+        )
+            mask = (x_vals >= 0.0) & (x_vals <= np.pi) & (y_vals >= 0.0) & (y_vals <= np.pi / 2.0)
+            (line,) = ax.plot(
+                x_vals[mask],
+                y_vals[mask],
+                linestyle=":",
+                linewidth=0.7,
+                color="black",
+                alpha=0.5,
+                zorder=4,
+            )
+            graticule_lines.append(line)
+
+        for lon_deg in longitude_ticks:
+            x_vals, y_vals = _project_lonlat(
+                np.full_like(latitude_curve, lon_deg), latitude_curve
+            )
+            mask = (x_vals >= 0.0) & (x_vals <= np.pi) & (y_vals >= 0.0) & (y_vals <= np.pi / 2.0)
+            (line,) = ax.plot(
+                x_vals[mask],
+                y_vals[mask],
+                linestyle=":",
+                linewidth=0.7,
+                color="black",
+                alpha=0.5,
+                zorder=4,
+            )
+            graticule_lines.append(line)
+        for line in graticule_lines:
+            line.set_zorder(4)
+    return getattr(ax, "_sbi_top_quad_patch")  # type: ignore[attr-defined]
+
+
+def _clip_artists_to_patch(ax: matplotlib.axes.Axes, patch: PathPatch) -> None:
+    """Clip existing axis artists against the quadrant patch."""
+    for collection in list(ax.collections):
+        if collection is patch:
+            continue
+        collection.set_clip_path(patch)
+    for image in list(ax.images):
+        image.set_clip_path(patch)
+    for line in list(ax.lines):
+        line.set_clip_path(patch)
+    for other_patch in list(ax.patches):
+        if other_patch is patch:
+            continue
+        other_patch.set_clip_path(patch)
 
 
 try:  # optional torch dependency
@@ -113,6 +270,7 @@ def sky_probability(
     weights: NDArray | None = None,
     color: str | None = None,
     top_quad: bool = False,
+    top_quad_mode: Literal["none", "legacy", "modern"] | None = None,
     **kwargs
 ) -> Tensor:
     '''
@@ -140,22 +298,42 @@ def sky_probability(
     :param top_quad: crop saved output to the top-right quadrant of the Mollweide axes
     :param **kwargs: kwargs to be passed to hp.projview blank axes
     '''
+    # Resolve requested quadrant behaviour.
+    if top_quad_mode is None:
+        chosen_mode: Literal["none", "legacy", "modern"]
+        chosen_mode = "modern" if top_quad else "none"
+    else:
+        chosen_mode = top_quad_mode
+    if chosen_mode not in {"none", "legacy", "modern"}:
+        raise ValueError(f"Unsupported top_quadrant mode '{chosen_mode}'.")
+
     # convert samples into desired coordinate system
     phi = X[:, -2]
     theta = X[:, -1]
 
     if not no_axes:
+        projview_kwargs = {
+            'longitude_grid_spacing': 30,
+            'color': 'white',
+            'graticule': True,
+            'graticule_labels': True,
+            'cbar': False,
+            **kwargs,
+        }
+        if chosen_mode == "modern":
+            projview_kwargs.update(
+                {
+                    'graticule': False,
+                    'graticule_labels': False,
+                }
+            )
         hp.projview(
             np.zeros(12),
-            **{
-                'longitude_grid_spacing': 30,
-                'color': 'white',
-                'graticule': True,
-                'graticule_labels': True,
-                'cbar': False,
-                **kwargs
-            }
+            **projview_kwargs,
         )
+
+    ax = plt.gca()
+    ax.set_rasterization_zorder(0)
 
     pdens_map = samples_to_hpmap(
         phi,
@@ -194,12 +372,13 @@ def sky_probability(
     )
 
     Xa, Ya = np.meshgrid(X, Y)
-    ax = plt.gca()
-    ax.set_rasterization_zorder(0)
 
     if not disable_mesh:
         plt.pcolormesh(
-            Xa, Ya, proj_P_map, cmap=cmaps,
+            Xa,
+            Ya,
+            proj_P_map,
+            cmap=cmaps,
             rasterized=rasterize_pmesh,
         )
 
@@ -211,6 +390,8 @@ def sky_probability(
         Xa, Ya, proj_P_map, levels=t_contours,
         colors=[selected_color], zorder=1, extend='both'
     )
+
+    scatter_artists: list[Artist] = []
     if truth_star is not None:
         if isinstance(truth_star[0], (list, tuple, np.ndarray)):
             truth_iter = truth_star  # type: ignore[assignment]
@@ -220,19 +401,29 @@ def sky_probability(
         for idx, star in enumerate(truth_iter):
             phi_star = star[0]
             lat_star = star[1]
-            plt.scatter(
-                convert_to_l_dash(phi_star),
-                lat_star,
+            if chosen_mode == "modern":
+                lon_deg = np.rad2deg(phi_star)
+                lat_deg = np.rad2deg(lat_star)
+                x_proj, y_proj = _project_lonlat(lon_deg, lat_deg)
+                x_plot = float(x_proj[0])
+                y_plot = float(y_proj[0])
+            else:
+                x_plot = float(convert_to_l_dash(phi_star))
+                y_plot = float(lat_star)
+            scatter = plt.scatter(
+                x_plot,
+                y_plot,
                 marker=marker_cycle[idx % len(marker_cycle)],
                 color='black',
                 s=100,
                 zorder=20
             )
+            scatter_artists.append(scatter)
 
     # pcolormesh already rasterized via kwarg.
 
     bbox_inches: str | Bbox = 'tight'
-    if save_path is not None and top_quad:
+    if chosen_mode == "legacy" and save_path is not None:
         fig = plt.gcf()
         quad_bbox = get_top_quadrant_bbox(ax, fig)
         x_labels, y_labels = quad_tick_labels()
@@ -240,6 +431,15 @@ def sky_probability(
         ax.set_yticklabels(y_labels)
         ax.yaxis.tick_right()
         bbox_inches = quad_bbox
+    elif chosen_mode == "modern":
+        patch = _ensure_top_quadrant_setup(ax)
+        _clip_artists_to_patch(ax, patch)
+        for scatter in scatter_artists:
+            scatter.set_clip_path(patch)
+        if save_path is not None:
+            fig = plt.gcf()
+            quad_bbox = get_top_quadrant_bbox(ax, fig)
+            bbox_inches = quad_bbox
 
     if save_path is not None:
         plt.savefig(

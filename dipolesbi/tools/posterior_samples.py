@@ -5,7 +5,7 @@ import re
 from contextlib import redirect_stdout
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Sequence
+from typing import Any, Iterator, Mapping, Sequence, Literal
 import inspect
 import os
 
@@ -591,6 +591,7 @@ class PosteriorSamplesInterface:
         show: bool = True,
         color: str | None = None,
         top_quad: bool = False,
+        top_quad_mode: Literal["none", "legacy", "modern"] | None = None,
         contour_levels: Sequence[float] | None = None,
     ) -> Path | None:
         samples = self.load_round(round_id=round_id, show_table=show_table)
@@ -654,6 +655,12 @@ class PosteriorSamplesInterface:
             destination = None
             save_path = None
 
+        if top_quad_mode is None:
+            resolved_mode: Literal["none", "legacy", "modern"]
+            resolved_mode = "modern" if top_quad else "none"
+        else:
+            resolved_mode = top_quad_mode
+
         sky_probability(
             coords,
             lonlat=True,
@@ -666,7 +673,8 @@ class PosteriorSamplesInterface:
             disable_mesh=disable_mesh,
             no_axes=no_axes,
             color=color or SKY_PROBABILITY_COLOR_CYCLE[0],
-            top_quad=top_quad,
+            top_quad=resolved_mode == "modern",
+            top_quad_mode=resolved_mode,
             contour_levels=contour_levels,
         )
         if save_path is not None or show:
