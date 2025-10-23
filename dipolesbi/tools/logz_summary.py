@@ -10,6 +10,8 @@ from typing import Iterable, List, Sequence, Tuple
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 RICH_TAG = re.compile(r"\[[^\]]+\]")
 
+FIDUCIAL_IDENTIFIER = "free_gauss_extra_err"
+
 
 def strip_formatting(text: str) -> str:
     """Remove Rich/ANSI formatting and surrounding whitespace."""
@@ -94,9 +96,22 @@ def write_tables(
     (output_dir / "logz_summary.tex").write_text("\n".join(tex_lines) + "\n", encoding="utf-8")
 
     if sorted_entries:
-        best_mean = sorted_entries[0][2]
-        best_std = sorted_entries[0][3]
+        reference_entry = None
+        for entry in sorted_entries:
+            if entry[4] == FIDUCIAL_IDENTIFIER:
+                reference_entry = entry
+                break
 
+        if reference_entry is None:
+            reference_entry = sorted_entries[0]
+            print(
+                f"[logz_summary] Fiducial model '{FIDUCIAL_IDENTIFIER}' not found; "
+                "using highest-evidence model as Bayes factor reference.",
+                file=sys.stderr,
+            )
+
+        ref_mean = reference_entry[2]
+        ref_std = reference_entry[3]
         md_b_lines = ["| Model | $\\Delta \\ln \\mathcal{Z}$ |", "| --- | --- |"]
         tex_b_lines = [
             r"\begin{tabular}{l r@{\,\,\pm\,\,}l}",
@@ -118,6 +133,14 @@ def write_tables(
                 "CMB velocity & direction", 
                 "CMB velocity \\& direction"
             ),
+            "secrest+21": (
+                "Dipole from Secrest et al. (2021)",
+                "Dipole from \\citet{secrest2021}"
+            ),
+            "dam+23": (
+                "Dipole from Dam et al. (2023)",
+                "Dipole from \\citet{dam2023}"
+            ),
             "free_gauss": (
                 "Free dipole, no extra error, Gaussian", 
                 "Free dipole, no extra error, Gaussian"
@@ -135,28 +158,29 @@ def write_tables(
                 "Free dipole, no extra error, Student's $t$",
             ),
         }
-        SKIP_IDENTIFIERS = {"secrest2021", "dam2023"}
         logged_skips: set[str] = set()
 
         def resolve_bayes_label(label: str, identifier: str) -> tuple[str, str]:
             if identifier in CUSTOM_LNB_LABELS:
                 return CUSTOM_LNB_LABELS[identifier]
-            if identifier in SKIP_IDENTIFIERS and identifier not in logged_skips:
+            else:
                 print(
-                    f"[logz_summary] Skipping custom label for Bayes factor table: '{identifier}' not yet available.",
+                    f"[logz_summary] Skipping custom label for Bayes factor table: "
+                    f"'{identifier}' not yet available.",
                     file=sys.stderr,
                 )
                 logged_skips.add(identifier)
             return label, label
 
-        for idx, (run_name, label, mean, std, identifier) in enumerate(sorted_entries):
-            delta_mean = mean - best_mean
-            delta_std = math.sqrt(std * std + best_std * best_std)
+        for entry in sorted_entries:
+            run_name, label, mean, std, identifier = entry
             display_label_md, display_label_tex = resolve_bayes_label(label, identifier)
-            if idx == 0:
+            if entry == reference_entry:
                 md_b_lines.append(f"| {display_label_md} | $0.0$ |")
                 tex_b_lines.append(f"{display_label_tex} & $0$ & $0$ \\\\")
             else:
+                delta_mean = mean - ref_mean
+                delta_std = math.sqrt(std * std + ref_std * ref_std)
                 md_b_lines.append(
                     f"| {display_label_md} | ${delta_mean:.1f} \\pm {delta_std:.1f}$ |"
                 )

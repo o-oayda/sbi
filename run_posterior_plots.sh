@@ -80,6 +80,7 @@ if match:
         --legend "${latexified_model}"
         --sky-truth 264 45 238 29 237 42
         --sky-truth-labels CMB Secrest+21 Dam+23
+        --sky-top-quad
         --corner-no-legend
         --sky-smooth 0.1
         --logz-average-start 3 --logz-average-simple
