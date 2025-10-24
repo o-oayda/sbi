@@ -97,6 +97,7 @@ if __name__ == '__main__':
     USE_FLOAT32 = False
     N_ROUNDS = 15
     DOWNSCALE_NSIDE = args.downscale_nside
+    NPE_DOWNSCALE_NSIDE = 32
     ORIGINAL_NSIDE = 64
     SIM_BACKEND = args.simulation_backend
     DASK_SCHEDULER = args.dask_scheduler
@@ -299,13 +300,14 @@ if __name__ == '__main__':
     for mode in modes:
         match mode:
             case 'NPE':
-                nside = ORIGINAL_NSIDE
-                current_downscale = None
-                if DOWNSCALE_NSIDE not in (None, ORIGINAL_NSIDE):
-                    print(
-                        f'Overriding --downscale_nside={DOWNSCALE_NSIDE} to native '
-                        f'nside={ORIGINAL_NSIDE} for NPE.'
-                    )
+                nside = NPE_DOWNSCALE_NSIDE
+                current_downscale = NPE_DOWNSCALE_NSIDE
+                # if DOWNSCALE_NSIDE not in (None, ORIGINAL_NSIDE):
+                print(
+                    f'Using hardcoded {NPE_DOWNSCALE_NSIDE} for NPE downscale nside.'
+                    # f'Overriding --downscale_nside={DOWNSCALE_NSIDE} to native '
+                    # f'nside={ORIGINAL_NSIDE} for NPE.'
+                )
                 scenario = Scenario.anynside_npe(
                     nside=nside,
                     theta_prior=prior_jax,
@@ -315,7 +317,9 @@ if __name__ == '__main__':
                         'prng_integer_seed': args.ssnle_seed,
                         'plot_save_dir': SAVE_DIR,
                         'n_rounds': N_ROUNDS,
-                        'simulation_budget': N_SIM
+                        'simulation_budget': N_SIM,
+                        'likelihood_chunk_size_gb': 0.5,
+                        'n_likelihood_samples':  10_000
                     },
                     training_overrides={'learning_rate': 0.001}
                 )
