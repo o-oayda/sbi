@@ -68,7 +68,7 @@ if match:
     sanitized_model=$(echo "${model_identifier}" | tr -c '[:alnum:]_-' '_')
     latexified_model=$("${PYTHON_EXECUTABLE}" -m dipolesbi.tools.model_labels "${model_identifier}")
     corner_path="${RESULTS_DIR}/${sanitized_model}${run_name}_corner.pdf"
-    sky_path="${RESULTS_DIR}/${sanitized_model}${run_name}_sky.png"
+    sky_path="${RESULTS_DIR}/${sanitized_model}${run_name}_sky.pdf"
 
     echo "Processing ${run_name} (model: ${model_identifier})"
 
@@ -78,8 +78,8 @@ if match:
         --corner "${corner_path}"
         --sky-prob "${sky_path}"
         --legend "${latexified_model}"
-        --sky-truth 264 45 238 29 237 42
-        --sky-truth-labels CMB Secrest+21 Dam+23
+        --sky-truth 264 48 238 29 237 42
+        --sky-truth-labels CMB S21 D23
         --sky-top-quad
         --corner-no-legend
         --sky-smooth 0.1
@@ -124,6 +124,7 @@ if (( ${#logz_rows[@]} )); then
 fi
 
 best_corner=$(ls "${RESULTS_DIR}"/free_gauss_extra_err_*_corner.pdf 2>/dev/null | head -n 1 || true)
+best_sky=$(ls "${RESULTS_DIR}"/free_gauss_extra_err_*_sky.pdf 2>/dev/null | head -n 1 || true)
 if [[ -z "${best_corner}" ]]; then
     best_run_dir=$(for dir_path in "${run_dirs[@]}"; do
         dir_base=${dir_path%/}
@@ -144,8 +145,13 @@ if [[ -f "${best_corner}" ]]; then
     papers_figures_dir="${HOME}/Documents/papers/catwise_sbi/figures"
     mkdir -p "${papers_figures_dir}"
     dest_corner="${papers_figures_dir}/free_gauss_extra_err_corner.pdf"
+    dest_sky="${papers_figures_dir}/free_gauss_extra_err_sky.pdf"
+
     cp -f "${best_corner}" "${dest_corner}"
     echo "Copied free_gauss_extra_err corner plot to ${dest_corner}"
+
+    cp -f "${best_sky}" "${dest_sky}"
+    echo "Copied free_gauss_extra_err sky plot to ${dest_sky}"
 else
     echo "Warning: free_gauss_extra_err corner plot not found; skipped copy." >&2
 fi

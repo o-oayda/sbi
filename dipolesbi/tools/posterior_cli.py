@@ -474,8 +474,9 @@ def main(argv: list[str] | None = None) -> int:
                     top_quad_mode=quad_mode,
                     contour_levels=args.sky_contours,
                 )
-                entry_label = label if idx == 0 else " "
-                legend_handles.append(Line2D([0], [0], color=color, lw=2, label=entry_label))
+                # commented out to suppress prob contours
+                # entry_label = label if idx == 0 else " "
+                # legend_handles.append(Line2D([0], [0], color=color, lw=2, label=entry_label))
 
             for idx, truth_label in enumerate(truth_labels):
                 legend_handles.append(
@@ -496,7 +497,7 @@ def main(argv: list[str] | None = None) -> int:
                     legend_kwargs.update(
                         dict(
                             loc="center left",
-                            bbox_to_anchor=(1.02, 0.75),
+                            bbox_to_anchor=(0.75, 0.85),
                             frameon=False,
                             borderaxespad=0.2,
                         )
@@ -508,6 +509,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 else:
                     legend_kwargs.update(dict(loc="lower right"))
+
                 legend = plt.legend(handles=legend_handles, **legend_kwargs)
                 if quad_mode == "modern":
                     legend.set_frame_on(False)
@@ -518,7 +520,7 @@ def main(argv: list[str] | None = None) -> int:
             if quad_mode in {"legacy", "modern"}:
                 ax = plt.gca()
                 fig = plt.gcf()
-                bbox_inches = get_top_quadrant_bbox(ax, fig)
+                bbox_inches = get_top_quadrant_bbox(ax, fig, plot_style=quad_mode)
                 if quad_mode == "legacy":
                     x_labels, y_labels = quad_tick_labels()
                     ax.set_xticklabels(x_labels)

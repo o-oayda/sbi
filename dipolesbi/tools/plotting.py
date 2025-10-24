@@ -57,13 +57,21 @@ def quad_tick_labels() -> tuple[list[str], list[str]]:
     return x_labels, y_labels
 
 
-def get_top_quadrant_bbox(ax: matplotlib.axes.Axes, fig: matplotlib.figure.Figure) -> Bbox:
+def get_top_quadrant_bbox(
+        ax: matplotlib.axes.Axes,
+        fig: matplotlib.figure.Figure,
+        plot_style: Literal['legacy', 'modern']
+) -> Bbox:
     """Calculate the bounding box for the top-right quadrant of a Mollweide projection."""
-    x0, x1 = -0.25, np.pi + 0.45
-    y0, y1 = -0.22, np.pi / 2
+    if plot_style == "legacy":
+        x0, x1 = -0.25, np.pi + 0.45
+        y0, y1 = -0.22, np.pi / 2
+    elif plot_style == "modern":
+        x0, x1 = -0.2, np.pi + 0.05
+        y0, y1 = 0, np.pi / 2 - 0.1
+
     bbox = Bbox([[x0, y0], [x1, y1]])
     return bbox.transformed(ax.transData).transformed(fig.dpi_scale_trans.inverted())
-
 
 def _get_mollweide_projector() -> hp.projector.MollweideProj:
     """Return a cached Mollweide projector."""
@@ -207,23 +215,13 @@ def _clip_artists_to_patch(ax: matplotlib.axes.Axes, patch: PathPatch) -> None:
         other_patch.set_clip_path(patch)
 
 
-try:  # optional torch dependency
-    import torch
-    from torch.types import Tensor
-except ModuleNotFoundError:  # pragma: no cover - torch optional
-    torch = None  # type: ignore
-    Tensor = NDArray[np.float64]  # type: ignore
-
 def posterior_predictive_check(
-        samples: Tensor,
+        samples: NDArray,
         model: Callable,
         n_samples: int = 5,
         **projview_kwargs
 ) -> None:
-    if torch is None:
-        raise RuntimeError("Torch is required for posterior_predictive_check but is not installed.")
-
-    random_integers = torch.randint(  # type: ignore[union-attr]
+    random_integers = np.random.randint(  # type: ignore[union-attr]
         low=0,
         high=samples.shape[0],
         size=(n_samples,)
@@ -243,11 +241,9 @@ def posterior_predictive_check(
             },
             **projview_kwargs
         )
-    
-    # plt.show()
 
 def sky_probability(
-    X: Tensor,
+    X: NDArray,
     lonlat: bool = False,
     nside: int = 256,
     smooth: None | float = 0.05,
@@ -264,7 +260,7 @@ def sky_probability(
     top_quad: bool = False,
     top_quad_mode: Literal["none", "legacy", "modern"] | None = None,
     **kwargs
-) -> Tensor:
+) -> NDArray:
     '''
     :param nside: the resolution of the healpy map into which the samples
         are binned
@@ -463,6 +459,7 @@ def sky_probability(
             scatter_artists.append(scatter)
 
     bbox_inches: str | Bbox = 'tight'
+
     if chosen_mode == "legacy" and save_path is not None:
         fig = plt.gcf()
         quad_bbox = get_top_quadrant_bbox(ax, fig)
@@ -471,6 +468,7 @@ def sky_probability(
         ax.set_yticklabels(y_labels)
         ax.yaxis.tick_right()
         bbox_inches = quad_bbox
+
     elif use_modern:
         ax.set_xlim(0.0, np.pi)
         ax.set_ylim(0.0, np.pi / 2.0)

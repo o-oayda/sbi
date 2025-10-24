@@ -288,11 +288,11 @@ def default_parameter_columns(columns: Sequence[str]) -> list[str]:
 
 
 _LATEX_LABELS: dict[str, str] = {
-    "log10_n_initial_samples": r"\log_{10} N_{\mathrm{init}}",
-    "w1_extra_error": r"\eta_{W1,\mathrm{extra}}",
-    "observer_speed": r"v_{\mathrm{obs}}",
-    "dipole_longitude": r"\ell\ (^{\circ})",
-    "dipole_latitude": r"b\ (^{\circ})",
+    "log10_n_initial_samples": r"\log_{10} N_{\mathrm{init.}}",
+    "w1_extra_error": r"\eta_{\mathrm{extra}}",
+    "observer_speed": r"v_{\mathrm{obs.}}",
+    "dipole_longitude": r"\ell ^{\circ}",
+    "dipole_latitude": r"b ^{\circ}",
     "log10_magnitude_error_shape_param": r"\log_{10} \xi_{\mathrm{student}}",
 }
 
