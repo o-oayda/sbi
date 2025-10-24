@@ -9,9 +9,14 @@ from rich.table import Table
 import matplotlib.pyplot as plt
 from matplotlib.transforms import Bbox
 from getdist import plots
+from anesthetic import read_csv as nested_read_csv
 from dipolesbi.style import paperplot
 
-from .posterior_samples import PosteriorSamplesInterface, PosteriorSamples
+from .posterior_samples import (
+    PosteriorSamplesInterface,
+    PosteriorSamples,
+    PosteriorRunInfo,
+)
 from .utils import sigma_to_prob1D
 from .plotting import (
     marker_cycle,
@@ -67,6 +72,22 @@ def _build_parser() -> argparse.ArgumentParser:
         nargs="+",
         default=None,
         help="Optional marker values (e.g. ground truth) for the corner plot.",
+    )
+    parser.add_argument(
+        "--corner-include-true",
+        action="store_true",
+        help="Include true_samples.csv from each experiment in the corner plot when available.",
+    )
+    parser.add_argument(
+        "--corner-simple-titles",
+        action="store_true",
+        help="Show only parameter labels on corner plot diagonal titles (hide credible intervals).",
+    )
+    parser.add_argument(
+        "--corner-true-legend",
+        nargs="+",
+        default=None,
+        help="Legend labels for true_samples entries (must match number of experiment directories).",
     )
     parser.add_argument(
         "--corner-sigmas",
@@ -198,6 +219,52 @@ def _format_number(value: float) -> str:
     return f"{value:.4g}"
 
 
+def _load_true_samples(path: Path) -> PosteriorSamples:
+    nested = nested_read_csv(path)
+    columns = ["sample_index", "weights", *nested.columns]
+    data: dict[str, np.ndarray] = {}
+    data["sample_index"] = np.arange(len(nested), dtype=np.float64)
+    data["weights"] = np.asarray(nested.get_weights(), dtype=np.float64)
+    for column in nested.columns:
+        data[column] = np.asarray(nested[column], dtype=np.float64)
+    info = PosteriorRunInfo(
+        round_id=-1,
+        path=path,
+        n_samples=len(nested),
+        columns=tuple(columns),
+    )
+    return PosteriorSamples(info=info, data=data)
+
+
+def _simplify_corner_titles(plotter, reference_samples, param_columns: list[str]) -> None:
+    subplots = getattr(plotter, "subplots", None)
+    if subplots is None:
+        return
+    try:
+        diag_axes = [subplots[i, i] for i in range(len(param_columns))]
+    except Exception:
+        return
+
+    labels: list[str] = []
+    for param in param_columns:
+        label = param
+        try:
+            param_obj = reference_samples.paramNames.parWithName(param)
+        except Exception:
+            param_obj = None
+        if param_obj is not None and getattr(param_obj, "label", None):
+            label_value = str(param_obj.label)
+            if "$" not in label_value:
+                label = f"${label_value}$"
+            else:
+                label = label_value
+        labels.append(label)
+
+    for ax, label in zip(diag_axes, labels):
+        if ax is not None:
+            ax.set_title(label)
+
+
 def _column_summary_table(samples, columns: list[str] | None = None) -> Table:
     table = Table(title="Column summary", expand=True)
     table.add_column("Column")
@@ -250,6 +317,15 @@ def main(argv: list[str] | None = None) -> int:
         labels = list(args.legend)
     else:
         labels = [path.name for path in args.experiment_dirs]
+
+    if args.corner_true_legend is not None:
+        if len(args.corner_true_legend) != len(args.experiment_dirs):
+            raise ValueError(
+                "Number of --corner-true-legend entries must match number of experiment directories."
+            )
+        true_corner_labels = list(args.corner_true_legend)
+    else:
+        true_corner_labels = None
 
     for idx, iface in enumerate(interfaces):
         samples_i = iface.load_round(
@@ -351,11 +427,47 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("No common parameter columns found across runs for corner plot.")
             param_columns = common_params
 
-        mc_samples_list = []
+        mc_samples_list: list = []
+        corner_labels: list[str] = []
         for s, label in zip(samples_list, labels):
             mc = s.to_getdist(param_columns=param_columns, weight_column="weights")
             mc.label = label  # type: ignore[attr-defined]
             mc_samples_list.append(mc)
+            corner_labels.append(label)
+
+        if args.corner_include_true:
+            for idx_true, (iface, label) in enumerate(zip(interfaces, labels)):
+                true_path = iface.repository.root / "true_samples.csv"
+                if not true_path.exists():
+                    console.print(
+                        f"[yellow]true_samples.csv not found for {label} at {true_path}[/yellow]"
+                    )
+                    continue
+                try:
+                    true_samples = _load_true_samples(true_path)
+                except Exception as exc:
+                    console.print(
+                        f"[yellow]Failed to load true samples for {label}: {exc}[/yellow]"
+                    )
+                    continue
+                missing_cols = [c for c in param_columns if c not in true_samples.data]
+                if missing_cols:
+                    console.print(
+                        f"[yellow]Skipping true samples for {label}; missing columns {missing_cols}[/yellow]"
+                    )
+                    continue
+                mc_true = true_samples.to_getdist(
+                    param_columns=param_columns,
+                    weight_column="weights",
+                )
+                true_label = (
+                    true_corner_labels[idx_true]
+                    if true_corner_labels is not None
+                    else f"{label} true"
+                )
+                mc_true.label = true_label  # type: ignore[attr-defined]
+                mc_samples_list.append(mc_true)
+                corner_labels.append(true_label)
 
         plotter = plots.get_subplot_plotter()
         plotter.settings.progress = False
@@ -376,7 +488,7 @@ def main(argv: list[str] | None = None) -> int:
             for mc in mc_samples_list:
                 mc.updateSettings({"contours": contour_probs})
             plotter.settings.num_plot_contours = len(contour_probs)
-        legend_labels = None if args.corner_no_legend else labels
+        legend_labels = None if args.corner_no_legend else corner_labels
         triangle_kwargs_local = dict(triangle_kwargs)
         if legend_labels is not None:
             triangle_kwargs_local["legend_labels"] = legend_labels
@@ -386,6 +498,8 @@ def main(argv: list[str] | None = None) -> int:
             filled=filled,
             **triangle_kwargs_local,
         )
+        if args.corner_simple_titles and mc_samples_list:
+            _simplify_corner_titles(plotter, mc_samples_list[0], list(param_columns))
         corner_path = Path(args.corner).expanduser()
         corner_path.parent.mkdir(parents=True, exist_ok=True)
         plotter.export(str(corner_path), dpi=300)

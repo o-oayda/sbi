@@ -323,6 +323,20 @@ class MultiRoundInferer:
                     f'samples_rnd-{self.current_round}.csv'
                 )
             )
+            # save 'true nested samples' using known logl
+            if (
+                (self.true_logl is not None) 
+                and 
+                (self.current_round == self.mr_config.n_rounds - 1)
+                and
+                (self.classic_nested_samples is not None)
+            ):
+                self.classic_nested_samples.to_csv(
+                    path_or_buf=os.path.join(
+                        self.mr_config.plot_save_dir,
+                        f'true_samples.csv'
+                    )
+                )
         else:
             np_samples = {
                 k: np.array(v) for k, v in self.current_posterior_samples.items()
