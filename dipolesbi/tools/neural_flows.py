@@ -730,7 +730,7 @@ class AbstractNeuralFlow(ABC):
             if check_proposal_probs:
                 proposal_probs = self.prior.log_prob(proposal_tree)
                 mask = jnp.isfinite(proposal_probs)
-                proposal_tree = jax.tree_map(lambda a: a[mask], proposal_tree)
+                proposal_tree = jax.tree.map(lambda a: a[mask], proposal_tree)
                 n_accepted = int(mask.sum())
                 if (ui is not None) and (current_batch_size - n_accepted == batch_size):
                     ui.log('All proposed samples discarded... breaking.')
@@ -745,10 +745,10 @@ class AbstractNeuralFlow(ABC):
             if ui is not None:
                 ui.update_progress(n_accepted)
 
-        concatenated_post_samples = jax.tree_map(
+        concatenated_post_samples = jax.tree.map(
             lambda *xs: jnp.concatenate(xs, axis=0), *collected
         )
-        concatenated_post_samples = jax.tree_map(
+        concatenated_post_samples = jax.tree.map(
             lambda a: a[:n_samples], concatenated_post_samples
         )
         if ui is not None:
