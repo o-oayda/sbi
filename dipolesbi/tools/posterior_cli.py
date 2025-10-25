@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import math
 import numpy as np
 from rich.console import Console
 from rich.table import Table
@@ -110,6 +111,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--corner-no-credible-lines",
         action="store_true",
         help="Suppress 1σ credible interval lines in the corner plot.",
+    )
+    parser.add_argument(
+        "--corner-stack-credible-titles",
+        action="store_true",
+        help="Stack 1σ credible interval summaries for each run on the diagonal titles (coloured by run).",
     )
     parser.add_argument(
         "--ppc-count",
@@ -241,15 +247,7 @@ def _load_true_samples(path: Path) -> PosteriorSamples:
     return PosteriorSamples(info=info, data=data)
 
 
-def _simplify_corner_titles(plotter, reference_samples, param_columns: list[str]) -> None:
-    subplots = getattr(plotter, "subplots", None)
-    if subplots is None:
-        return
-    try:
-        diag_axes = [subplots[i, i] for i in range(len(param_columns))]
-    except Exception:
-        return
-
+def _parameter_label_list(reference_samples, param_columns: list[str]) -> list[str]:
     labels: list[str] = []
     for param in param_columns:
         label = param
@@ -264,10 +262,162 @@ def _simplify_corner_titles(plotter, reference_samples, param_columns: list[str]
             else:
                 label = label_value
         labels.append(label)
+    return labels
+
+
+def _simplify_corner_titles(plotter, reference_samples, param_columns: list[str]) -> None:
+    subplots = getattr(plotter, "subplots", None)
+    if subplots is None:
+        return
+    try:
+        diag_axes = [subplots[i, i] for i in range(len(param_columns))]
+    except Exception:
+        return
+
+    labels = _parameter_label_list(reference_samples, param_columns)
 
     for ax, label in zip(diag_axes, labels):
         if ax is not None:
             ax.set_title(label)
+
+
+def _corner_line_colors(plotter, diag_axes: list[plt.Axes | None], count: int) -> list[str | None]:
+    colors: list[str | None] = []
+    primary_axis = next((ax for ax in diag_axes if ax is not None), None)
+    if primary_axis is not None:
+        for line in primary_axis.lines:
+            linestyle = line.get_linestyle()
+            if isinstance(linestyle, str) and linestyle in {"--", "-."}:
+                continue
+            if isinstance(linestyle, tuple):
+                continue
+            colors.append(line.get_color())
+            if len(colors) >= count:
+                break
+    if len(colors) < count:
+        colors.extend([None] * (count - len(colors)))
+    return colors
+
+
+def _weighted_quantiles(values: np.ndarray, weights: np.ndarray | None, quantiles: list[float]) -> np.ndarray:
+    if weights is None or not np.any(weights > 0):
+        weights = None
+    if weights is None:
+        return np.quantile(values, quantiles)
+    order = np.argsort(values)
+    values = values[order]
+    weights = weights[order]
+    cumulative = np.cumsum(weights)
+    total = cumulative[-1]
+    if total <= 0:
+        return np.quantile(values, quantiles)
+    cumulative /= total
+    return np.interp(quantiles, cumulative, values)
+
+
+def _credible_interval_stats(sample_array: PosteriorSamples, param: str) -> tuple[float, float, float] | None:
+    if param not in sample_array.data:
+        return None
+    values = np.asarray(sample_array[param], dtype=np.float64)
+    weights = np.asarray(sample_array.data.get("weights", None), dtype=np.float64) if "weights" in sample_array.data else None
+    mask = np.isfinite(values)
+    if weights is not None:
+        mask &= np.isfinite(weights)
+    if not np.any(mask):
+        return None
+    values = values[mask]
+    if weights is not None:
+        weights = weights[mask]
+    q_lower, q_median, q_upper = _weighted_quantiles(values, weights, [0.16, 0.5, 0.84])
+    return float(q_median), float(q_lower), float(q_upper)
+
+
+def _round_to_sig_figs(value: float, sig: int) -> tuple[float, int]:
+    if value == 0:
+        return 0.0, 0
+    exponent = int(math.floor(math.log10(abs(value))))
+    round_digits = sig - 1 - exponent
+    rounded = round(value, round_digits)
+    decimals = max(round_digits, 0)
+    return rounded, decimals
+
+
+def _format_fixed(value: float, decimals: int) -> str:
+    if decimals <= 0:
+        return f"{int(round(value))}"
+    return f"{value:.{decimals}f}"
+
+
+def _format_interval_latex(median: float, lower: float, upper: float) -> str:
+    plus = upper - median
+    minus = median - lower
+
+    plus_val, plus_dec = _round_to_sig_figs(plus, 2)
+    minus_val, minus_dec = _round_to_sig_figs(minus, 2)
+    common_dec = min(plus_dec, minus_dec)
+
+    plus_val = round(plus_val, common_dec)
+    minus_val = round(minus_val, common_dec)
+    median_val = round(median, common_dec)
+
+    plus_str = _format_fixed(plus_val, common_dec)
+    minus_str = _format_fixed(minus_val, common_dec)
+    median_str = _format_fixed(median_val, common_dec)
+
+    return rf"{median_str}^{{+{plus_str}}}_{{-{minus_str}}}"
+
+
+def _stack_corner_titles(
+    plotter,
+    reference_samples,
+    param_columns: list[str],
+    sample_objects: list[PosteriorSamples],
+    run_labels: list[str],
+) -> None:
+    subplots = getattr(plotter, "subplots", None)
+    if subplots is None:
+        return
+    try:
+        diag_axes = [subplots[i, i] for i in range(len(param_columns))]
+    except Exception:
+        return
+
+    param_labels = _parameter_label_list(reference_samples, param_columns)
+    colors = _corner_line_colors(plotter, diag_axes, len(sample_objects))
+
+    for idx, (ax, param_label) in enumerate(zip(diag_axes, param_labels)):
+        if ax is None:
+            continue
+        ax.set_title("")
+        fontsize = ax.title.get_fontsize() if hasattr(ax.title, "get_fontsize") else None
+        if fontsize is None:
+            fontsize = getattr(plotter.settings, "labelfontsize", plt.rcParams.get("axes.titlesize", 12))
+        base_color = ax.title.get_color() if hasattr(ax.title, "get_color") else plt.rcParams.get("text.color", "black")
+
+        param_symbol = param_label.strip("$") if param_label.startswith("$") and param_label.endswith("$") else param_label
+
+        offset = 0.17
+        base_y = 1.03
+        multi_run = len(sample_objects) > 1
+        for run_idx, samples in enumerate(sample_objects):
+            stats = _credible_interval_stats(samples, param_columns[idx])
+            if stats is None:
+                continue
+            median, lower, upper = stats
+            interval_tex = _format_interval_latex(median, lower, upper)
+            line_color = colors[run_idx] if run_idx < len(colors) else base_color
+            text = rf"${param_symbol} = {interval_tex}$"
+            ax.text(
+                0.5,
+                base_y + run_idx * offset,
+                text,
+                ha="center",
+                va="bottom",
+                transform=ax.transAxes,
+                fontsize=fontsize,
+                color=line_color if line_color is not None else base_color,
+                clip_on=False,
+            )
 
 
 def _column_summary_table(samples, columns: list[str] | None = None) -> Table:
@@ -541,11 +691,19 @@ def main(argv: list[str] | None = None) -> int:
                                 keep = False
                             if not keep:
                                 line.remove()
-        if args.corner_simple_titles and mc_samples_list:
+        if args.corner_stack_credible_titles and mc_samples_list:
+            _stack_corner_titles(plotter, mc_samples_list[0], list(param_columns), samples_list, labels)
+        elif args.corner_simple_titles and mc_samples_list:
             _simplify_corner_titles(plotter, mc_samples_list[0], list(param_columns))
         corner_path = Path(args.corner).expanduser()
         corner_path.parent.mkdir(parents=True, exist_ok=True)
-        plotter.export(str(corner_path), dpi=300)
+        bbox_inches: str | Bbox = "tight"
+        if args.corner_stack_credible_titles:
+            bbox_inches = Bbox.from_extents(-0.05, -0.05, 1.05, 1.25)
+        if args.corner_stack_credible_titles:
+            plotter.fig.savefig(str(corner_path), dpi=300, bbox_inches="tight")
+        else:
+            plotter.export(str(corner_path), dpi=300)
         plt.close("all")
         console.print(f"[blue]Corner plot written to {corner_path}[/blue]")
 
