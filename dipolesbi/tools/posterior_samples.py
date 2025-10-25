@@ -28,7 +28,7 @@ from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.plotting import SKY_PROBABILITY_COLOR_CYCLE, sky_probability
 from dipolesbi.tools.maps import average_smooth_map
 
-_RUN_PATTERN = re.compile(r"samples_rnd-(\d+)\.csv$")
+_RUN_PATTERN = re.compile(r"samples_rnd-(\d+)\.(?:csv|npz)$")
 
 
 @dataclass(frozen=True)
@@ -120,6 +120,8 @@ class PosteriorSamples:
         bootstrap: int | None = 100,
     ) -> tuple[float, float | None]:
         """Estimate log-evidence and its bootstrap uncertainty."""
+        if self.info.path.suffix.lower() != ".csv":
+            raise NotImplementedError("Log-evidence estimation is unavailable for this dataset format.")
         nested = nested_read_csv(self.info.path)
         buffer = io.StringIO()
         with redirect_stdout(buffer):
@@ -152,13 +154,23 @@ class PosteriorRepository:
         if not self._root.is_dir():
             msg = f"Experiment directory {self._root} not found."
             raise FileNotFoundError(msg)
-        self._runs = self._discover_runs()
+        self._file_format: str | None = None
+        self._prior_parameter_names_cache: list[str] | None = None
+
+        self._runs = self._discover_runs_with_suffix("csv")
+        if self._runs:
+            self._file_format = "csv"
+        else:
+            self._runs = self._discover_runs_with_suffix("npz")
+            if self._runs:
+                self._file_format = "npz"
         if not self._runs:
             msg = (
-                f"No posterior CSV files matching samples_rnd-*.csv in {self._root}."
+                f"No posterior sample files matching samples_rnd-*.csv or samples_rnd-*.npz in {self._root}."
             )
             raise FileNotFoundError(msg)
         self._model_config: ModelConfig | None = None
+        self._supports_logz = self._file_format == "csv"
 
     @property
     def root(self) -> Path:
@@ -178,9 +190,21 @@ class PosteriorRepository:
         for round_id in self.available_rounds():
             yield self._runs[round_id]
 
+    @property
+    def file_format(self) -> str:
+        assert self._file_format is not None
+        return self._file_format
+
+    @property
+    def supports_logz(self) -> bool:
+        return self._supports_logz
+
     def load(self, round_id: int) -> PosteriorSamples:
         info = self.run_info(round_id)
-        data = self._load_csv(info.path, info.columns)
+        if self.file_format == "csv":
+            data = self._load_csv(info.path, info.columns)
+        else:
+            data = self._load_npz(info.path, info.columns)
         return PosteriorSamples(info=info, data=data)
 
     def model_config(self) -> ModelConfig:
@@ -188,18 +212,21 @@ class PosteriorRepository:
             self._model_config = self._load_model_config()
         return self._model_config
 
-    def _discover_runs(self) -> dict[int, PosteriorRunInfo]:
+    def _discover_runs_with_suffix(self, suffix: str) -> dict[int, PosteriorRunInfo]:
         runs: dict[int, PosteriorRunInfo] = {}
-        for path in sorted(self._root.glob("samples_rnd-*.csv")):
+        for path in sorted(self._root.glob(f"samples_rnd-*.{suffix}")):
             match = _RUN_PATTERN.search(path.name)
             if not match:
                 continue
             round_id = int(match.group(1))
-            info = self._inspect_file(path, round_id)
+            if suffix == "csv":
+                info = self._inspect_csv(path, round_id)
+            else:
+                info = self._inspect_npz(path, round_id)
             runs[round_id] = info
         return runs
 
-    def _inspect_file(self, path: Path, round_id: int) -> PosteriorRunInfo:
+    def _inspect_csv(self, path: Path, round_id: int) -> PosteriorRunInfo:
         nested = nested_read_csv(path)
         base_columns = list(nested.columns)
         columns = ["sample_index", "weights", *base_columns]
@@ -207,6 +234,52 @@ class PosteriorRepository:
             round_id=round_id,
             path=path,
             n_samples=len(nested),
+            columns=tuple(columns),
+        )
+
+    def _inspect_npz(self, path: Path, round_id: int) -> PosteriorRunInfo:
+        with np.load(path, allow_pickle=False) as npz:
+            files = list(npz.files)
+            n_samples: int | None = None
+            param_names: list[str] = []
+            scalar_keys: list[str] = []
+            for key in files:
+                arr = np.asarray(npz[key])
+                if arr.ndim == 1:
+                    if key == "weights":
+                        n_samples = arr.shape[0]
+                        continue
+                    scalar_keys.append(key)
+                    if n_samples is None:
+                        n_samples = arr.shape[0]
+                elif arr.ndim == 2 and key == "theta":
+                    n_samples = arr.shape[0]
+            if n_samples is None:
+                raise ValueError(f"Unable to determine sample count from {path}")
+
+            if scalar_keys:
+                param_names = [name for name in scalar_keys if name not in {"sample_index", "weights"}]
+                param_names.sort()
+            elif "theta" in npz.files:
+                theta = np.asarray(npz["theta"], dtype=np.float64)
+                param_names = self._resolve_npz_parameter_names(theta.shape[1])
+            else:
+                two_d = None
+                for key in files:
+                    arr = np.asarray(npz[key])
+                    if arr.ndim == 2:
+                        two_d = arr
+                        break
+                if two_d is not None:
+                    param_names = self._resolve_npz_parameter_names(two_d.shape[1])
+                else:
+                    param_names = self._resolve_npz_parameter_names(0)
+
+        columns = ["sample_index", "weights", *param_names]
+        return PosteriorRunInfo(
+            round_id=round_id,
+            path=path,
+            n_samples=n_samples,
             columns=tuple(columns),
         )
 
@@ -226,6 +299,55 @@ class PosteriorRepository:
         if missing:
             msg = f"Column mismatch when loading {path}: missing {sorted(missing)}."
             raise ValueError(msg)
+        return data
+
+    def _load_npz(
+        self,
+        path: Path,
+        expected_columns: Sequence[str],
+    ) -> dict[str, NDArray[np.float64]]:
+        with np.load(path, allow_pickle=False) as npz:
+            files = list(npz.files)
+            n_samples: int | None = None
+            if "weights" in npz:
+                n_samples = int(np.asarray(npz["weights"]).shape[0])
+            if n_samples is None:
+                for key in files:
+                    arr = np.asarray(npz[key])
+                    if arr.ndim >= 1:
+                        n_samples = int(arr.shape[0])
+                        break
+            if n_samples is None:
+                raise ValueError(f"Unable to infer sample count from {path}")
+
+            data: dict[str, NDArray[np.float64]] = {}
+            data["sample_index"] = np.arange(n_samples, dtype=np.float64)
+
+            if "weights" in npz:
+                weights = np.asarray(npz["weights"], dtype=np.float64).reshape(n_samples)
+            else:
+                weights = np.ones(n_samples, dtype=np.float64)
+            data["weights"] = weights
+
+            for key in files:
+                if key == "weights":
+                    continue
+                arr = np.asarray(npz[key], dtype=np.float64)
+                if arr.ndim == 1 and arr.shape[0] == n_samples:
+                    data[key] = arr
+                elif arr.ndim == 2 and arr.shape[0] == n_samples:
+                    names = self._resolve_npz_parameter_names(arr.shape[1])
+                    for idx, name in enumerate(names):
+                        if name in data:
+                            continue
+                        data[name] = arr[:, idx]
+
+        for column in expected_columns:
+            if column in data:
+                continue
+            if column not in {"sample_index", "weights"}:
+                raise ValueError(f"Column '{column}' missing when loading {path}")
+
         return data
 
     def _load_model_config(self) -> ModelConfig:
@@ -269,6 +391,33 @@ class PosteriorRepository:
             )
             raise TypeError(msg)
         return model_config
+
+    def _resolve_npz_parameter_names(self, count: int) -> list[str]:
+        if count == 0:
+            names = self._prior_parameter_names()
+            return list(names)
+        names = self._prior_parameter_names()
+        if names:
+            if len(names) >= count:
+                return names[:count]
+            extras = [f"theta_{idx}" for idx in range(len(names), count)]
+            return list(names) + extras
+        return [f"theta_{idx}" for idx in range(count)]
+
+    def _prior_parameter_names(self) -> list[str]:
+        if self._prior_parameter_names_cache is not None:
+            return self._prior_parameter_names_cache
+        config_path = self._root / "configs.txt"
+        names: list[str] = []
+        if config_path.exists():
+            for line in config_path.read_text().splitlines():
+                if "kwarg='" in line:
+                    fragment = line.split("kwarg='", 1)[1]
+                    name = fragment.split("'", 1)[0]
+                    if name:
+                        names.append(name)
+        self._prior_parameter_names_cache = names
+        return names
 
 _EXCLUDED_COLUMNS = {"weights", "sample_index", "nlive"}
 _EXCLUDED_SUBSTRINGS = ("logl",)
@@ -438,6 +587,10 @@ class PosteriorSamplesInterface:
     @property
     def repository(self) -> PosteriorRepository:
         return self._repository
+
+    @property
+    def supports_logz(self) -> bool:
+        return self._repository.supports_logz
 
     def show_available_rounds(self) -> None:
         table = Table(title="Posterior Rounds", expand=True)

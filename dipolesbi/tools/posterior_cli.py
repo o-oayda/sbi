@@ -107,6 +107,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Suppress the legend in the corner plot.",
     )
     parser.add_argument(
+        "--corner-no-credible-lines",
+        action="store_true",
+        help="Suppress 1σ credible interval lines in the corner plot.",
+    )
+    parser.add_argument(
         "--ppc-count",
         type=int,
         default=None,
@@ -327,6 +332,9 @@ def main(argv: list[str] | None = None) -> int:
     else:
         true_corner_labels = None
 
+    logz_warning_printed = False
+    logz_average_warning_printed = False
+
     for idx, iface in enumerate(interfaces):
         samples_i = iface.load_round(
             round_id=args.round_id,
@@ -346,13 +354,30 @@ def main(argv: list[str] | None = None) -> int:
 
         console.print(_column_summary_table(samples_i, columns=columns_i))
 
-        logz_mean, logz_err = samples_i.log_evidence()
-        if logz_err is not None:
-            console.print(f"logZ ({label}) = {logz_mean:.4f} ± {logz_err:.4f}")
+        supports_logz = iface.supports_logz
+        logz_mean: float | None = None
+        logz_err: float | None = None
+        if supports_logz:
+            try:
+                logz_mean, logz_err = samples_i.log_evidence()
+            except NotImplementedError:
+                supports_logz = False
+        if supports_logz and logz_mean is not None:
+            if logz_err is not None:
+                console.print(f"logZ ({label}) = {logz_mean:.4f} ± {logz_err:.4f}")
+            else:
+                console.print(f"logZ ({label}) = {logz_mean:.4f} (uncertainty unavailable)")
         else:
-            console.print(f"logZ ({label}) = {logz_mean:.4f} (uncertainty unavailable)")
+            if not logz_warning_printed:
+                console.print("[yellow]logZ computation unavailable for these samples.[/yellow]")
+                logz_warning_printed = True
 
         if args.logz_average_start is not None:
+            if not supports_logz:
+                if not logz_average_warning_printed:
+                    console.print("[yellow]Skipping logZ averaging; unsupported for these samples.[/yellow]")
+                    logz_average_warning_printed = True
+                continue
             start_round = args.logz_average_start
             available_rounds = sorted(iface._repository.available_rounds())
             selected_rounds = [r for r in available_rounds if r >= start_round]
@@ -498,6 +523,24 @@ def main(argv: list[str] | None = None) -> int:
             filled=filled,
             **triangle_kwargs_local,
         )
+        if args.corner_no_credible_lines:
+            subplots = getattr(plotter, "subplots", None)
+            if subplots is not None:
+                for row in subplots:
+                    for ax in row:
+                        if ax is None:
+                            continue
+                        for line in list(ax.lines):
+                            linestyle = line.get_linestyle()
+                            keep = True
+                            if isinstance(linestyle, str):
+                                if linestyle in {"--", "-."}:
+                                    keep = False
+                            elif isinstance(linestyle, tuple):
+                                # Matplotlib may encode custom dash patterns as tuples.
+                                keep = False
+                            if not keep:
+                                line.remove()
         if args.corner_simple_titles and mc_samples_list:
             _simplify_corner_titles(plotter, mc_samples_list[0], list(param_columns))
         corner_path = Path(args.corner).expanduser()
