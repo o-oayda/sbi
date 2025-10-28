@@ -114,7 +114,7 @@ def write_tables(
         ref_std = reference_entry[3]
         md_b_lines = ["| Model | $\\Delta \\ln \\mathcal{Z}$ |", "| --- | --- |"]
         tex_b_lines = [
-            r"\begin{tabular}{l r@{\,\,\pm\,\,}l}",
+            r"\begin{tabular}{l r@{$\,\,\pm\,\,$}l}",
             r"\hline",
             r"Model & \multicolumn{2}{c}{$\ln B$} \\",
             r"\hline",
