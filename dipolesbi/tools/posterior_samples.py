@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import re
 from contextlib import redirect_stdout
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, field
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence, Literal
 import inspect
@@ -52,6 +52,8 @@ class PosteriorSamples:
 
     info: PosteriorRunInfo
     data: Mapping[str, NDArray[np.float64]]
+    _bayesian_summary_cache: dict[str, float | None] | None = field(default=None, init=False, repr=False)
+    _bayesian_summary_nsamples: int | None = field(default=None, init=False, repr=False)
 
     def __getitem__(self, key: str) -> NDArray[np.float64]:
         return self.data[key]
@@ -117,24 +119,99 @@ class PosteriorSamples:
     def log_evidence(
         self,
         *,
-        bootstrap: int | None = 100,
+        bootstrap: int | None = 1000,
     ) -> tuple[float, float | None]:
         """Estimate log-evidence and its bootstrap uncertainty."""
         if self.info.path.suffix.lower() != ".csv":
             raise NotImplementedError("Log-evidence estimation is unavailable for this dataset format.")
-        nested = nested_read_csv(self.info.path)
+        nsamples = bootstrap if (bootstrap and bootstrap > 0) else 2000
+        summary = self.bayesian_summary(nsamples=nsamples)
+        logz_mean: float | None = None
+        logz_err: float | None = None
+        if summary is not None:
+            logz_mean = summary.get("logZ")
+            logz_err = summary.get("logZ_std")
+        if logz_mean is None:
+            nested = nested_read_csv(self.info.path)
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                logz_mean = float(nested.logZ())
+        assert logz_mean is not None
+        return logz_mean, logz_err
+
+    def bayesian_summary(self, nsamples: int = 1000) -> dict[str, float | None] | None:
+        if self.info.path.suffix.lower() != ".csv":
+            return None
+        if nsamples <= 0:
+            nsamples = 2000
+        if (
+            self._bayesian_summary_cache is not None
+            and self._bayesian_summary_nsamples == nsamples
+        ):
+            return self._bayesian_summary_cache
+        try:
+            nested = nested_read_csv(self.info.path)
+        except Exception:
+            return None
+
+        effective_samples = nsamples
+        try:
+            total = len(nested)
+            if total > 0:
+                effective_samples = min(nsamples, total)
+        except Exception:
+            pass
+
+        try:
+            bayesian_stats = nested.stats(effective_samples)
+        except Exception:
+            bayesian_stats = None
+
+        def _safe_float(value: Any) -> float | None:
+            try:
+                val = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not np.isfinite(val):
+                return None
+            return val
+
+        def _std_from_stats(key: str) -> float | None:
+            if bayesian_stats is None:
+                return None
+            try:
+                std_val = float(bayesian_stats[key].std())
+            except Exception:
+                return None
+            if not np.isfinite(std_val):
+                return None
+            return std_val
+
         buffer = io.StringIO()
         with redirect_stdout(buffer):
-            logz_mean = float(nested.logZ())
-            logz_err: float | None = None
-            if bootstrap and bootstrap > 0:
-                try:
-                    logz_samples = np.asarray(nested.logZ(bootstrap), dtype=np.float64)
-                    if logz_samples.size > 1:
-                        logz_err = float(logz_samples.std())
-                except Exception:
-                    logz_err = None
-        return logz_mean, logz_err
+            logz_mean = _safe_float(getattr(nested, "logZ", lambda: None)())
+            dkl_value = _safe_float(getattr(nested, "D_KL", lambda: None)())
+            d_g_value = _safe_float(getattr(nested, "d_G", lambda: None)())
+
+        logz_std = _std_from_stats("logZ")
+        dkl_std = _std_from_stats("D_KL")
+        d_g_std = _std_from_stats("d_G")
+
+        summary: dict[str, float | None] = {
+            "logZ": logz_mean,
+            "logZ_std": logz_std,
+            "dkl": dkl_value,
+            "dkl_std": dkl_std,
+            "d_g": d_g_value,
+            "d_g_std": float(abs(d_g_std)) if d_g_std is not None else None,
+        }
+
+        if all(value is None for value in summary.values()):
+            return None
+
+        self._bayesian_summary_cache = summary
+        self._bayesian_summary_nsamples = nsamples
+        return summary
 
 
 @dataclass

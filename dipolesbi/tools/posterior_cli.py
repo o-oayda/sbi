@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Sequence
+import time
 
 import math
 import numpy as np
@@ -27,6 +29,8 @@ from .plotting import (
 )
 
 plots.set_active_style(paperplot.style_name)
+
+AVERAGE_DIAGNOSTIC_STATS = True
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -245,6 +249,32 @@ def _load_true_samples(path: Path) -> PosteriorSamples:
         columns=tuple(columns),
     )
     return PosteriorSamples(info=info, data=data)
+
+
+def _aggregate_round_statistics(
+    values: Sequence[float],
+    *,
+    simple: bool,
+    bootstrap_samples: int = 2000,
+    seed: int = 12345,
+) -> tuple[float, float, bool] | None:
+    array = np.asarray([float(v) for v in values if np.isfinite(v)], dtype=np.float64)
+    if array.size == 0:
+        return None
+    if array.size == 1:
+        return float(array[0]), 0.0, False
+    if simple:
+        mean = float(np.mean(array))
+        std = float(np.std(array, ddof=0))
+        return mean, std, False
+    rng = np.random.default_rng(seed)
+    boot_means = np.empty(bootstrap_samples, dtype=np.float64)
+    for idx in range(bootstrap_samples):
+        sample_idx = rng.choice(array.size, size=array.size, replace=True)
+        boot_means[idx] = float(np.mean(array[sample_idx]))
+    mean = float(np.mean(boot_means))
+    std = float(np.std(boot_means, ddof=1))
+    return mean, std, True
 
 
 def _parameter_label_list(reference_samples, param_columns: list[str]) -> list[str]:
@@ -507,20 +537,38 @@ def main(argv: list[str] | None = None) -> int:
         supports_logz = iface.supports_logz
         logz_mean: float | None = None
         logz_err: float | None = None
+        bayesian_summary: dict[str, float | None] | None = None
         if supports_logz:
             try:
                 logz_mean, logz_err = samples_i.log_evidence()
+                bayesian_summary = samples_i.bayesian_summary()
             except NotImplementedError:
                 supports_logz = False
+                bayesian_summary = None
         if supports_logz and logz_mean is not None:
             if logz_err is not None:
                 console.print(f"logZ ({label}) = {logz_mean:.4f} ± {logz_err:.4f}")
             else:
                 console.print(f"logZ ({label}) = {logz_mean:.4f} (uncertainty unavailable)")
-        else:
-            if not logz_warning_printed:
-                console.print("[yellow]logZ computation unavailable for these samples.[/yellow]")
-                logz_warning_printed = True
+            if bayesian_summary is not None:
+                dkl_value = bayesian_summary.get("dkl")
+                dkl_err = bayesian_summary.get("dkl_std")
+                if dkl_value is not None:
+                    if dkl_err is not None:
+                        console.print(f"D_KL ({label}) = {dkl_value:.4f} ± {dkl_err:.4f}")
+                    else:
+                        console.print(f"D_KL ({label}) = {dkl_value:.4f} (uncertainty unavailable)")
+                d_g_value = bayesian_summary.get("d_g")
+                d_g_err = bayesian_summary.get("d_g_std")
+                if d_g_value is not None:
+                    if d_g_err is not None:
+                        console.print(f"d_G ({label}) = {d_g_value:.4f} ± {d_g_err:.4f}")
+                    else:
+                        console.print(f"d_G ({label}) = {d_g_value:.4f} (uncertainty unavailable)")
+            else:
+                if not logz_warning_printed:
+                    console.print("[yellow]logZ computation unavailable for these samples.[/yellow]")
+                    logz_warning_printed = True
 
         if args.logz_average_start is not None:
             if not supports_logz:
@@ -540,12 +588,25 @@ def main(argv: list[str] | None = None) -> int:
                 table.add_column("σ", justify="right")
 
                 round_values: list[tuple[float, float | None]] = []
+                if AVERAGE_DIAGNOSTIC_STATS:
+                    dkl_values: list[float] = []
+                    d_g_values: list[float] = []
+                    diag_times: list[tuple[int, float]] = []
                 for r in selected_rounds:
                     round_samples = iface.load_round(round_id=r, show_table=False)
                     z_mean, z_err = round_samples.log_evidence()
                     round_values.append((z_mean, z_err))
                     err_display = f"{z_err:.4f}" if z_err is not None else "N/A"
                     table.add_row(str(r), f"{z_mean:.4f}", err_display)
+                    if AVERAGE_DIAGNOSTIC_STATS:
+                        summary = round_samples.bayesian_summary()
+                        if summary is not None:
+                            dkl_value = summary.get("dkl")
+                            if dkl_value is not None and np.isfinite(dkl_value):
+                                dkl_values.append(float(dkl_value))
+                            d_g_value = summary.get("d_g")
+                            if d_g_value is not None and np.isfinite(d_g_value):
+                                d_g_values.append(float(d_g_value))
 
                 console.print(table)
 
@@ -558,23 +619,41 @@ def main(argv: list[str] | None = None) -> int:
                         f"[cyan]Average logZ ({label}): {z_mean:.4f} ± {err_display:.4f}[/cyan]"
                     )
                 else:
-                    values = np.array([z for z, _ in round_values]) # just z mean from one round
-                    if args.logz_average_simple:
-                        avg = float(np.mean(values))
-                        std = float(np.std(values, ddof=0))
-                        console.print(f"[cyan]Average logZ ({label}): {avg:.4f} ± {std:.4f}[/cyan]")
+                    values = [z for z, _ in round_values]
+                    agg_result = _aggregate_round_statistics(
+                        values,
+                        simple=args.logz_average_simple,
+                    )
+                    if agg_result is None:
+                        console.print("[yellow]Unable to average logZ; non-finite values encountered.[/yellow]")
                     else:
-                        rng = np.random.default_rng(12345)
-                        boot_means = []
-                        for _ in range(2000):
-                            indices = rng.choice(len(values), size=len(values), replace=True)
-                            boot_means.append(values[indices].mean())
-                        boot_means = np.asarray(boot_means)
-                        avg = float(boot_means.mean())
-                        std = float(boot_means.std(ddof=1))
+                        avg, std, used_bootstrap = agg_result
+                        prefix = "Bootstrap average" if used_bootstrap else "Average"
                         console.print(
-                            f"[cyan]Bootstrap average logZ ({label}): {avg:.4f} ± {std:.4f}[/cyan]"
+                            f"[cyan]{prefix} logZ ({label}): {avg:.4f} ± {std:.4f}[/cyan]"
                         )
+
+                if AVERAGE_DIAGNOSTIC_STATS:
+                    def _report_average_stat(stat_values: list[float], display_name: str) -> None:
+                        agg = _aggregate_round_statistics(
+                            stat_values,
+                            simple=args.logz_average_simple,
+                        )
+                        if agg is None:
+                            console.print(
+                                f"[yellow]Unable to average {display_name}; insufficient data.[/yellow]"
+                            )
+                            return
+                        mean, std, used_bootstrap = agg
+                        prefix = "Bootstrap average" if used_bootstrap else "Average"
+                        console.print(
+                            f"[cyan]{prefix} {display_name} ({label}): {mean:.4f} ± {std:.4f}[/cyan]"
+                        )
+
+                    if dkl_values:
+                        _report_average_stat(dkl_values, "D_KL")
+                    if d_g_values:
+                        _report_average_stat(d_g_values, "d_G")
 
     if not samples_list:
         console.print("[red]No samples loaded.[/red]")
