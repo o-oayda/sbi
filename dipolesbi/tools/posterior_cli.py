@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 from typing import Sequence
-import time
 
 import math
 import numpy as np
@@ -591,7 +590,6 @@ def main(argv: list[str] | None = None) -> int:
                 if AVERAGE_DIAGNOSTIC_STATS:
                     dkl_values: list[float] = []
                     d_g_values: list[float] = []
-                    diag_times: list[tuple[int, float]] = []
                 for r in selected_rounds:
                     round_samples = iface.load_round(round_id=r, show_table=False)
                     z_mean, z_err = round_samples.log_evidence()

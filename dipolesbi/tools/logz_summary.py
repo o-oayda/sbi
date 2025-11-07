@@ -5,12 +5,26 @@ import math
 import pathlib
 import re
 import sys
+from dataclasses import dataclass
 from typing import Iterable, List, Sequence, Tuple
 
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 RICH_TAG = re.compile(r"\[[^\]]+\]")
 
 FIDUCIAL_IDENTIFIER = "free_gauss_extra_err"
+
+
+@dataclass(frozen=True)
+class LogZEntry:
+    run_name: str
+    label: str
+    mean: float
+    std: float
+    identifier: str
+    dkl_mean: float | None = None
+    dkl_std: float | None = None
+    dg_mean: float | None = None
+    dg_std: float | None = None
 
 
 def strip_formatting(text: str) -> str:
@@ -20,49 +34,80 @@ def strip_formatting(text: str) -> str:
     return text.strip()
 
 
-def parse_logz_from_log(file_path: pathlib.Path) -> Tuple[float, float]:
+def _extract_metric(lines: list[str], key: str) -> Tuple[float, float]:
     """
-    Extract the mean and standard deviation from the CLI log output.
+    Locate the averaged metric line (mean ± std) for the supplied key.
     """
     target_line: str | None = None
-    for raw_line in file_path.read_text(encoding="utf-8").splitlines():
-        clean = strip_formatting(raw_line)
+    keywords = (
+        f"average {key}",
+        f"bootstrap average {key}",
+    )
+    for clean in lines:
         if not clean:
             continue
         lower = clean.lower()
-        if "average logz (" in lower or "bootstrap average logz (" in lower:
-            if "±" in clean:
-                target_line = clean
+        if any(keyword in lower for keyword in keywords) and "±" in clean:
+            target_line = clean
 
     if target_line is None:
-        raise ValueError("Average logZ line not found in log output.")
+        raise ValueError(f"Average {key} line not found in log output.")
 
     try:
         _, value_part = target_line.rsplit(":", 1)
     except ValueError as exc:
-        raise ValueError("Unable to split logZ line on ':'") from exc
+        raise ValueError(f"Unable to split {key} line on ':'") from exc
 
     value_part = strip_formatting(value_part)
-
     if "±" not in value_part:
-        raise ValueError("LogZ line is missing '±' separator.")
+        raise ValueError(f"{key} line is missing '±' separator.")
 
     mean_str, std_str = (segment.strip() for segment in value_part.split("±", 1))
     return float(mean_str), float(std_str)
 
 
+def parse_summary_from_log(file_path: pathlib.Path) -> Tuple[float, float, float, float, float, float]:
+    """
+    Extract the averaged logZ, D_KL, and d_G statistics from the CLI log output.
+    """
+    raw_lines = file_path.read_text(encoding="utf-8").splitlines()
+    cleaned_lines = [strip_formatting(line) for line in raw_lines]
+    logz_mean, logz_std = _extract_metric(cleaned_lines, "logz")
+    dkl_mean, dkl_std = _extract_metric(cleaned_lines, "d_kl")
+    dg_mean, dg_std = _extract_metric(cleaned_lines, "d_g")
+    return logz_mean, logz_std, dkl_mean, dkl_std, dg_mean, dg_std
+
+
 def write_tables(
-    entries: Sequence[Tuple[str, str, float, float, str]],
+    entries: Sequence[LogZEntry],
     output_dir: pathlib.Path,
 ) -> None:
     """
     Generate Markdown and LaTeX tables summarising logZ values.
     """
-    sorted_entries = sorted(entries, key=lambda item: item[2], reverse=True)
+    sorted_entries = sorted(entries, key=lambda item: item.mean, reverse=True)
 
-    md_lines = ["| Run | Model | $\\ln \\mathcal{Z}$ |", "| --- | --- | --- |"]
-    for run_name, label, mean, std, _ in sorted_entries:
-        md_lines.append(f"| {run_name} | {label} | ${mean:.1f} \\pm {std:.1f}$ |")
+    def _format_pm(mean: float | None, std: float | None, precision: str) -> str:
+        if mean is None or not math.isfinite(mean):
+            return "—"
+        if std is None or not math.isfinite(std):
+            return f"${mean:{precision}}$"
+        return f"${mean:{precision}} \\pm {std:{precision}}$"
+
+    md_lines = [
+        "| Run | Model | $\\ln \\mathcal{Z}$ | $D_{\\mathrm{KL}}$ | $d_G$ |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for entry in sorted_entries:
+        md_lines.append(
+            "| {run} | {label} | {logz} | {dkl} | {dg} |".format(
+                run=entry.run_name,
+                label=entry.label,
+                logz=_format_pm(entry.mean, entry.std, ".1f"),
+                dkl=_format_pm(entry.dkl_mean, entry.dkl_std, ".2f"),
+                dg=_format_pm(entry.dg_mean, entry.dg_std, ".2f"),
+            )
+        )
 
     def latex_escape(text: str) -> str:
         replacements = {
@@ -79,26 +124,71 @@ def write_tables(
         }
         return "".join(replacements.get(char, char) for char in text)
 
+    def _format_tex_pm(mean: float | None, std: float | None, precision: str) -> str:
+        if mean is None or not math.isfinite(mean):
+            return r"\text{N/A}"
+        if std is None or not math.isfinite(std):
+            return f"\\num{{{mean:{precision}}}}"
+        return f"\\num{{{mean:{precision}} +- {std:{precision}}}}"
+
+    def _format_plain_pm(mean: float | None, std: float | None, precision: str) -> str:
+        if mean is None or not math.isfinite(mean):
+            return "N/A"
+        if std is None or not math.isfinite(std):
+            return f"{mean:{precision}}"
+        return f"{mean:{precision}} ± {std:{precision}}"
+
     tex_lines = [
-        r"\begin{tabular}{lll}",
+        r"\begin{tabular}{llccc}",
         r"\hline",
-        r"Run & Model & $\ln \mathcal{Z}$ \\",
+        r"Run & Model & $\ln \mathcal{Z}$ & $D_{\mathrm{KL}}$ & $d_G$ \\",
         r"\hline",
     ]
-    for run_name, label, mean, std, _ in sorted_entries:
-        run_tex = latex_escape(run_name)
-        label_tex = label  # label may contain LaTeX already
-        tex_lines.append(f"{run_tex} & {label_tex} & \\num{{{mean:.1f} +- {std:.1f}}} \\\\")
+    for entry in sorted_entries:
+        run_tex = latex_escape(entry.run_name)
+        label_tex = entry.label
+        tex_lines.append(
+            f"{run_tex} & {label_tex} & "
+            f"{_format_tex_pm(entry.mean, entry.std, '.1f')} & "
+            f"{_format_tex_pm(entry.dkl_mean, entry.dkl_std, '.2f')} & "
+            f"{_format_tex_pm(entry.dg_mean, entry.dg_std, '.2f')} \\\\"
+        )
     tex_lines.extend([r"\hline", r"\end{tabular}"])
+
+    plain_header = ["Run", "Model", "ln Z", "D_KL", "d_G"]
+    plain_rows: list[list[str]] = []
+    for entry in sorted_entries:
+        plain_rows.append(
+            [
+                entry.run_name,
+                strip_formatting(entry.label),
+                _format_plain_pm(entry.mean, entry.std, "0.1f"),
+                _format_plain_pm(entry.dkl_mean, entry.dkl_std, "0.2f"),
+                _format_plain_pm(entry.dg_mean, entry.dg_std, "0.2f"),
+            ]
+        )
+
+    widths = [len(col) for col in plain_header]
+    for row in plain_rows:
+        for idx, cell in enumerate(row):
+            widths[idx] = max(widths[idx], len(cell))
+
+    def _format_plain_row(row: list[str]) -> str:
+        cells = [cell.ljust(widths[idx]) for idx, cell in enumerate(row)]
+        return " | ".join(cells)
+
+    plain_lines = [_format_plain_row(plain_header), _format_plain_row(["-" * w for w in widths])]
+    plain_lines.extend(_format_plain_row(row) for row in plain_rows)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "logz_summary.md").write_text("\n".join(md_lines) + "\n", encoding="utf-8")
     (output_dir / "logz_summary.tex").write_text("\n".join(tex_lines) + "\n", encoding="utf-8")
+    (output_dir / "logz_summary.txt").write_text("\n".join(plain_lines) + "\n", encoding="utf-8")
 
     if sorted_entries:
-        reference_entry = None
+        reference_entry: LogZEntry | None = None
         for entry in sorted_entries:
-            if entry[4] == FIDUCIAL_IDENTIFIER:
+            if entry.identifier == FIDUCIAL_IDENTIFIER:
                 reference_entry = entry
                 break
 
@@ -110,8 +200,8 @@ def write_tables(
                 file=sys.stderr,
             )
 
-        ref_mean = reference_entry[2]
-        ref_std = reference_entry[3]
+        ref_mean = reference_entry.mean
+        ref_std = reference_entry.std
         md_b_lines = ["| Model | $\\Delta \\ln \\mathcal{Z}$ |", "| --- | --- |"]
         tex_b_lines = [
             r"\begin{tabular}{l r@{$\,\,\pm\,\,$}l}",
@@ -173,14 +263,13 @@ def write_tables(
             return label, label
 
         for entry in sorted_entries:
-            run_name, label, mean, std, identifier = entry
-            display_label_md, display_label_tex = resolve_bayes_label(label, identifier)
+            display_label_md, display_label_tex = resolve_bayes_label(entry.label, entry.identifier)
             if entry == reference_entry:
                 md_b_lines.append(f"| {display_label_md} | $0.0$ |")
                 tex_b_lines.append(f"{display_label_tex} & $0$ & $0$ \\\\")
             else:
-                delta_mean = mean - ref_mean
-                delta_std = math.sqrt(std * std + ref_std * ref_std)
+                delta_mean = entry.mean - ref_mean
+                delta_std = math.sqrt(entry.std * entry.std + ref_std * ref_std)
                 md_b_lines.append(
                     f"| {display_label_md} | ${delta_mean:.1f} \\pm {delta_std:.1f}$ |"
                 )
@@ -196,32 +285,67 @@ def write_tables(
 
 def _cmd_extract(log_file: pathlib.Path) -> int:
     try:
-        mean, std = parse_logz_from_log(log_file)
+        mean, std, dkl_mean, dkl_std, dg_mean, dg_std = parse_summary_from_log(log_file)
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 1
-    print(f"{mean}\t{std}")
+    print(f"{mean}\t{std}\t{dkl_mean}\t{dkl_std}\t{dg_mean}\t{dg_std}")
     return 0
 
 
 def _cmd_write(output_dir: pathlib.Path, lines: Iterable[str]) -> int:
-    entries: List[Tuple[str, str, float, float, str]] = []
+    entries: List[LogZEntry] = []
+
+    def _to_float_or_none(value: str) -> float | None:
+        value = value.strip()
+        if not value:
+            return None
+        try:
+            return float(value)
+        except ValueError:
+            return None
+
     for line in lines:
         line = line.rstrip("\n")
         if not line:
             continue
         try:
             parts = line.split("\t")
-            if len(parts) == 5:
+            if len(parts) == 9:
+                (
+                    run_name,
+                    label,
+                    mean_str,
+                    std_str,
+                    identifier,
+                    dkl_mean_str,
+                    dkl_std_str,
+                    dg_mean_str,
+                    dg_std_str,
+                ) = parts
+            elif len(parts) == 5:
                 run_name, label, mean_str, std_str, identifier = parts
+                dkl_mean_str = dkl_std_str = dg_mean_str = dg_std_str = ""
             elif len(parts) == 4:
                 run_name, label, mean_str, std_str = parts
                 identifier = ""
+                dkl_mean_str = dkl_std_str = dg_mean_str = dg_std_str = ""
             else:
                 continue
+            entry = LogZEntry(
+                run_name=run_name,
+                label=label,
+                mean=float(mean_str),
+                std=float(std_str),
+                identifier=identifier,
+                dkl_mean=_to_float_or_none(dkl_mean_str),
+                dkl_std=_to_float_or_none(dkl_std_str),
+                dg_mean=_to_float_or_none(dg_mean_str),
+                dg_std=_to_float_or_none(dg_std_str),
+            )
         except ValueError:
             continue
-        entries.append((run_name, label, float(mean_str), float(std_str), identifier))
+        entries.append(entry)
     write_tables(entries, output_dir)
     return 0
 

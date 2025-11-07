@@ -112,8 +112,10 @@ if match:
         continue
     fi
 
-    IFS=$'\t' read -r parsed_mean parsed_std <<<"${parse_output}"
-    printf -v logz_row '%s\t%s\t%s\t%s\t%s' "$run_name" "$latexified_model" "$parsed_mean" "$parsed_std" "$model_identifier"
+    IFS=$'\t' read -r parsed_mean parsed_std parsed_dkl_mean parsed_dkl_std parsed_dg_mean parsed_dg_std <<<"${parse_output}"
+    printf -v logz_row '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
+        "$run_name" "$latexified_model" "$parsed_mean" "$parsed_std" "$model_identifier" \
+        "$parsed_dkl_mean" "$parsed_dkl_std" "$parsed_dg_mean" "$parsed_dg_std"
     logz_rows+=("$logz_row")
     rm -f "${run_log}"
 done
