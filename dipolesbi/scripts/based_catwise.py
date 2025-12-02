@@ -1,9 +1,10 @@
 from contextlib import nullcontext
 from functools import partial
-from typing import Optional
+from typing import Any, Callable, Optional
+from catsim.utils.healsphere import downgrade_ignore_nan
 from numpy.typing import NDArray
-from dipolesbi.catwise.maps import Catwise
-from dipolesbi.tools.configs import CatwiseConfig, DataTransformSpec, Scenario
+from catsim import Catwise, CatwiseConfig
+from dipolesbi.tools.configs import DataTransformSpec, Scenario
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
 from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.priors_np import DipolePriorNP
@@ -82,6 +83,12 @@ if __name__ == '__main__':
         default=None,
         help='Optional hint for how many Dask workers to wait for before starting simulations.'
     )
+    parser.add_argument(
+        '--catwise_version',
+        choices=['S21', 'S22'],
+        default='S21',
+        help='Specify whether to use the Secrest+21 or Secrest+22 sample for inference.'
+    )
     args = parser.parse_args()
 
     raw_modes = args.mode or []
@@ -143,11 +150,15 @@ if __name__ == '__main__':
             rng_key: Optional[NPKey] = None,
             **kwargs
     ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
-        return model.generate_dipole(rng_key=rng_key, **kwargs)
+        return model.generate_dipole(
+            rng_key=rng_key,
+            w1_max=16.5 if args.catwise_version == 'S22' else 16.4,
+            **kwargs
+        )
 
     prior = DipolePriorNP(
-        mean_count_range=[np.log10(30_000_000), np.log10(40_000_000)],
-        speed_range=[0, 8]
+        mean_count_range=[np.log10(30_000_000), np.log10(40_000_000)], #U[7.5,7.6]
+        speed_range=[0, 8] # [0, 20]
     )
     prior.change_kwarg(
         param_short_name='N',
@@ -159,7 +170,7 @@ if __name__ == '__main__':
             short_name=short_name,
             simulator_kwarg='w1_extra_error',
             low=0,
-            high=8,
+            high=8, # U[0,5]
             dist_type='uniform',
             index=1
         )
@@ -363,7 +374,8 @@ if __name__ == '__main__':
             use_float32=USE_FLOAT32,
             use_common_extra_error=COMMON_ERROR,
             model_identifier=args.model,
-            downscale_nside=current_downscale
+            downscale_nside=current_downscale,
+            base_mask_version=args.catwise_version
         )
 
         model = Catwise(config)
@@ -420,7 +432,21 @@ if __name__ == '__main__':
                     parallel_kwargs=parallel_opts
                 )
 
-        x0, mask = model.make_real_sample()
+        if args.catwise_version == 'S21':
+            x0, mask = model.make_real_sample()
+        elif args.catwise_version == 'S22':
+            x0 = np.asarray(
+                np.load('dipolesbi/catwise/catwise_S22.npy'), dtype=np.float32
+            )
+            mask = model.binary_mask
+            x0[~mask] = np.nan
+
+            if DOWNSCALE_NSIDE:
+                x0, mask = downgrade_ignore_nan(x0, mask, DOWNSCALE_NSIDE)
+        else:
+            raise ValueError(
+                f'Catwise version ({args.catwise_version} not recognised).'
+            )
 
         inferer = MultiRoundInferer(
             mode, prior, model_sim_wrapper, (x0, mask),
