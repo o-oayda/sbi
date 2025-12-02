@@ -1,6 +1,6 @@
 from contextlib import nullcontext
 from functools import partial
-from typing import Any, Callable, Optional
+from typing import Optional
 from catsim.utils.healsphere import downgrade_ignore_nan
 from numpy.typing import NDArray
 from catsim import Catwise, CatwiseConfig
@@ -15,6 +15,7 @@ import numpy as np
 from joblib import parallel_backend
 from dipolesbi.tools.utils import batch_simulate
 from dipolesbi.tools.remote_sim import ensure_worker_model, remote_generate_dipole
+import matplotlib.pyplot as plt
 
 
 if __name__ == '__main__':
