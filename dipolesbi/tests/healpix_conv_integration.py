@@ -1,5 +1,5 @@
 import numpy as np
-import torch
+# import torch
 import healpy as hp
 import jax
 import jax.numpy as jnp

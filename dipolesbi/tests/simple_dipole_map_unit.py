@@ -3,6 +3,7 @@ import healpy as hp
 import scipy.stats as sp_stats
 
 from dipolesbi.tools.maps import SimpleDipoleMap
+from dipolesbi.tools.configs import SimpleDipoleMapConfig
 from dipolesbi.tools.np_rngkey import NPKey, poisson as poisson_sample
 from dipolesbi.tools.healpix_helpers import downgrade_ignore_nan
 
@@ -21,7 +22,13 @@ def test_generate_dipole_shapes_native_resolution() -> None:
     npix = hp.nside2npix(nside)
     theta = _make_theta()
 
-    mapper = SimpleDipoleMap(nside=nside, dtype=np.float64)
+    mapper = SimpleDipoleMap(
+        SimpleDipoleMapConfig(
+            nside=nside,
+            downscale_nside=nside,
+            dtype=np.float64,
+        )
+    )
     rng_key = NPKey.from_seed(0)
 
     density_map, mask_map = mapper.generate_dipole(
@@ -42,7 +49,13 @@ def test_log_likelihood_matches_manual_native() -> None:
     nside = 4
     theta = _make_theta()
 
-    base_mapper = SimpleDipoleMap(nside=nside, dtype=np.float64)
+    base_mapper = SimpleDipoleMap(
+        SimpleDipoleMapConfig(
+            nside=nside,
+            downscale_nside=nside,
+            dtype=np.float64,
+        )
+    )
     model_signal = base_mapper.dipole_signal(**theta)
 
     rng_key = NPKey.from_seed(123)
@@ -57,10 +70,13 @@ def test_log_likelihood_matches_manual_native() -> None:
     reference_data = observed_counts[0]
 
     mapper = SimpleDipoleMap(
-        nside=nside,
-        dtype=np.float64,
-        reference_data=reference_data,
-        reference_mask=reference_mask,
+        SimpleDipoleMapConfig(
+            nside=nside,
+            downscale_nside=nside,
+            dtype=np.float64,
+            reference_data=reference_data,
+            reference_mask=reference_mask,
+        )
     )
 
     logl = mapper.log_likelihood(theta)
@@ -79,7 +95,13 @@ def test_log_likelihood_matches_manual_with_downscaling() -> None:
     downscale_nside = 2
     theta = _make_theta(mean_density=20.0)
 
-    base_mapper = SimpleDipoleMap(nside=nside, dtype=np.float64)
+    base_mapper = SimpleDipoleMap(
+        SimpleDipoleMapConfig(
+            nside=nside,
+            downscale_nside=nside,
+            dtype=np.float64,
+        )
+    )
     model_signal = base_mapper.dipole_signal(**theta)
 
     fine_mask = np.ones(model_signal.shape[1], dtype=np.bool_)
@@ -102,11 +124,13 @@ def test_log_likelihood_matches_manual_with_downscaling() -> None:
     coarse_mask = coarse_mask[0]
 
     mapper = SimpleDipoleMap(
-        nside=nside,
-        dtype=np.float64,
-        reference_data=coarse_counts,
-        reference_mask=fine_mask,
-        downscale_nside=downscale_nside,
+        SimpleDipoleMapConfig(
+            nside=nside,
+            downscale_nside=downscale_nside,
+            dtype=np.float64,
+            reference_data=coarse_counts,
+            reference_mask=fine_mask,
+        )
     )
 
     logl = mapper.log_likelihood(theta)
@@ -135,7 +159,13 @@ def test_log_likelihood_matches_manual_with_multi_step_downscaling() -> None:
     downscale_nside = 2
     theta = _make_theta(mean_density=25.0)
 
-    base_mapper = SimpleDipoleMap(nside=nside, dtype=np.float64)
+    base_mapper = SimpleDipoleMap(
+        SimpleDipoleMapConfig(
+            nside=nside,
+            downscale_nside=nside,
+            dtype=np.float64,
+        )
+    )
     model_signal = base_mapper.dipole_signal(**theta)
 
     fine_mask = np.ones(model_signal.shape[1], dtype=np.bool_)
@@ -158,11 +188,13 @@ def test_log_likelihood_matches_manual_with_multi_step_downscaling() -> None:
     coarse_mask = coarse_mask[0]
 
     mapper = SimpleDipoleMap(
-        nside=nside,
-        dtype=np.float64,
-        reference_data=coarse_counts,
-        reference_mask=fine_mask,
-        downscale_nside=downscale_nside,
+        SimpleDipoleMapConfig(
+            nside=nside,
+            downscale_nside=downscale_nside,
+            dtype=np.float64,
+            reference_data=coarse_counts,
+            reference_mask=fine_mask,
+        )
     )
 
     logl = mapper.log_likelihood(theta)
