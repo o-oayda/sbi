@@ -26,7 +26,7 @@ dependencies = [
     "surjectors @ git+https://github.com/o-oayda/surjectors.git@main",
     "blackjax @ git+https://github.com/handley-lab/blackjax@nested_sampling",
     "anesthetic (<= 2.10.3)",
-    "catsim @ git+https://github.com/o-oayda/catsim.git",
+    "catsim @ git+ssh://git@github.com/o-oayda/catsim.git",
     "pytest (>=9.0.1,<10.0.0)"
 ]
 

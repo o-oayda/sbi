@@ -397,7 +397,7 @@ tqdm = ">=4.67.1,<5.0.0"
 
 [package.source]
 type = "git"
-url = "https://github.com/o-oayda/catsim.git"
+url = "ssh://git@github.com/o-oayda/catsim.git"
 reference = "HEAD"
 resolved_reference = "122119ce0c0fa0a3c8552d5a09abb9451cf2ae7d"
 
@@ -5408,4 +5408,4 @@ cuda = ["jax", "jaxlib"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.13"
-content-hash = "b12cc037f7e5c463eac9d7186e22a60b356fad8b1744cfbb2812622bec1d4ebd"
+content-hash = "aa5b3f2663eb8e488f0eb3a7d623b2603d9ced7cb64408a0151286f717cb545e"
