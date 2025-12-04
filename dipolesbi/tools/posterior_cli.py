@@ -224,6 +224,24 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use simple mean/variance for logZ averaging instead of bootstrap resampling.",
     )
+    parser.add_argument(
+        "--stat-plot",
+        type=Path,
+        default=None,
+        help="If set, save the chosen statistic versus round to this path.",
+    )
+    parser.add_argument(
+        "--stat-plot-metric",
+        choices=("logZ", "D_KL", "d_G"),
+        default="logZ",
+        help="Statistic to plot when using --stat-plot.",
+    )
+    parser.add_argument(
+        "--stat-plot-start",
+        type=int,
+        default=None,
+        help="Optional minimum round index to include in --stat-plot.",
+    )
     return parser
 
 
@@ -485,6 +503,78 @@ def _column_summary_table(samples, columns: list[str] | None = None) -> Table:
     return table
 
 
+def _statistic_from_samples(
+    samples: PosteriorSamples,
+    metric: str,
+) -> tuple[float | None, float | None]:
+    if metric == "logZ":
+        value, err = samples.log_evidence()
+        return value, err
+    summary = samples.bayesian_summary()
+    if summary is None:
+        return None, None
+    if metric == "D_KL":
+        return summary.get("dkl"), summary.get("dkl_std")
+    if metric == "d_G":
+        value = summary.get("d_g")
+        err = summary.get("d_g_std")
+        return value, err
+    return None, None
+
+
+def _plot_statistic_vs_round(
+    data: dict[str, list[tuple[int, float, float | None]]],
+    metric: str,
+    output_path: Path,
+    *,
+    console: Console,
+) -> None:
+    if not data or all(not points for points in data.values()):
+        console.print("[yellow]No data available for statistic plot; skipping.[/yellow]")
+        return
+
+    metric_labels = {
+        "logZ": "log Z",
+        "D_KL": "D_KL",
+        "d_G": "d_G",
+    }
+    fig, ax = plt.subplots()
+    for label, points in data.items():
+        if not points:
+            continue
+        points_sorted = sorted(points, key=lambda item: item[0])
+        rounds = np.array([p[0] for p in points_sorted], dtype=np.int64)
+        values = np.array([p[1] for p in points_sorted], dtype=np.float64)
+        err_array = np.array(
+            [p[2] if (p[2] is not None and np.isfinite(p[2])) else np.nan for p in points_sorted],
+            dtype=np.float64,
+        )
+        yerr: np.ndarray | None
+        if np.isfinite(err_array).any():
+            yerr = err_array
+        else:
+            yerr = None
+        ax.errorbar(
+            rounds,
+            values,
+            yerr=yerr,
+            label=label,
+            marker="o",
+            linestyle="-",
+        )
+    ax.set_xlabel("Round")
+    ax.set_ylabel(metric_labels.get(metric, metric))
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+
+    output_path = output_path.expanduser()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    console.print(f"[green]Saved statistic plot to {output_path}.[/green]")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -513,6 +603,9 @@ def main(argv: list[str] | None = None) -> int:
 
     logz_warning_printed = False
     logz_average_warning_printed = False
+    stat_plot_warning_printed = False
+    stat_plot_enabled = args.stat_plot is not None
+    stat_plot_data: dict[str, list[tuple[int, float, float | None]]] = {}
 
     for idx, iface in enumerate(interfaces):
         samples_i = iface.load_round(
@@ -652,6 +745,30 @@ def main(argv: list[str] | None = None) -> int:
                         _report_average_stat(dkl_values, "D_KL")
                     if d_g_values:
                         _report_average_stat(d_g_values, "d_G")
+
+        if stat_plot_enabled:
+            if not supports_logz:
+                if not stat_plot_warning_printed:
+                    console.print("[yellow]Statistic plot requires CSV samples with logZ support; skipping.[/yellow]")
+                    stat_plot_warning_printed = True
+            else:
+                plot_rounds = list(iface.repository.available_rounds())
+                if args.stat_plot_start is not None:
+                    plot_rounds = [r for r in plot_rounds if r >= args.stat_plot_start]
+                stat_points: list[tuple[int, float, float | None]] = []
+                for plot_round in plot_rounds:
+                    try:
+                        plot_samples = iface.load_round(round_id=plot_round, show_table=False)
+                    except Exception as exc:
+                        console.print(f"[yellow]Failed to load round {plot_round} for {label}: {exc}[/yellow]")
+                        continue
+                    value, err = _statistic_from_samples(plot_samples, args.stat_plot_metric)
+                    if value is None or not np.isfinite(value):
+                        continue
+                    err_value = err if (err is not None and np.isfinite(err)) else None
+                    stat_points.append((plot_round, float(value), err_value))
+                if stat_points:
+                    stat_plot_data[label] = stat_points
 
     if not samples_list:
         console.print("[red]No samples loaded.[/red]")
@@ -929,6 +1046,14 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             plt.close(plt.gcf())
             console.print(f"[red]Failed to generate sky probability plot: {exc}[/red]")
+
+    if stat_plot_enabled:
+        _plot_statistic_vs_round(
+            stat_plot_data,
+            args.stat_plot_metric,
+            args.stat_plot,
+            console=console,
+        )
     return 0
 
 
