@@ -48,8 +48,18 @@ class MultiRoundInferer:
             train_config: TrainingConfig = TrainingConfig(),
             model_config: Optional[ModelConfig] = None,
             true_logl: Optional[Callable[[dict[str, jnp.ndarray]], jnp.ndarray]] = None,
-            use_ui: bool = True
+            use_ui: bool = True,
+            start_from_previous: Optional[str] = None
     ) -> None:
+        '''
+        :param start_from_previous: Pass a run directory, at which point it
+            reads the saved samples and starts from the last-completed round.
+            If all runs are present (e.g. 15 runs and the config specifies
+            n_rounds = 15), we start at the last run and retrain the NPE/NLE.
+            Obviously you should set all the above arguments and configs
+            to the same as they were for the original run otherwise there is no
+            guarantee things will be consistent.
+        '''
         self.mode = mode
         self.mr_config = multi_round_config
         self.use_ui = use_ui
@@ -76,15 +86,23 @@ class MultiRoundInferer:
             self.reference_theta_jax: dict[str, jnp.ndarray] = {}
 
         self.sample_posterior_seed = 0
-        self.mr_config.plot_save_dir = self._get_output_dir()
-        if self.mr_config.save_round_simulations:
-            self._round_sim_save_dir = os.path.join(
-                self.mr_config.plot_save_dir,
-                self.mr_config.round_simulation_subdir
-            )
-            os.makedirs(self._round_sim_save_dir, exist_ok=True)
+        
+        self.start_from_previous = start_from_previous
+        if start_from_previous is None:
+            self.mr_config.plot_save_dir = self._get_output_dir()
+            if self.mr_config.save_round_simulations:
+                self._round_sim_save_dir = os.path.join(
+                    self.mr_config.plot_save_dir,
+                    self.mr_config.round_simulation_subdir
+                )
+                os.makedirs(self._round_sim_save_dir, exist_ok=True)
+            else:
+                self._round_sim_save_dir = None
         else:
-            self._round_sim_save_dir = None
+            assert os.path.exists(start_from_previous), (
+                f'Cannot find run dir ({start_from_previous}).'
+            )
+            self.mr_config.plot_save_dir = start_from_previous
 
         self.nflow_config = nflow_config
         self.train_config = train_config
