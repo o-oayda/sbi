@@ -399,7 +399,7 @@ tqdm = ">=4.67.1,<5.0.0"
 type = "git"
 url = "ssh://git@github.com/o-oayda/catsim.git"
 reference = "HEAD"
-resolved_reference = "122119ce0c0fa0a3c8552d5a09abb9451cf2ae7d"
+resolved_reference = "d9ea4ab154cb328a685f30a007f2620e4f960c2a"
 
 [[package]]
 name = "certifi"
@@ -5408,4 +5408,4 @@ cuda = ["jax", "jaxlib"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.13"
-content-hash = "aa5b3f2663eb8e488f0eb3a7d623b2603d9ced7cb64408a0151286f717cb545e"
+content-hash = "8cb5a3594471116c960eda30c0509dbc45df58a5bd30f8bb4d2d22e1cc20771f"
