@@ -90,6 +90,11 @@ if __name__ == '__main__':
         default='S21',
         help='Specify whether to use the Secrest+21 or Secrest+22 sample for inference.'
     )
+    parser.add_argument(
+        '--use_clusters',
+        action='store_true',
+        help='If specified, generated clustered/correlated points.'
+    )
     args = parser.parse_args()
 
     raw_modes = args.mode or []
@@ -107,6 +112,7 @@ if __name__ == '__main__':
     DOWNSCALE_NSIDE = args.downscale_nside
     NPE_DOWNSCALE_NSIDE = 32
     ORIGINAL_NSIDE = 64
+    USE_CLUSTERS = args.use_clusters
     SIM_BACKEND = args.simulation_backend
     DASK_SCHEDULER = args.dask_scheduler
     dask_client = None
@@ -186,6 +192,22 @@ if __name__ == '__main__':
             index=3
         )
 
+    def add_cluster_params(prior: DipolePriorNP):
+        prior.add_prior(
+            short_name='l_clus',
+            simulator_kwarg='cluster_rate_param',
+            low=5,
+            high=100,
+            dist_type='uniform',
+        )
+        prior.add_prior(
+            short_name='kappa',
+            simulator_kwarg='log10_cluster_scale_param',
+            low=3,
+            high=5,
+            dist_type='uniform',
+        )
+
     simulator = simulator_wrapper
 
     theta_0 = { # add a reference theta for diagnosing learned P(D | theta_0)
@@ -196,6 +218,11 @@ if __name__ == '__main__':
         'dipole_longitude': 220,
         'dipole_latitude': 45
     }
+
+    if USE_CLUSTERS:
+        add_cluster_params(prior)
+        theta_0['cluster_rate_param'] = 10
+        theta_0['log10_cluster_scale_param'] = 3
 
     match args.model:
         case 'free_gauss_extra_err':
@@ -376,7 +403,8 @@ if __name__ == '__main__':
             use_common_extra_error=COMMON_ERROR,
             model_identifier=args.model,
             downscale_nside=current_downscale,
-            base_mask_version=args.catwise_version
+            base_mask_version=args.catwise_version,
+            generate_correlated_points=USE_CLUSTERS
         )
 
         model = Catwise(config)
