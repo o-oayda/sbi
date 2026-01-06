@@ -95,6 +95,11 @@ if __name__ == '__main__':
         action='store_true',
         help='If specified, generated clustered/correlated points.'
     )
+    parser.add_argument(
+        '--unique_error',
+        action='store_true',
+        help='If specified, make eta a unique term for W1 and W2 and not common.'
+    )
     args = parser.parse_args()
 
     raw_modes = args.mode or []
@@ -112,6 +117,7 @@ if __name__ == '__main__':
     DOWNSCALE_NSIDE = args.downscale_nside
     NPE_DOWNSCALE_NSIDE = 32
     ORIGINAL_NSIDE = 64
+    COMMON_ERROR = not args.unique_error
     USE_CLUSTERS = args.use_clusters
     SIM_BACKEND = args.simulation_backend
     DASK_SCHEDULER = args.dask_scheduler
@@ -172,15 +178,27 @@ if __name__ == '__main__':
         new_kwarg='log10_n_initial_samples'
     )
 
-    def add_error_scale(short_name: str, prior: DipolePriorNP):
+    def add_error_scale(
+            prior: DipolePriorNP,
+            use_common_error: bool
+    ) -> None:
         prior.add_prior(
-            short_name=short_name,
+            short_name='etaWX' if use_common_error else 'etaW1',
             simulator_kwarg='w1_extra_error',
             low=0,
             high=8, # U[0,5]
             dist_type='uniform',
             index=1
         )
+        if not use_common_error:
+            prior.add_prior(
+                short_name='etaW2',
+                simulator_kwarg='w2_extra_error',
+                low=0,
+                high=8, # U[0,5]
+                dist_type='uniform',
+                index=2
+            )
 
     def add_tdist_shape_param(prior: DipolePriorNP):
         prior.add_prior(
@@ -224,17 +242,18 @@ if __name__ == '__main__':
         theta_0['cluster_rate_param'] = 10
         theta_0['log10_cluster_scale_param'] = 3
 
+    if not COMMON_ERROR:
+        theta_0['w2_extra_error'] = 4.
+
     match args.model:
         case 'free_gauss_extra_err':
             ERROR_DIST = 'gaussian'
-            COMMON_ERROR = True
-            add_error_scale('etaWX', prior)
+            add_error_scale(prior, COMMON_ERROR)
             # theta_0.pop('w2_extra_error')
 
         case 'free_students-t_extra_err':
             ERROR_DIST = 'students-t'
-            COMMON_ERROR = True
-            add_error_scale('etaWX', prior)
+            add_error_scale(prior, COMMON_ERROR)
             add_tdist_shape_param(prior)
             simulator = simulator_wrapper
             theta_0['log10_magnitude_error_shape_param'] = 1.
@@ -263,40 +282,45 @@ if __name__ == '__main__':
 
         case 'cmb_dipole':
             ERROR_DIST = 'gaussian'
-            COMMON_ERROR = True
             # the default params for the dipole are the CMB ones
             simulator = simulator_wrapper
             prior.remove_prior('D')
             prior.remove_prior('phi')
             prior.remove_prior('theta')
-            add_error_scale('etaWX', prior)
+            add_error_scale(prior, COMMON_ERROR)
             theta_0.pop('observer_speed')
             theta_0.pop('dipole_longitude')
             theta_0.pop('dipole_latitude')
-            assert prior.ndim == 2
+            if COMMON_ERROR:
+                assert prior.ndim == 2
+            else:
+                assert prior.ndim == 3
 
         case 'cmb_direction':
             ERROR_DIST = 'gaussian'
-            COMMON_ERROR = True
             simulator = simulator_wrapper
             prior.remove_prior('phi')
             prior.remove_prior('theta')
-            add_error_scale('etaWX', prior)
+            add_error_scale(prior, COMMON_ERROR)
             theta_0.pop('dipole_longitude'); theta_0.pop('dipole_latitude')
-            assert prior.ndim == 3
+            if COMMON_ERROR:
+                assert prior.ndim == 3
+            else:
+                assert prior.ndim == 4
 
         case 'cmb_velocity':
             ERROR_DIST = 'gaussian'
-            COMMON_ERROR = True
             simulator = simulator_wrapper
             prior.remove_prior('D')
-            add_error_scale('etaWX', prior)
-            assert prior.ndim == 4
+            add_error_scale(prior, COMMON_ERROR)
             theta_0.pop('observer_speed')
+            if COMMON_ERROR:
+                assert prior.ndim == 4
+            else:
+                assert prior.ndim == 5
 
         case 'secrest+21':
             ERROR_DIST = 'gaussian'
-            COMMON_ERROR = True
             simulator = partial(
                 simulator_wrapper,
                 observer_speed=2.156, # from CatWISE_Dipole_results.ipynb in secrest's code
@@ -306,15 +330,17 @@ if __name__ == '__main__':
             prior.remove_prior('D')
             prior.remove_prior('phi')
             prior.remove_prior('theta')
-            add_error_scale('etaWX', prior)
+            add_error_scale(prior, COMMON_ERROR)
             theta_0.pop('observer_speed')
             theta_0.pop('dipole_longitude')
             theta_0.pop('dipole_latitude')
-            assert prior.ndim == 2
+            if COMMON_ERROR:
+                assert prior.ndim == 2
+            else:
+                assert prior.ndim == 3
 
         case 'dam+23':
             ERROR_DIST = 'gaussian'
-            COMMON_ERROR = True
             simulator = partial(
                 simulator_wrapper,
                 observer_speed=2.68, # from CatWISE_Dipole_results.ipynb in secrest's code
@@ -324,11 +350,14 @@ if __name__ == '__main__':
             prior.remove_prior('D')
             prior.remove_prior('phi')
             prior.remove_prior('theta')
-            add_error_scale('etaWX', prior)
+            add_error_scale(prior, COMMON_ERROR)
             theta_0.pop('observer_speed')
             theta_0.pop('dipole_longitude')
             theta_0.pop('dipole_latitude')
-            assert prior.ndim == 2
+            if COMMON_ERROR:
+                assert prior.ndim == 2
+            else:
+                assert prior.ndim == 3
 
         case _:
             raise KeyError(f'Model {args.model} not recognised.')
@@ -404,7 +433,8 @@ if __name__ == '__main__':
             model_identifier=args.model,
             downscale_nside=current_downscale,
             base_mask_version=args.catwise_version,
-            generate_correlated_points=USE_CLUSTERS
+            generate_correlated_points=USE_CLUSTERS,
+            s21_catalogue_path='/home/oliver/Documents/catsim/src/catsim/data/catwise_agns_masked_final_w1lt16p5_alpha.fits'
         )
 
         model = Catwise(config)
