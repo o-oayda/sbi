@@ -521,6 +521,8 @@ _LATEX_LABELS: dict[str, str] = {
     "dipole_longitude": r"\ell ^{\circ}",
     "dipole_latitude": r"b ^{\circ}",
     "log10_magnitude_error_shape_param": r"\log_{10} \xi_{\mathrm{student}}",
+    "cluster_rate_param": r"\lambda_{\mathrm{clus.}}",
+    "log10_cluster_scale_param": r"\log_{10} \kappa"
 }
 
 
