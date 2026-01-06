@@ -391,6 +391,7 @@ healpy = ">=1.18.1,<2.0.0"
 ipython = ">=9.7.0,<10.0.0"
 matplotlib = ">=3.10.7,<4.0.0"
 numpy = ">=2.3.5,<3.0.0"
+pytest = ">=9.0.2,<10.0.0"
 scikit-learn = ">=1.7.2,<2.0.0"
 scipy = ">=1.16.3,<2.0.0"
 tqdm = ">=4.67.1,<5.0.0"
@@ -398,8 +399,8 @@ tqdm = ">=4.67.1,<5.0.0"
 [package.source]
 type = "git"
 url = "ssh://git@github.com/o-oayda/catsim.git"
-reference = "HEAD"
-resolved_reference = "d9ea4ab154cb328a685f30a007f2620e4f960c2a"
+reference = "feat/w12-error"
+resolved_reference = "6bf4a86f19743cf8c9e677e155edfc1e4919a3ea"
 
 [[package]]
 name = "certifi"
@@ -3899,14 +3900,14 @@ tests = ["coverage (>=5.1)", "pre-commit", "pytest", "pytest-benchmark", "pytest
 
 [[package]]
 name = "pytest"
-version = "9.0.1"
+version = "9.0.2"
 description = "pytest: simple powerful testing with Python"
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "pytest-9.0.1-py3-none-any.whl", hash = "sha256:67be0030d194df2dfa7b556f2e56fb3c3315bd5c8822c6951162b92b32ce7dad"},
-    {file = "pytest-9.0.1.tar.gz", hash = "sha256:3e9c069ea73583e255c3b21cf46b8d3c56f6e3a1a8f6da94ccb0fcf57b9d73c8"},
+    {file = "pytest-9.0.2-py3-none-any.whl", hash = "sha256:711ffd45bf766d5264d487b917733b453d917afd2b0ad65223959f59089f875b"},
+    {file = "pytest-9.0.2.tar.gz", hash = "sha256:75186651a92bd89611d1d9fc20f0b4345fd827c41ccd5c299a868a05d70edf11"},
 ]
 
 [package.dependencies]
@@ -5408,4 +5409,4 @@ cuda = ["jax", "jaxlib"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.13"
-content-hash = "8cb5a3594471116c960eda30c0509dbc45df58a5bd30f8bb4d2d22e1cc20771f"
+content-hash = "523258d952176e8ea6d44cdae01c20fa05944ad267a49249d38e31a70aabf851"
