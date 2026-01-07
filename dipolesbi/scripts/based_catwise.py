@@ -213,7 +213,7 @@ if __name__ == '__main__':
         prior.add_prior(
             short_name='nu',
             simulator_kwarg='log10_magnitude_error_shape_param',
-            low=-1,
+            low=0.3,
             high=3,
             dist_type='uniform',
             index=3
