@@ -100,6 +100,14 @@ if __name__ == '__main__':
         action='store_true',
         help='If specified, make eta a unique term for W1 and W2 and not common.'
     )
+    parser.add_argument(
+        '--noecl_mask',
+        action='store_true',
+        help=(
+            'If specified, use a catalogue version where the north ecliptic'
+            'pole has not been masked.'
+        )
+    )
     args = parser.parse_args()
 
     raw_modes = args.mode or []
@@ -118,6 +126,7 @@ if __name__ == '__main__':
     NPE_DOWNSCALE_NSIDE = 32
     ORIGINAL_NSIDE = 64
     COMMON_ERROR = not args.unique_error
+    NOECL_MASK = args.noecl_mask
     USE_CLUSTERS = args.use_clusters
     SIM_BACKEND = args.simulation_backend
     DASK_SCHEDULER = args.dask_scheduler
@@ -434,7 +443,8 @@ if __name__ == '__main__':
             downscale_nside=current_downscale,
             base_mask_version=args.catwise_version,
             generate_correlated_points=USE_CLUSTERS,
-            s21_catalogue_path='/home/oliver/Documents/catsim/src/catsim/data/catwise_agns_masked_final_w1lt16p5_alpha.fits'
+            s21_catalogue_path='/home/oliver/Documents/catsim/src/catsim/data/catwise_agns_masked_final_w1lt16p5_alpha.fits',
+            use_noecl_mask=NOECL_MASK
         )
 
         model = Catwise(config)
