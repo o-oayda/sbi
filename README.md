@@ -96,3 +96,15 @@ are honoured automatically in both the corner plots and sky projections.
 - Python ≥ 3.12
 - Poetry
 - CUDA-compatible GPU (optional but recommended)
+
+## Git LFS
+Git LFS files are kind of borked. I seem to need to use an explicit path to
+`catsim` to make sure the hashgrid file is installed.
+
+```bash
+poetry remove catsim
+poetry add --editable ../catsim
+poetry install -vvv
+```
+
+Refresh(?): `poetry run pip install --force-reinstall --no-deps catsim`
