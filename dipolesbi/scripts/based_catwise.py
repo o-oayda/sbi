@@ -108,6 +108,10 @@ if __name__ == '__main__':
             'pole has not been masked.'
         )
     )
+    parser.add_argument(
+        '--add_confusion_noise',
+        action='store_true'
+    )
     args = parser.parse_args()
 
     raw_modes = args.mode or []
@@ -127,6 +131,7 @@ if __name__ == '__main__':
     ORIGINAL_NSIDE = 64
     COMMON_ERROR = not args.unique_error
     NOECL_MASK = args.noecl_mask
+    ADD_CONFUSION = args.add_confusion_noise
     USE_CLUSTERS = args.use_clusters
     SIM_BACKEND = args.simulation_backend
     DASK_SCHEDULER = args.dask_scheduler
@@ -235,6 +240,22 @@ if __name__ == '__main__':
             dist_type='uniform',
         )
 
+    def add_confusion_params(prior: DipolePriorNP):
+        prior.add_prior(
+            short_name='w1conf_scale',
+            simulator_kwarg='w1conf_scale',
+            low=1,
+            high=50,
+            dist_type='uniform',
+        )
+        prior.add_prior(
+            short_name='w2conf_scale',
+            simulator_kwarg='w2conf_scale',
+            low=1,
+            high=50,
+            dist_type='uniform',
+        )
+
     simulator = simulator_wrapper
 
     theta_0 = { # add a reference theta for diagnosing learned P(D | theta_0)
@@ -253,6 +274,11 @@ if __name__ == '__main__':
 
     if not COMMON_ERROR:
         theta_0['w2_extra_error'] = 4.
+
+    if ADD_CONFUSION:
+        add_confusion_params(prior)
+        theta_0['w1conf_scale'] = 10.
+        theta_0['w2conf_scale'] = 10.
 
     match args.model:
         case 'free_gauss_extra_err':
@@ -444,7 +470,8 @@ if __name__ == '__main__':
             base_mask_version=args.catwise_version,
             generate_correlated_points=USE_CLUSTERS,
             s21_catalogue_path='/home/oliver/Documents/catsim/src/catsim/data/catwise_agns_masked_final_w1lt16p5_alpha.fits',
-            use_noecl_mask=NOECL_MASK
+            use_noecl_mask=NOECL_MASK,
+            add_confusion_noise=ADD_CONFUSION
         )
 
         model = Catwise(config)
