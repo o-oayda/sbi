@@ -242,17 +242,17 @@ if __name__ == '__main__':
 
     def add_confusion_params(prior: DipolePriorNP):
         prior.add_prior(
-            short_name='w1conf_scale',
-            simulator_kwarg='w1conf_scale',
-            low=1,
-            high=50,
+            short_name='log10_kw1',
+            simulator_kwarg='log10_w1conf_scale',
+            low=-2,
+            high=2,
             dist_type='uniform',
         )
         prior.add_prior(
-            short_name='w2conf_scale',
-            simulator_kwarg='w2conf_scale',
-            low=1,
-            high=50,
+            short_name='log10_kw2',
+            simulator_kwarg='log10_w2conf_scale',
+            low=-2,
+            high=2,
             dist_type='uniform',
         )
 
@@ -277,8 +277,8 @@ if __name__ == '__main__':
 
     if ADD_CONFUSION:
         add_confusion_params(prior)
-        theta_0['w1conf_scale'] = 10.
-        theta_0['w2conf_scale'] = 10.
+        theta_0['log10_w1conf_scale'] = 1.
+        theta_0['log10_w2conf_scale'] = 1.
 
     match args.model:
         case 'free_gauss_extra_err':
