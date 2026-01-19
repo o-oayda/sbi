@@ -32,11 +32,18 @@ from dipolesbi.tools.distributions import IndependentWrapper, NegBinomDist, Pois
 from dipolesbi.tools.dataloader import as_batch_iterator_cpu2gpu, healpix_map_dataset, healpix_map_dataset_idx
 from dipolesbi.tools.embedding_nets import HpCNNEmbedding
 from dipolesbi.tools.np_rngkey import npkey_sequence_from_hk
-from dipolesbi.tools.priors_jax import JaxPrior
+from dipolesbi.tools.priors_jax import DipolePriorJax, JaxPrior
 from dipolesbi.tools.transforms import DipoleThetaTransform, InvertibleDataTransform, InvertibleThetaTransformJax
 from dipolesbi.tools.hadamard_transform import HadamardTransform
 from dipolesbi.tools.ui import MultiRoundInfererUI, NullMultiRoundInfererUI
 from dipolesbi.tools.utils import convert_x_in_named_dataset, PytreeAdapter
+from dipolesbi.tools.transform_io import (
+    deserialize_transform_config,
+    restore_transform_state,
+    serialize_transform_config,
+    serialize_transform_state,
+)
+import dill as pickle
 
 
 def make_mlp_with_dropout(sizes, activation=jax.nn.silu, dropout_rate=0.0):
@@ -875,6 +882,74 @@ class NeuralFlow(AbstractNeuralFlow):
             lines.append(f"  [{i:02d}] {name} {spec}")
         lines.append(")")
         return "\n".join(lines)
+
+    def save_checkpoint(
+        self,
+        path: str,
+        transform_config: TransformConfig,
+        prior: Optional[DipolePriorJax] = None,
+    ) -> None:
+        if self.best_params is None:
+            raise ValueError("No trained parameters available to save.")
+
+        params = jax.tree_util.tree_map(jax.device_get, self.best_params)
+        leaves, treedef = jax.tree_util.tree_flatten(params)
+        arrays = {f"leaf_{i}": np.asarray(leaf) for i, leaf in enumerate(leaves)}
+
+        prior_payload = None
+        if prior is not None:
+            prior_payload = pickle.dumps(prior)
+        elif isinstance(getattr(self, "prior", None), DipolePriorJax):
+            prior_payload = pickle.dumps(self.prior)
+
+        payload = {
+            "treedef": pickle.dumps(treedef),
+            "n_leaves": np.asarray(len(leaves), dtype=np.int32),
+            "target_ndim": np.asarray(self.target_ndim, dtype=np.int32),
+            "nflow_config": pickle.dumps(asdict(self.nflow_config)),
+            "transform_config": pickle.dumps(serialize_transform_config(transform_config)),
+            "transform_state": pickle.dumps(serialize_transform_state(transform_config)),
+            "mask_metadata": pickle.dumps(self._mask_metadata),
+            "prior": prior_payload,
+        }
+        np.savez_compressed(path, **arrays, **payload)
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        path: str,
+        prior: Optional[DipolePriorJax] = None,
+    ) -> tuple["NeuralFlow", TransformConfig]:
+        ckpt = np.load(path, allow_pickle=True)
+        treedef = pickle.loads(ckpt["treedef"].item())
+        n_leaves = int(ckpt["n_leaves"])
+        leaves = [ckpt[f"leaf_{i}"] for i in range(n_leaves)]
+        params = jax.tree_util.tree_unflatten(treedef, leaves)
+
+        if prior is None and "prior" in ckpt:
+            prior_bytes = ckpt["prior"].item()
+            if prior_bytes is not None:
+                prior = pickle.loads(prior_bytes)
+
+        nflow_config = NeuralFlowConfig(**pickle.loads(ckpt["nflow_config"].item()))
+        target_ndim = int(ckpt["target_ndim"])
+        transform_config = deserialize_transform_config(
+            pickle.loads(ckpt["transform_config"].item()),
+            prior=prior,
+        )
+
+        flow = cls(
+            target_ndim=target_ndim,
+            config=nflow_config,
+            data_transform=transform_config.data_transform_config.data_transform,
+            theta_transform=transform_config.theta_transform_config.theta_transform,
+            embedding_net_config=transform_config.data_transform_config.embedding_net_config,
+        )
+        flow.best_params = params
+        if "mask_metadata" in ckpt:
+            flow._mask_metadata = pickle.loads(ckpt["mask_metadata"].item())
+        restore_transform_state(transform_config, pickle.loads(ckpt["transform_state"].item()))
+        return flow, transform_config
 
     def _bijector_fn(self, params):
         means, log_scales = unstack(params, -1) # happens on non-surjective layer in heirarchical

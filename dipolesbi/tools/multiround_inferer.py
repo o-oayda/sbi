@@ -337,6 +337,19 @@ class MultiRoundInferer:
                         f'true_samples.csv'
                     )
                 )
+            if (
+                self.nflow is not None
+                and self.current_round == self.mr_config.n_rounds - 1
+            ):
+                checkpoint_path = os.path.join(
+                    self.mr_config.plot_save_dir,
+                    "nflow_checkpoint.npz"
+                )
+                self.nflow.save_checkpoint(
+                    checkpoint_path,
+                    self.transform_config,
+                    prior=self.initial_proposal_jax,
+                )
         else:
             np_samples = {
                 k: np.array(v) for k, v in self.current_posterior_samples.items()
