@@ -517,6 +517,7 @@ _LATEX_LABELS: dict[str, str] = {
     "log10_n_initial_samples": r"\log_{10} N_{\mathrm{init.}}",
     "mean_density": r"\bar{N}",
     "w1_extra_error": r"\eta_{\mathrm{extra}}",
+    "w2_extra_error": r"\eta_{\mathrm{W2}}",
     "observer_speed": r"\hat{v}_{\mathrm{obs.}}",
     "dipole_longitude": r"\ell ^{\circ}",
     "dipole_latitude": r"b ^{\circ}",
