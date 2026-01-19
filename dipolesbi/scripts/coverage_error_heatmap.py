@@ -2,6 +2,7 @@ import argparse
 import os
 from typing import Tuple, List
 
+from astropy.table import Table
 import healpy as hp
 import matplotlib.pyplot as plt
 import numpy as np
@@ -10,8 +11,7 @@ from matplotlib import ticker
 from matplotlib.colors import Normalize, LogNorm
 from scipy.stats import binned_statistic_2d
 
-from dipolesbi.catwise.maps import Catwise
-from dipolesbi.tools.configs import CatwiseConfig
+from catsim import Catwise, CatwiseConfig
 
 
 def median_error_grid(
@@ -54,9 +54,13 @@ def extract_catalogue(
     )
     catwise = Catwise(config)
     catwise.determine_masked_pixels(mask_north_ecliptic=mask_north_ecliptic)
-    catwise.load_catalogue()
+    # catwise.load_catalogue()
 
-    catalogue = catwise.catalogue
+    file_path = f'/home/oliver/Documents/catsim/src/catsim/data/catwise2020_corr_w120p5_w117p0.fits'
+    print('Loading CatWISE2020...')
+    catalogue = Table.read(file_path, unit_parse_strict='silent') # supress unit warning printouts
+    print('Finished loading CatWISE2020.')
+
     pixel_idx = hp.ang2pix(
         catwise.nside,
         catalogue["l"],

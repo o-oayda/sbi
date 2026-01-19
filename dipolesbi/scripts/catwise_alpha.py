@@ -7,8 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from dipolesbi.catwise.maps import Catwise
-from dipolesbi.tools.configs import CatwiseConfig
+from catsim import Catwise, CatwiseConfig
 from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.plotting import smooth_map
 from dipolesbi.tools.utils import HidePrints
@@ -19,7 +18,7 @@ COLORBAR_FONTSIZE = {
     'cbar_label': 20,
     'cbar_tick_label': 18
 }
-rng_key = NPKey.from_seed(7)
+rng_key = NPKey.from_seed(12)
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -112,15 +111,19 @@ with HidePrints():
         cat_w12_min=0.5,
         magnitude_error_dist='gaussian',
         store_final_samples=True,
-        use_common_extra_error=True
+        use_common_extra_error=True,
+        s21_catalogue_path=(
+            '/home/oliver/Documents/catsim/src/catsim/data/'
+            'catwise_agns_masked_final_w1lt16p5_alpha.fits'
+        )
     )
     catwise = Catwise(config)
     catwise.initialise_data()
 t0 = time.time()
 dmap, mask = catwise.generate_dipole( # median params from free gauss extra err
-    log10_n_initial_samples=7.55,
-    w1_extra_error=3.57,
-    observer_speed=2.07,
+    log10_n_initial_samples=7.5402,
+    w1_extra_error=3.99,
+    observer_speed=2.00,
     dipole_longitude=221.,
     dipole_latitude=44.,
     rng_key=rng_key
@@ -356,6 +359,8 @@ smooth_map(
     cmap='magma',
     unit='Averaged source count (CatSIM)',
     format='%.3g',
+    min=54.7,
+    max=58,
     fontsize=COLORBAR_FONTSIZE
 )
 if args.save:

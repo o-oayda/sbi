@@ -4,8 +4,7 @@ import healpy as hp
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
-from dipolesbi.catwise.maps import Catwise
-from dipolesbi.tools.configs import CatwiseConfig
+from catsim import CatwiseConfig, Catwise
 from dipolesbi.tools.utils import ParameterMap
 from dipolesbi.tools.plotting import smooth_map
 
@@ -120,6 +119,8 @@ def main():
         catwise.real_density_map,
         cmap='magma',
         unit='Averaged source count (CatWISE)',
+        min=54.7,
+        max=58,
         format='%.3g',
         fontsize=COLORBAR_FONTSIZE
     )
