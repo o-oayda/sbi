@@ -16,6 +16,7 @@ exp_out/*
 nice_rig/*
 benchmark/*
 fiducial_50k/*
+fiducial_*
 
 *.pdf
 *.log
