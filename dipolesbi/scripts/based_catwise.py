@@ -32,6 +32,12 @@ if __name__ == '__main__':
         help='Number of simulations to run.'
     )
     parser.add_argument(
+        '--n_rounds',
+        type=int,
+        default=15,
+        help='Specify the number of rounds of inference.'
+    )
+    parser.add_argument(
         '--n_workers',
         type=int,
         help='Number of workers to distribute simuation over.'
@@ -125,7 +131,7 @@ if __name__ == '__main__':
     N_WORKERS = args.n_workers
     SAVE_DIR = args.out_dir
     USE_FLOAT32 = False
-    N_ROUNDS = 15
+    N_ROUNDS = args.n_rounds
     DOWNSCALE_NSIDE = args.downscale_nside
     NPE_DOWNSCALE_NSIDE = 32
     ORIGINAL_NSIDE = 64
