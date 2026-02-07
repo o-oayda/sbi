@@ -1,13 +1,16 @@
 from typing import Literal
 from catsim import Catwise, CatwiseConfig
+from catsim.simulator import downgrade_ignore_nan
 from dipolesbi.tools.jax_ns import run_ns_from_chkpt
 import jax
+import numpy as np
 
 
 DOWNSCALE_NSIDE = 4
-CATWISE_VERSION: Literal['S21', 'S22'] = 'S21'
-PATH_TO_CHKPT = 'test/20260119_142538_SEED0_NLE/nflow_checkpoint.npz'
+CATWISE_VERSION: Literal['S21', 'S22'] = 'S22'
+PATH_TO_CHKPT = 'S22_NLE/20260119_154826_SEED0_NLE/nflow_checkpoint.npz'
 PRNG_SEED = 42
+JOINT_SAMPLE: Literal['NVSS', 'RACS'] = 'NVSS'
 
 config = CatwiseConfig(
     cat_w1_max=17.0, 

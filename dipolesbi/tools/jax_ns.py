@@ -1,3 +1,4 @@
+import operator
 from typing import Callable, Optional
 from anesthetic import NestedSamples
 from blackjax.types import PRNGKey
@@ -7,7 +8,7 @@ import blackjax
 from numpy.typing import NDArray
 from tqdm import tqdm
 from dipolesbi.tools.neural_flows import NeuralFlow
-from dipolesbi.tools.priors_jax import JaxPrior
+from dipolesbi.tools.priors_jax import DipolePriorJax, JaxPrior
 from dipolesbi.tools.ui import MultiRoundInfererUI
 import numpy as np
 import os
@@ -95,6 +96,28 @@ class JaxNestedSampler:
         
         return self.nested_samples
 
+def merge_priors(
+        prior_A: DipolePriorJax, 
+        prior_B: DipolePriorJax
+) -> DipolePriorJax:
+    # if dataset B is given, create super-prior that contains all parameters
+    # from prior A and prior B
+    prior_A_dict = prior_A.prior_dict; prior_B_dict = prior_B.prior_dict
+    super_prior = prior_A_dict
+    for key, val in prior_B_dict.items():
+        if key not in super_prior.keys():
+            super_prior[key] = val
+        else:
+            # assert the priors are identical at common keys
+            for chk in ['dist_type', 'low_range', 'high_range']:
+                assert super_prior[key][chk] == prior_B_dict[chk], (
+                    "Shared paramaters have inconsistent priors! "
+                    f"Mismatch at {key}."
+                )
+
+    print(super_prior)
+    super_prior_instance = DipolePriorJax.from_prior_dict(super_prior)
+    return super_prior_instance
 
 def run_ns_from_chkpt(
     path_to_chkpt: str,
@@ -103,7 +126,9 @@ def run_ns_from_chkpt(
     jax_key: PRNGKey,
     lnlike_B: Optional[
         Callable[[dict[str, jnp.ndarray]], jnp.ndarray]
-    ] = None
+    ] = None,
+    prior_B: Optional[DipolePriorJax] = None,
+    data_B: Optional[NDArray] = None
 ) -> NestedSamples:
     '''
     :param lnlike_B: If passed, compute a joint evidence
@@ -130,24 +155,63 @@ def run_ns_from_chkpt(
     zmask0 = jax.device_put(z0_mask)
     log_det_jac = jax.device_put(log_det_jac)
 
-    def lnlike_jax(params: dict[str, jnp.ndarray]) -> jnp.ndarray:
-        assert theta_transform is not None
-        theta, _ = theta_transform(params, in_ns=True)
+    if lnlike_B is not None:
+        assert prior_B is not None; assert data_B is not None
+        prior_A = prior
+        
+        super_prior = merge_priors(prior_A, prior_B)
+        prior_A_keys = list(prior_A.prior_names)
+        prior_A_getter = operator.itemgetter(*prior_A_keys)
+        prior_B_keys = list(prior_B.prior_names)
+        prior_B_getter = operator.itemgetter(*prior_B_keys)
 
-        log_like = neural_flow.evaluate_lnlike(
-            theta[None, :], 
-            z0,
-            mask=zmask0
+        def joint_lnlike_jax(super_params: dict[str, jnp.ndarray]) -> jnp.ndarray:
+            assert theta_transform is not None
+            prior_A_samples = prior_A_getter(super_params)
+            theta_A, _ = theta_transform(prior_A_samples, in_ns=True)
+
+            log_like_A = neural_flow.evaluate_lnlike(
+                theta_A[None, :], 
+                z0,
+                mask=zmask0
+            )
+            log_like_A += log_det_jac
+            
+            # now evaluate on B
+            prior_B_samples = prior_B_getter(super_params)
+            prior_B_samplesdict = dict(zip(prior_B_keys, prior_B_samples))
+            log_like_B = lnlike_B(prior_B_samplesdict)
+
+            log_like = log_like_A + log_like_B
+
+            return log_like.squeeze()
+
+        jax_ns = JaxNestedSampler(
+            joint_lnlike_jax,
+            super_prior,
+            ui=None
         )
 
-        log_like += log_det_jac
-        return log_like.squeeze()
+    else:
+        def lnlike_jax(params: dict[str, jnp.ndarray]) -> jnp.ndarray:
+            assert theta_transform is not None
+            theta, _ = theta_transform(params, in_ns=True)
 
-    jax_ns = JaxNestedSampler(
-        lnlike_jax, 
-        prior,
-        ui=None
-    )
+            log_like = neural_flow.evaluate_lnlike(
+                theta[None, :], 
+                z0,
+                mask=zmask0
+            )
+
+            log_like += log_det_jac
+            return log_like.squeeze()
+
+        jax_ns = JaxNestedSampler(
+            lnlike_jax, 
+            prior,
+            ui=None
+        )
+
     jax_ns.setup(jax_key, n_live=1000, n_delete=200)
     nested_samples = jax_ns.run()
 
