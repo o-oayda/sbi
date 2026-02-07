@@ -155,6 +155,35 @@ class JaxPrior(ABC):
                 f.write(f"  {name} ({kwarg}): {dist_label}[{low}, {high}]\n")
     
 class DipolePriorJax(JaxPrior):
+    @classmethod
+    def from_prior_dict(
+            cls,
+            prior_dict: dict[str, dict],
+    ) -> "DipolePriorJax":
+        prior = cls()
+        prior._prior_dict = {}
+        prior._prior_names = list(prior_dict.keys())
+
+        for name in prior._prior_names:
+            entry = prior_dict[name]
+            sample_func = entry.get('sample_func')
+            logpdf_func = entry.get('logpdf_func')
+            if sample_func is None or logpdf_func is None:
+                raise ValueError(
+                    f"Prior '{name}' is missing required JAX functions."
+                )
+            dist_type = entry.get('dist_type', 'custom')
+            prior._prior_dict[name] = {
+                'simulator_kwarg': entry['simulator_kwarg'],
+                'low_range': jnp.asarray(entry['low_range'], dtype=jnp.float32),
+                'high_range': jnp.asarray(entry['high_range'], dtype=jnp.float32),
+                'sample_func': sample_func,
+                'logpdf_func': logpdf_func,
+                'dist_type': dist_type
+            }
+
+        return prior
+
     def __init__(self,
             mean_count_range: list[float] = [0.,   100. ],
             speed_range:      list[float] = [0.,   5.   ],
