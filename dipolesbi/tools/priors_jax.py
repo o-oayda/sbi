@@ -47,6 +47,18 @@ class JaxPrior(ABC):
     def change_kwarg(self, param_short_name: str, new_kwarg: str) -> None:
         self.prior_dict[param_short_name]['simulator_kwarg'] = new_kwarg
 
+    def rename_short_name(self, old_short_name: str, new_short_name: str) -> None:
+        if old_short_name not in self.prior_dict:
+            raise KeyError(f"Unknown short name: {old_short_name}")
+        if new_short_name in self.prior_dict:
+            raise KeyError(f"Short name already exists: {new_short_name}")
+
+        self.prior_dict[new_short_name] = self.prior_dict.pop(old_short_name)
+        self._prior_names = [
+            new_short_name if name == old_short_name else name
+            for name in self.prior_names
+        ]
+
     def _construct_prior_dict(
             self,
             short_names: list[str],            
