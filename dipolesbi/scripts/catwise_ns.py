@@ -1,46 +1,129 @@
-from typing import Literal
+from functools import partial
+from typing import Any, Literal
+from blackjax.types import Array
 from catsim import Catwise, CatwiseConfig
 from catsim.simulator import downgrade_ignore_nan
+from numpy.typing import NDArray
 from dipolesbi.tools.jax_ns import run_ns_from_chkpt
 import jax
 import numpy as np
+import argparse
+import healpy as hp
+import matplotlib.pyplot as plt
+from dipolesbi.tools.priors_jax import DipolePriorJax
+import jax.numpy as jnp
+import jax.scipy as jsp
+from dipolesbi.tools.coordinates import _galactic_to_equatorial_vec_jax
 
 
-DOWNSCALE_NSIDE = 4
-CATWISE_VERSION: Literal['S21', 'S22'] = 'S22'
-PATH_TO_CHKPT = 'S22_NLE/20260119_154826_SEED0_NLE/nflow_checkpoint.npz'
-PRNG_SEED = 42
-JOINT_SAMPLE: Literal['NVSS', 'RACS'] = 'NVSS'
+EXPECTED_AMPLITUDES = {
+    'nvss': 4.31e-3,
+    'racs': 4.27e-3,
+    'catwise': 7.25e-3
+}
 
-config = CatwiseConfig(
-    cat_w1_max=17.0, 
-    cat_w12_min=0.5,
-    magnitude_error_dist='gaussian',
-    downscale_nside=DOWNSCALE_NSIDE,
-    base_mask_version=CATWISE_VERSION,
-    s21_catalogue_path=(
-        '/home/oliver/Documents/catsim/src/catsim/data/'
-        'catwise_agns_masked_final_w1lt16p5_alpha.fits'
+def lnlike_radio(
+        params: dict[str, Any],
+        expected_amplitude: float,
+        pixel_counts: NDArray,
+        pixel_vectors: NDArray
+) -> Array:
+    D = params['observer_speed'] * expected_amplitude
+    Nbar = params['mean_density']
+    gal_lon, gal_lat = params['dipole_longitude'], params['dipole_latitude']
+    dipole_vector_eq = _galactic_to_equatorial_vec_jax(
+        jnp.asarray(gal_lon),
+        jnp.asarray(gal_lat)
     )
-)
 
-model = Catwise(config)
-model.initialise_data()
-
-if CATWISE_VERSION == 'S21':
-    x0, mask = model.make_real_sample()
-elif CATWISE_VERSION == 'S22':
-    x0 = np.asarray(
-        np.load('dipolesbi/catwise/catwise_S22.npy'), dtype=np.float32
+    pixel_vectors = jnp.asarray(pixel_vectors) # pyright: ignore[reportAssignmentType]
+    pixel_counts = jnp.asarray(pixel_counts)   # pyright: ignore[reportAssignmentType]
+    # (3,), (3, 49152)
+    expected_number_density_list = Nbar * (
+        1. + D * jnp.einsum('i,ij', dipole_vector_eq, pixel_vectors)
     )
-    mask = model.binary_mask
-    x0[~mask] = np.nan
 
-    x0, mask = downgrade_ignore_nan(x0, mask, DOWNSCALE_NSIDE)
+    return jnp.sum(
+        jsp.stats.poisson.logpmf(pixel_counts, expected_number_density_list)
+    )
 
-out = run_ns_from_chkpt(
-    path_to_chkpt=PATH_TO_CHKPT,
-    data=x0,
-    mask=mask,
-    jax_key=jax.random.PRNGKey(PRNG_SEED)
-)
+
+if __name__ == '__main__':
+    argparser = argparse.ArgumentParser()
+    argparser.add_argument(
+        '--joint-sample',
+        choices=['nvss', 'racs']
+    )
+    args = argparser.parse_args()
+
+    DOWNSCALE_NSIDE = 4
+    CATWISE_VERSION: Literal['S21', 'S22'] = 'S22'
+    PATH_TO_CHKPT = 'S22_NLE/20260119_154826_SEED0_NLE/nflow_checkpoint.npz'
+    PRNG_SEED = 42
+    JOINT_SAMPLE = args.joint_sample
+    JOINT_NSIDE = 64
+
+    config = CatwiseConfig(
+        cat_w1_max=17.0, 
+        cat_w12_min=0.5,
+        magnitude_error_dist='gaussian',
+        downscale_nside=DOWNSCALE_NSIDE,
+        base_mask_version=CATWISE_VERSION,
+        s21_catalogue_path=(
+            '~/Documents/catsim/src/catsim/data/'
+            'catwise_agns_masked_final_w1lt16p5_alpha.fits'
+        )
+    )
+
+    model = Catwise(config)
+    model.initialise_data()
+    pixel_vectors = hp.pix2vec(
+        nside=JOINT_NSIDE,
+        ipix=np.arange(hp.nside2npix(JOINT_NSIDE))
+    )
+    expected_amplitude = EXPECTED_AMPLITUDES[JOINT_SAMPLE]
+
+    if JOINT_SAMPLE == 'nvss':
+        sample_B = np.load('maps/nvssb_dmap.npy')
+        hp.projview(sample_B)
+        plt.show()
+    elif JOINT_SAMPLE == 'racs':
+        sample_B = np.load('maps/racsb_dmap.npy')
+        hp.projview(sample_B)
+        plt.show()
+    else:
+        raise Exception
+
+    lnlike_B = partial(
+        lnlike_radio,
+        expected_amplitude=expected_amplitude,
+        pixel_counts=sample_B,
+        pixel_vectors=pixel_vectors
+    )
+    prior_B = DipolePriorJax(
+        mean_count_range=[0.9 * np.nanmean(sample_B), 1.1 * np.nanmean(sample_B)],
+        speed_range=[0, 8], # [0, 20]
+    )
+    prior_B.rename_short_name('N', 'Nbar')
+    prior_B.change_kwarg('Nbar', 'mean_density')
+
+    if CATWISE_VERSION == 'S21':
+        x0, mask = model.make_real_sample()
+    elif CATWISE_VERSION == 'S22':
+        x0 = np.asarray(
+            np.load('dipolesbi/catwise/catwise_S22.npy'), dtype=np.float32
+        )
+        mask = model.binary_mask
+        x0[~mask] = np.nan
+
+        x0, mask = downgrade_ignore_nan(x0, mask, DOWNSCALE_NSIDE)
+
+    out = run_ns_from_chkpt(
+        path_to_chkpt=PATH_TO_CHKPT,
+        data=x0,
+        mask=mask,
+        jax_key=jax.random.PRNGKey(PRNG_SEED),
+        lnlike_B=lnlike_B,
+        prior_B=prior_B,
+        data_B=sample_B
+    )
