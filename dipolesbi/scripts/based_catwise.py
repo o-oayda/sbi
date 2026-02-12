@@ -118,6 +118,10 @@ if __name__ == '__main__':
         '--add_confusion_noise',
         action='store_true'
     )
+    parser.add_argument(
+        '--wide_v_prior',
+        action='store_true'
+    )
     args = parser.parse_args()
 
     raw_modes = args.mode or []
@@ -138,6 +142,7 @@ if __name__ == '__main__':
     COMMON_ERROR = not args.unique_error
     NOECL_MASK = args.noecl_mask
     ADD_CONFUSION = args.add_confusion_noise
+    WIDE_V_PRIOR = args.wide_v_prior
     USE_CLUSTERS = args.use_clusters
     SIM_BACKEND = args.simulation_backend
     DASK_SCHEDULER = args.dask_scheduler
@@ -191,7 +196,7 @@ if __name__ == '__main__':
 
     prior = DipolePriorNP(
         mean_count_range=[np.log10(30_000_000), np.log10(40_000_000)], #U[7.5,7.6]
-        speed_range=[0, 8] # [0, 20]
+        speed_range=[0, 8] if not WIDE_V_PRIOR else [0, 20]
     )
     prior.change_kwarg(
         param_short_name='N',
