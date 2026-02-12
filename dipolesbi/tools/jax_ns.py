@@ -219,7 +219,7 @@ def run_ns_from_chkpt(
     kinds = {'lower': 'kde_2d', 'diagonal': 'hist_1d', 'upper': 'scatter_2d'}
     plt.figure()
     nested_samples.plot_2d(
-        prior.simulator_kwargs,
+        super_prior.simulator_kwargs if lnlike_B is not None else prior.simulator_kwargs,
         kinds=kinds
     )
     plt.savefig(
