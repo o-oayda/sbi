@@ -110,12 +110,11 @@ def merge_priors(
         else:
             # assert the priors are identical at common keys
             for chk in ['dist_type', 'low_range', 'high_range']:
-                assert super_prior[key][chk] == prior_B_dict[chk], (
+                assert super_prior[key][chk] == prior_B_dict[key][chk], (
                     "Shared paramaters have inconsistent priors! "
                     f"Mismatch at {key}."
                 )
 
-    print(super_prior)
     super_prior_instance = DipolePriorJax.from_prior_dict(super_prior)
     return super_prior_instance
 
@@ -159,10 +158,12 @@ def run_ns_from_chkpt(
         assert prior_B is not None; assert data_B is not None
         prior_A = prior
         
+        # since the jax ns expects simulator_kwargs as the keys for the params
+        # dict, we use those as the keys
         super_prior = merge_priors(prior_A, prior_B)
-        prior_A_keys = list(prior_A.prior_names)
+        prior_A_keys = list(prior_A.simulator_kwargs)
         prior_A_getter = operator.itemgetter(*prior_A_keys)
-        prior_B_keys = list(prior_B.prior_names)
+        prior_B_keys = list(prior_B.simulator_kwargs)
         prior_B_getter = operator.itemgetter(*prior_B_keys)
 
         def joint_lnlike_jax(super_params: dict[str, jnp.ndarray]) -> jnp.ndarray:
