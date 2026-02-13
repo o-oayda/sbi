@@ -339,11 +339,11 @@ class MultiRoundInferer:
                 )
             if (
                 self.nflow is not None
-                and self.current_round == self.mr_config.n_rounds - 1
+                # and self.current_round == self.mr_config.n_rounds - 1
             ):
                 checkpoint_path = os.path.join(
                     self.mr_config.plot_save_dir,
-                    "nflow_checkpoint.npz"
+                    f"nflow_checkpoint_r{self.current_round}.npz"
                 )
                 self.nflow.save_checkpoint(
                     checkpoint_path,
