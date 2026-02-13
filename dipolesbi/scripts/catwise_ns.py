@@ -1,4 +1,5 @@
 from functools import partial
+import os
 from typing import Any, Literal
 from blackjax.types import Array
 from catsim import Catwise, CatwiseConfig
@@ -154,6 +155,7 @@ if __name__ == '__main__':
 
         x0, mask = downgrade_ignore_nan(x0, mask, DOWNSCALE_NSIDE)
 
+    os.makedirs(f'joint_logZ/{JOINT_SAMPLE}', exist_ok=True)
     out = run_ns_from_chkpt(
         path_to_chkpt=PATH_TO_CHKPT,
         data=x0,
@@ -164,3 +166,10 @@ if __name__ == '__main__':
         data_B=sample_B,
         save_dir=f'joint_logZ/{JOINT_SAMPLE}'
     )
+    lnZ = out.logZ()
+    lnZ_std = out.logZ(100).std()
+
+    with open(f'joint_logZ/{JOINT_SAMPLE}/evidence.txt', 'w') as f:
+        f.write(
+            f'lnZ: {lnZ}\nlnZ_err: {lnZ_std}'
+        )
