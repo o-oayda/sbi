@@ -85,7 +85,7 @@ if __name__ == '__main__':
 
     DOWNSCALE_NSIDE = 4
     CATWISE_VERSION: Literal['S21', 'S22'] = 'S22'
-    PATH_TO_CHKPT = 'S22_NLE/20260119_154826_SEED0_NLE/nflow_checkpoint.npz'
+    PATH_TO_CHKPT = 'S22_NLE/20260212_205211_SEED0_NLE/nflow_checkpoint.npz' # wide v prior
     PRNG_SEED = 42
     JOINT_SAMPLE = args.joint_sample
     JOINT_NSIDE = 64
@@ -138,7 +138,7 @@ if __name__ == '__main__':
     )
     prior_B = DipolePriorJax(
         mean_count_range=[0.9 * np.nanmean(sample_B), 1.1 * np.nanmean(sample_B)],
-        speed_range=[0, 8], # [0, 20]
+        speed_range=[0, 20], # [0, 20]
     )
     prior_B.rename_short_name('N', 'Nbar')
     prior_B.change_kwarg('Nbar', 'mean_density')
@@ -161,5 +161,6 @@ if __name__ == '__main__':
         jax_key=jax.random.PRNGKey(PRNG_SEED),
         lnlike_B=lnlike_B,
         prior_B=prior_B,
-        data_B=sample_B
+        data_B=sample_B,
+        save_dir=f'joint_logZ/{JOINT_SAMPLE}'
     )

@@ -127,7 +127,8 @@ def run_ns_from_chkpt(
         Callable[[dict[str, jnp.ndarray]], jnp.ndarray]
     ] = None,
     prior_B: Optional[DipolePriorJax] = None,
-    data_B: Optional[NDArray] = None
+    data_B: Optional[NDArray] = None,
+    save_dir: Optional[str] = None
 ) -> NestedSamples:
     '''
     :param lnlike_B: If passed, compute a joint evidence
@@ -216,6 +217,9 @@ def run_ns_from_chkpt(
     jax_ns.setup(jax_key, n_live=1000, n_delete=200)
     nested_samples = jax_ns.run()
 
+    if save_dir is None:
+        save_dir = chkpt_src
+
     kinds = {'lower': 'kde_2d', 'diagonal': 'hist_1d', 'upper': 'scatter_2d'}
     plt.figure()
     nested_samples.plot_2d(
@@ -223,8 +227,10 @@ def run_ns_from_chkpt(
         kinds=kinds
     )
     plt.savefig(
-        f'{chkpt_src}/final_samples.pdf',
+        f'{save_dir}/final_samples.pdf',
         bbox_inches='tight'
     )
+    plt.close()
+    nested_samples.to_csv(f'{save_dir}/nested_samples.csv')
 
-    return nested_samples, neural_flow, transform_cfg, prior
+    return nested_samples
