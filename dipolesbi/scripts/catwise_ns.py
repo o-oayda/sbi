@@ -86,7 +86,8 @@ if __name__ == '__main__':
 
     DOWNSCALE_NSIDE = 4
     CATWISE_VERSION: Literal['S21', 'S22'] = 'S22'
-    PATH_TO_CHKPT = 'S22_NLE/20260212_205211_SEED0_NLE/nflow_checkpoint.npz' # wide v prior
+    PATH_TO_CHKPT = 'S22_NLE/20260213_141117_SEED0_NLE' # wide v prior
+    ROUND_START = 3
     PRNG_SEED = 42
     JOINT_SAMPLE = args.joint_sample
     JOINT_NSIDE = 64
@@ -156,20 +157,25 @@ if __name__ == '__main__':
         x0, mask = downgrade_ignore_nan(x0, mask, DOWNSCALE_NSIDE)
 
     os.makedirs(f'joint_logZ/{JOINT_SAMPLE}', exist_ok=True)
-    out = run_ns_from_chkpt(
-        path_to_chkpt=PATH_TO_CHKPT,
-        data=x0,
-        mask=mask,
-        jax_key=jax.random.PRNGKey(PRNG_SEED),
-        lnlike_B=lnlike_B,
-        prior_B=prior_B,
-        data_B=sample_B,
-        save_dir=f'joint_logZ/{JOINT_SAMPLE}'
-    )
-    lnZ = out.logZ()
-    lnZ_std = out.logZ(100).std()
+
+    lnZ_vals = []
+    for i in range(ROUND_START, 15):
+        print(f'Computing round {i+1} evidence...')
+        chkpt = f'{PATH_TO_CHKPT}/nflow_checkpoint_r{i}.npz'
+        out = run_ns_from_chkpt(
+            path_to_chkpt=chkpt,
+            data=x0,
+            mask=mask,
+            jax_key=jax.random.PRNGKey(PRNG_SEED),
+            lnlike_B=lnlike_B,
+            prior_B=prior_B,
+            data_B=sample_B,
+            save_dir=f'joint_logZ/{JOINT_SAMPLE}'
+        )
+        lnZ = out.logZ()
+        lnZ_vals.append(lnZ)
 
     with open(f'joint_logZ/{JOINT_SAMPLE}/evidence.txt', 'w') as f:
         f.write(
-            f'lnZ: {lnZ}\nlnZ_err: {lnZ_std}'
+            f'lnZ: {np.mean(lnZ_vals)}\nlnZ_err: {np.std(lnZ_vals)}\nAll: {lnZ_vals}'
         )
