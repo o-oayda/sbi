@@ -5,7 +5,7 @@ from blackjax.types import Array
 from catsim import Catwise, CatwiseConfig
 from catsim.simulator import downgrade_ignore_nan
 from numpy.typing import NDArray
-from dipolesbi.tools.jax_ns import run_ns_from_chkpt
+from dipolesbi.tools.jax_ns import JaxNestedSampler, run_ns_from_chkpt
 import jax
 import numpy as np
 import argparse
@@ -82,6 +82,10 @@ if __name__ == '__main__':
         '--joint-sample',
         choices=['nvss', 'racs', 'planck']
     )
+    argparser.add_argument(
+        '--only-joint',
+        action='store_true'
+    )
     args = argparser.parse_args()
 
     DOWNSCALE_NSIDE = 4
@@ -90,6 +94,7 @@ if __name__ == '__main__':
     ROUND_START = 3
     PRNG_SEED = 42
     JOINT_SAMPLE = args.joint_sample
+    ONLY_JOINT = args.only_joint
     JOINT_NSIDE = 64
 
     config = CatwiseConfig(
@@ -158,24 +163,41 @@ if __name__ == '__main__':
 
     os.makedirs(f'joint_logZ/{JOINT_SAMPLE}', exist_ok=True)
 
-    lnZ_vals = []
-    for i in range(ROUND_START, 15):
-        print(f'Computing round {i+1} evidence...')
-        chkpt = f'{PATH_TO_CHKPT}/nflow_checkpoint_r{i}.npz'
-        out = run_ns_from_chkpt(
-            path_to_chkpt=chkpt,
-            data=x0,
-            mask=mask,
-            jax_key=jax.random.PRNGKey(PRNG_SEED),
-            lnlike_B=lnlike_B,
-            prior_B=prior_B,
-            data_B=sample_B,
-            save_dir=f'joint_logZ/{JOINT_SAMPLE}'
-        )
-        lnZ = out.logZ()
-        lnZ_vals.append(lnZ)
 
-    with open(f'joint_logZ/{JOINT_SAMPLE}/evidence.txt', 'w') as f:
-        f.write(
-            f'lnZ: {np.mean(lnZ_vals)}\nlnZ_err: {np.std(lnZ_vals)}\nAll: {lnZ_vals}'
+    if ONLY_JOINT:
+        jax_key = jax.random.PRNGKey(PRNG_SEED)
+
+        def lnlike_jax(params: dict[str, jnp.ndarray]) -> jnp.ndarray:
+            log_like = lnlike_B(params)
+            return log_like.squeeze()
+
+        jax_ns = JaxNestedSampler(
+            lnlike_jax, 
+            prior_B,
+            ui=None
         )
+        jax_ns.setup(jax_key, n_live=1000, n_delete=200)
+        nested_samples = jax_ns.run()
+
+    else:
+        lnZ_vals = []
+        for i in range(ROUND_START, 15):
+            print(f'Computing round {i+1} evidence...')
+            chkpt = f'{PATH_TO_CHKPT}/nflow_checkpoint_r{i}.npz'
+            out = run_ns_from_chkpt(
+                path_to_chkpt=chkpt,
+                data=x0,
+                mask=mask,
+                jax_key=jax.random.PRNGKey(PRNG_SEED),
+                lnlike_B=lnlike_B,
+                prior_B=prior_B,
+                data_B=sample_B,
+                save_dir=f'joint_logZ/{JOINT_SAMPLE}'
+            )
+            lnZ = out.logZ()
+            lnZ_vals.append(lnZ)
+
+        with open(f'joint_logZ/{JOINT_SAMPLE}/evidence.txt', 'w') as f:
+            f.write(
+                f'lnZ: {np.mean(lnZ_vals)}\nlnZ_err: {np.std(lnZ_vals)}\nAll: {lnZ_vals}'
+            )
