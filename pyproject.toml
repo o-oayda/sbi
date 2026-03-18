@@ -27,7 +27,7 @@ dependencies = [
     "blackjax @ git+https://github.com/handley-lab/blackjax@nested_sampling",
     "anesthetic (<= 2.10.3)",
     "pytest (>=9.0.1,<10.0.0)",
-    "catsim @ git+ssh://git@github.com/o-oayda/catsim.git@feat/w12-error"
+    "catsim @ git+ssh://git@github.com/o-oayda/catsim.git@racssim"
 ]
 
 [project.optional-dependencies]
