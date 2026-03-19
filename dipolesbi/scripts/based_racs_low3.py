@@ -1,20 +1,16 @@
-import os
-
-os.environ.setdefault("JAX_PLATFORMS", "cpu")
-
 import argparse
-
+from functools import partial
 from catsim import RacsLow3, RacsLow3Config
 from catsim.utils.healsphere import downgrade_ignore_nan
 import healpy as hp
 import numpy as np
-
 from dipolesbi.tools.configs import DataTransformSpec, Scenario
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
 from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.priors_np import DipolePriorNP
 from dipolesbi.tools.ui import MultiRoundInfererUI
 from dipolesbi.tools.utils import batch_simulate
+from dipoleutils.utils.data_loader import DataLoader
 
 
 def _parse_modes(raw_modes: list[str] | None, parser: argparse.ArgumentParser) -> list[str]:
@@ -30,7 +26,7 @@ def _build_real_sample(
     model: RacsLow3,
     flux_min: float,
 ) -> tuple[np.ndarray, np.ndarray]:
-    catalogue = model.catalogue
+    catalogue = DataLoader("racs", "low3").load()
     flux = np.asarray(catalogue["Total_flux"], dtype=np.float64)
     ra = np.asarray(catalogue["RA"], dtype=np.float64)
     dec = np.asarray(catalogue["Dec"], dtype=np.float64)
@@ -140,12 +136,6 @@ if __name__ == "__main__":
         help="Chunk size used inside the simulator.",
     )
     parser.add_argument(
-        "--catalogue_path",
-        type=str,
-        default=None,
-        help="Optional path to the RACS-low3 catalogue.",
-    )
-    parser.add_argument(
         "--alpha_mean",
         type=float,
         default=0.8,
@@ -174,7 +164,6 @@ if __name__ == "__main__":
         use_float32=False,
         downscale_nside=args.downscale_nside,
         store_final_samples=True,
-        catalogue_path=args.catalogue_path,
         alpha_mean=args.alpha_mean,
         alpha_sigma=args.alpha_sigma,
         fractional_error_flux_min_mjy=args.fractional_error_flux_min_mjy,
@@ -190,28 +179,58 @@ if __name__ == "__main__":
         raise ValueError("Observed RACS-low3 map has zero total counts after masking/cuts.")
 
     prior = DipolePriorNP(
-        mean_count_range=[
-            np.log10(max(1.0, 0.5 * observed_count)),
-            np.log10(2.0 * observed_count),
-        ],
+        mean_count_range=[6.4, 6.8],
         speed_range=[0, 8],
     )
     prior.change_kwarg(
         param_short_name="N",
         new_kwarg="log10_n_initial_samples",
     )
+    # prior.add_prior(
+    #     short_name='T0',
+    #     simulator_kwarg='temp_pivot_c',
+    #     low=20,
+    #     high=40,
+    #     dist_type='Uniform'
+    # )
+    prior.add_prior(
+        short_name='a',
+        simulator_kwarg='temp_slope',
+        low=-0.4,
+        high=0,
+        dist_type='Uniform'
+    )
+    prior.add_prior(
+        short_name='eta',
+        simulator_kwarg='fractional_error_eta',
+        low=0.,
+        high=200.,
+        dist_type='Uniform'
+    )
 
+    TEMP_SLOPE = -0.2
+    TEMP_PIVOT = np.nanmin(model.temperature_map) + (
+            np.nanmax(model.temperature_map) - np.nanmin(model.temperature_map)
+    ) / 2
+    print(TEMP_PIVOT)
     theta_0 = {
-        "log10_n_initial_samples": np.log10(observed_count),
+        "log10_n_initial_samples": 6.65,
         "observer_speed": 1.0,
         "dipole_longitude": 264.021,
         "dipole_latitude": 48.253,
+        "temp_slope": TEMP_SLOPE,
+        "temp_pivot_c": TEMP_PIVOT,
+        "temp_intercept": -TEMP_SLOPE + 1,
+        "fractional_error_eta": 20.
     }
 
     def simulator_wrapper(
         rng_key: NPKey | None = None,
         **kwargs,
     ) -> tuple[np.ndarray, np.ndarray]:
+        temp_slope = kwargs['temp_slope']
+        kwargs['temp_intercept'] = -temp_slope + 1
+        kwargs['temp_pivot_c'] = TEMP_PIVOT
         return model.generate_dipole(rng_key=rng_key, **kwargs)
 
     prior_jax = prior.to_jax()
@@ -286,5 +305,6 @@ if __name__ == "__main__":
             nflow_config=scenario.flow,
             train_config=scenario.training,
             use_ui=not args.no_ui,
+            model_config=RacsLow3Config
         )
         inferer.run()
