@@ -18,7 +18,6 @@ from dipolesbi.scripts.based_racs_low3 import (
     make_simulator_wrapper,
 )
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
-from dipolesbi.tools.ui import NullMultiRoundInfererUI
 
 
 def _infer_round_id(checkpoint_path: Path) -> int:
@@ -215,7 +214,7 @@ def main() -> None:
         use_ui=False,
         model_config=RacsLow3Config,
     )
-    inferer.ui = NullMultiRoundInfererUI([])
+    inferer.ui = None
     inferer.current_round = (
         args.round_id if args.round_id is not None else _infer_round_id(checkpoint)
     )
