@@ -14,6 +14,7 @@ from catsim import RacsLow3, RacsLow3Config
 
 from dipolesbi.scripts.based_racs_low3 import (
     _build_real_sample,
+    attach_native_generate_dipole,
     build_prior_and_reference_theta,
     build_scenario,
     make_model_sim_wrapper,
@@ -84,6 +85,14 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="Seed used for posterior and predictive sampling.",
+    )
+    parser.add_argument(
+        "--predictive-native-resolution",
+        action="store_true",
+        help=(
+            "Generate posterior predictive maps at native simulator resolution, "
+            "even if the checkpoint was trained on downscaled data."
+        ),
     )
     parser.add_argument(
         "--round-id",
@@ -185,6 +194,7 @@ def main() -> None:
     effective_nside = int(np.sqrt(x0.size / 12))
 
     prior, theta_0, temp_pivot = build_prior_and_reference_theta(model)
+    attach_native_generate_dipole(model)
     simulator_wrapper = make_simulator_wrapper(model, temp_pivot)
     model_sim_wrapper = make_model_sim_wrapper(
         simulator_wrapper=simulator_wrapper,
@@ -229,6 +239,17 @@ def main() -> None:
         )
     else:
         inferer._compute_posterior(posterior_key)
+
+    if args.predictive_native_resolution:
+        predictive_simulator = make_model_sim_wrapper(
+            simulator_wrapper=make_simulator_wrapper(
+                model,
+                temp_pivot,
+                native_output=True,
+            ),
+            n_workers=args.n_workers,
+        )
+        inferer.simulator_function = predictive_simulator
 
     mean_map, mean_mask = inferer.posterior_predictive_mean(args.predictive_samples)
 

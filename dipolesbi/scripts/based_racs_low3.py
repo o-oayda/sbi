@@ -1,4 +1,5 @@
 import argparse
+from types import MethodType
 from catsim import RacsLow3, RacsLow3Config
 from catsim.utils.healsphere import downgrade_ignore_nan
 import healpy as hp
@@ -114,7 +115,10 @@ def build_prior_and_reference_theta(
 def make_simulator_wrapper(
     model: RacsLow3,
     temp_pivot: float,
+    native_output: bool = False,
 ):
+    attach_native_generate_dipole(model)
+
     def simulator_wrapper(
         rng_key: NPKey | None = None,
         **kwargs,
@@ -122,9 +126,29 @@ def make_simulator_wrapper(
         temp_slope = kwargs['temp_slope']
         kwargs['temp_intercept'] = -temp_slope + 1
         kwargs['temp_pivot_c'] = temp_pivot
-        return model.generate_dipole(rng_key=rng_key, **kwargs)
+        generate = (
+            model.generate_dipole_native
+            if native_output else model.generate_dipole
+        )
+        return generate(rng_key=rng_key, **kwargs)
 
     return simulator_wrapper
+
+
+# some kind of class method sorcery to mutate downscale_nside if using native res
+def attach_native_generate_dipole(model: RacsLow3) -> None:
+    if hasattr(model, "generate_dipole_native"):
+        return
+
+    def generate_dipole_native(self: RacsLow3, *args, **kwargs):
+        original_downscale_nside = self.downscale_nside
+        try:
+            self.downscale_nside = None
+            return self.generate_dipole(*args, **kwargs)
+        finally:
+            self.downscale_nside = original_downscale_nside
+
+    model.generate_dipole_native = MethodType(generate_dipole_native, model)  # type: ignore[attr-defined]
 
 
 def build_scenario(
