@@ -140,6 +140,21 @@ class MultiRoundInferer:
         elif self.mode == 'NPE':
             self._npe_pipeline()
 
+    def load_nflow_checkpoint(self, checkpoint_path: str) -> None:
+        self.nflow, self.transform_config = NeuralFlow.from_checkpoint(
+            checkpoint_path
+        )
+        self.nflow_config = self.nflow.nflow_config
+        self.data_transform = (
+            self.transform_config.data_transform_config.data_transform
+        )
+        self.theta_transform = (
+            self.transform_config.theta_transform_config.theta_transform
+        )
+        self.embedding_net_config = (
+            self.transform_config.data_transform_config.embedding_net_config
+        )
+
     def _get_output_dir(self) -> str:
         if not os.path.exists(self.mr_config.plot_save_dir):
             os.makedirs(self.mr_config.plot_save_dir)
@@ -826,6 +841,45 @@ class MultiRoundInferer:
             return
         prior_samples = self.initial_proposal.sample(key, n_samples)
         return prior_samples
+
+    def posterior_predictive_mean(
+            self,
+            n_samples: int
+    ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
+        if n_samples <= 0:
+            raise ValueError("Posterior predictive sample count must be positive.")
+
+        if self.mode == 'NLE' and not hasattr(self, 'current_nested_samples'):
+            raise ValueError("No inferred NLE posterior is available yet.")
+        if self.mode == 'NPE' and not hasattr(self, 'current_posterior_samples'):
+            raise ValueError("No inferred NPE posterior is available yet.")
+
+        posterior_key_jax, self.rng_key = jax.random.split(self.rng_key)
+        posterior_key_np = npkey_from_jax(posterior_key_jax)
+        sample_key, simulate_key = posterior_key_np.split(2)
+
+        posterior_samples = self._sample_posterior_for_simulations(
+            sample_key,
+            n_samples
+        )
+        if posterior_samples is None:
+            raise ValueError("No posterior samples were generated.")
+
+        predictive_data, predictive_mask = self._generate_simulations(
+            simulate_key,
+            posterior_samples
+        )
+
+        valid_counts = predictive_mask.sum(axis=0, dtype=np.int32)
+        summed_data = np.where(predictive_mask, predictive_data, 0.0).sum(axis=0)
+
+        mean_map = np.full((self.data_ndim,), np.nan, dtype=np.float32)
+        mean_mask = valid_counts > 0
+        mean_map[mean_mask] = (
+            summed_data[mean_mask] / valid_counts[mean_mask]
+        ).astype(np.float32, copy=False)
+
+        return mean_map, mean_mask
 
     def _sample_posterior_for_simulations(
             self, 

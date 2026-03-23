@@ -1,5 +1,4 @@
 import argparse
-from functools import partial
 from catsim import RacsLow3, RacsLow3Config
 from catsim.utils.healsphere import downgrade_ignore_nan
 import healpy as hp
@@ -66,6 +65,146 @@ def _build_real_sample(
     coarse_map = coarse_map.copy()
     coarse_map[~coarse_mask] = np.nan
     return coarse_map, coarse_mask
+
+
+def build_prior_and_reference_theta(
+    model: RacsLow3,
+) -> tuple[DipolePriorNP, dict[str, float], float]:
+    prior = DipolePriorNP(
+        mean_count_range=[6.4, 6.8],
+        speed_range=[0, 8],
+    )
+    prior.change_kwarg(
+        param_short_name="N",
+        new_kwarg="log10_n_initial_samples",
+    )
+    prior.add_prior(
+        short_name='a',
+        simulator_kwarg='temp_slope',
+        low=-0.4,
+        high=0,
+        dist_type='Uniform'
+    )
+    prior.add_prior(
+        short_name='eta',
+        simulator_kwarg='fractional_error_eta',
+        low=0.,
+        high=200.,
+        dist_type='Uniform'
+    )
+
+    temp_slope = -0.2
+    temp_pivot = np.nanmin(model.temperature_map) + (
+        np.nanmax(model.temperature_map) - np.nanmin(model.temperature_map)
+    ) / 2
+
+    theta_0 = {
+        "log10_n_initial_samples": 6.65,
+        "observer_speed": 1.0,
+        "dipole_longitude": 264.021,
+        "dipole_latitude": 48.253,
+        "temp_slope": temp_slope,
+        "temp_pivot_c": temp_pivot,
+        "temp_intercept": -temp_slope + 1,
+        "fractional_error_eta": 20.
+    }
+    return prior, theta_0, temp_pivot
+
+
+def make_simulator_wrapper(
+    model: RacsLow3,
+    temp_pivot: float,
+):
+    def simulator_wrapper(
+        rng_key: NPKey | None = None,
+        **kwargs,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        temp_slope = kwargs['temp_slope']
+        kwargs['temp_intercept'] = -temp_slope + 1
+        kwargs['temp_pivot_c'] = temp_pivot
+        return model.generate_dipole(rng_key=rng_key, **kwargs)
+
+    return simulator_wrapper
+
+
+def build_scenario(
+    mode: str,
+    effective_nside: int,
+    prior: DipolePriorNP,
+    theta_0: dict[str, float],
+    out_dir: str,
+    ssnle_seed: int,
+    n_rounds: int,
+    n_simulations: int,
+) -> Scenario:
+    prior_jax = prior.to_jax()
+
+    if mode == "NPE":
+        return Scenario.anynside_npe(
+            nside=effective_nside,
+            theta_prior=prior_jax,
+            reference_theta=theta_0,
+            theta_spec_overrides={"embed_transform_in_flow": True},
+            multiround_overrides={
+                "prng_integer_seed": ssnle_seed,
+                "plot_save_dir": out_dir,
+                "n_rounds": n_rounds,
+                "simulation_budget": n_simulations,
+                "likelihood_chunk_size_gb": 0.5,
+                "n_likelihood_samples": 10_000,
+            },
+            training_overrides={"learning_rate": 0.001},
+        )
+
+    if mode == "NLE":
+        data_spec = DataTransformSpec.zscore(method="batchwise")
+        return Scenario.anynside_nle(
+            nside=effective_nside,
+            theta_prior=prior_jax,
+            training_overrides={
+                "learning_rate": 1e-4,
+                "min_lr_ratio": 1.0,
+            },
+            reference_theta=theta_0,
+            multiround_overrides={
+                "prng_integer_seed": ssnle_seed,
+                "plot_save_dir": out_dir,
+                "simulation_budget": n_simulations,
+                "n_rounds": n_rounds,
+                "likelihood_chunk_size_gb": 0.5,
+                "n_likelihood_samples": 10_000,
+            },
+            flow_overrides={
+                "decoder_n_neurons": 128,
+                "decoder_n_layers": 4,
+                "architecture": 4 * ["MAF"] + ["surjective_MAF"] + 6 * ["MAF"],
+                "data_reduction_factor": 0.5,
+            },
+            data_spec=data_spec,
+        )
+
+    raise KeyError(f"Mode {mode} not recognised.")
+
+
+def make_model_sim_wrapper(
+    simulator_wrapper,
+    n_workers: int | None,
+):
+    def model_sim_wrapper(
+        npkey: NPKey,
+        params: dict[str, np.ndarray],
+        noise: bool = True,
+        ui: MultiRoundInfererUI | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        return batch_simulate(
+            params,
+            simulator_wrapper,
+            n_workers=n_workers,
+            ui=ui,
+            rng_key=npkey,
+        )
+
+    return model_sim_wrapper
 
 
 if __name__ == "__main__":
@@ -178,122 +317,25 @@ if __name__ == "__main__":
     if observed_count <= 0:
         raise ValueError("Observed RACS-low3 map has zero total counts after masking/cuts.")
 
-    prior = DipolePriorNP(
-        mean_count_range=[6.4, 6.8],
-        speed_range=[0, 8],
-    )
-    prior.change_kwarg(
-        param_short_name="N",
-        new_kwarg="log10_n_initial_samples",
-    )
-    # prior.add_prior(
-    #     short_name='T0',
-    #     simulator_kwarg='temp_pivot_c',
-    #     low=20,
-    #     high=40,
-    #     dist_type='Uniform'
-    # )
-    prior.add_prior(
-        short_name='a',
-        simulator_kwarg='temp_slope',
-        low=-0.4,
-        high=0,
-        dist_type='Uniform'
-    )
-    prior.add_prior(
-        short_name='eta',
-        simulator_kwarg='fractional_error_eta',
-        low=0.,
-        high=200.,
-        dist_type='Uniform'
-    )
-
-    TEMP_SLOPE = -0.2
-    TEMP_PIVOT = np.nanmin(model.temperature_map) + (
-            np.nanmax(model.temperature_map) - np.nanmin(model.temperature_map)
-    ) / 2
-    print(TEMP_PIVOT)
-    theta_0 = {
-        "log10_n_initial_samples": 6.65,
-        "observer_speed": 1.0,
-        "dipole_longitude": 264.021,
-        "dipole_latitude": 48.253,
-        "temp_slope": TEMP_SLOPE,
-        "temp_pivot_c": TEMP_PIVOT,
-        "temp_intercept": -TEMP_SLOPE + 1,
-        "fractional_error_eta": 20.
-    }
-
-    def simulator_wrapper(
-        rng_key: NPKey | None = None,
-        **kwargs,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        temp_slope = kwargs['temp_slope']
-        kwargs['temp_intercept'] = -temp_slope + 1
-        kwargs['temp_pivot_c'] = TEMP_PIVOT
-        return model.generate_dipole(rng_key=rng_key, **kwargs)
-
-    prior_jax = prior.to_jax()
+    prior, theta_0, temp_pivot = build_prior_and_reference_theta(model)
+    print(temp_pivot)
+    simulator_wrapper = make_simulator_wrapper(model, temp_pivot)
 
     for mode in modes:
-        if mode == "NPE":
-            scenario = Scenario.anynside_npe(
-                nside=effective_nside,
-                theta_prior=prior_jax,
-                reference_theta=theta_0,
-                theta_spec_overrides={"embed_transform_in_flow": True},
-                multiround_overrides={
-                    "prng_integer_seed": args.ssnle_seed,
-                    "plot_save_dir": args.out_dir,
-                    "n_rounds": args.n_rounds,
-                    "simulation_budget": args.n_simulations,
-                    "likelihood_chunk_size_gb": 0.5,
-                    "n_likelihood_samples": 10_000,
-                },
-                training_overrides={"learning_rate": 0.001},
-            )
-        elif mode == "NLE":
-            data_spec = DataTransformSpec.zscore(method="batchwise")
-            scenario = Scenario.anynside_nle(
-                nside=effective_nside,
-                theta_prior=prior_jax,
-                training_overrides={
-                    "learning_rate": 1e-4,
-                    "min_lr_ratio": 1.0,
-                },
-                reference_theta=theta_0,
-                multiround_overrides={
-                    "prng_integer_seed": args.ssnle_seed,
-                    "plot_save_dir": args.out_dir,
-                    "simulation_budget": args.n_simulations,
-                    "n_rounds": args.n_rounds,
-                    "likelihood_chunk_size_gb": 0.5,
-                    "n_likelihood_samples": 10_000,
-                },
-                flow_overrides={
-                    "decoder_n_neurons": 128,
-                    "decoder_n_layers": 4,
-                    "architecture": 4 * ["MAF"] + ["surjective_MAF"] + 6 * ["MAF"],
-                    "data_reduction_factor": 0.5,
-                },
-                data_spec=data_spec,
-            )
-        else:
-            raise KeyError(f"Mode {mode} not recognised.")
-
-        def model_sim_wrapper(
-            npkey: NPKey,
-            params: dict[str, np.ndarray],
-            noise: bool = True,
-            ui: MultiRoundInfererUI | None = None,
-        ) -> tuple[np.ndarray, np.ndarray]:
-            return batch_simulate(
-                params,
-                simulator_wrapper,
-                n_workers=args.n_workers,
-                ui=ui,
-                rng_key=npkey,
-            )
+        scenario = build_scenario(
+            mode=mode,
+            effective_nside=effective_nside,
+            prior=prior,
+            theta_0=theta_0,
+            out_dir=args.out_dir,
+            ssnle_seed=args.ssnle_seed,
+            n_rounds=args.n_rounds,
+            n_simulations=args.n_simulations,
+        )
+        model_sim_wrapper = make_model_sim_wrapper(
+            simulator_wrapper=simulator_wrapper,
+            n_workers=args.n_workers,
+        )
 
         inferer = MultiRoundInferer(
             mode,
