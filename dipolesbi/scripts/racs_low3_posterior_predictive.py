@@ -3,7 +3,9 @@ import os
 import re
 from pathlib import Path
 
-os.environ.setdefault("JAX_PLATFORMS", "cpu")
+# platform_override = os.environ.get("DIPOLESBI_JAX_PLATFORMS")
+# if platform_override is not None:
+#     os.environ["JAX_PLATFORMS"] = platform_override
 
 import jax
 import numpy as np
@@ -153,9 +155,7 @@ def main() -> None:
 
     output_path = args.output
     if output_path is None:
-        output_path = checkpoint.with_name(
-            f"{checkpoint.stem}_posterior_predictive_mean.npz"
-        )
+        output_path = checkpoint.parent / "posterior_predictive_mean.npz"
     output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
