@@ -872,8 +872,9 @@ class MultiRoundInferer:
 
         valid_counts = predictive_mask.sum(axis=0, dtype=np.int32)
         summed_data = np.where(predictive_mask, predictive_data, 0.0).sum(axis=0)
+        predictive_ndim = predictive_data.shape[-1]
 
-        mean_map = np.full((self.data_ndim,), np.nan, dtype=np.float32)
+        mean_map = np.full((predictive_ndim,), np.nan, dtype=np.float32)
         mean_mask = valid_counts > 0
         mean_map[mean_mask] = (
             summed_data[mean_mask] / valid_counts[mean_mask]

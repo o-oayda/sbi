@@ -12,6 +12,10 @@ from dipolesbi.tools.ui import MultiRoundInfererUI
 from dipolesbi.tools.utils import batch_simulate
 from dipoleutils.utils.data_loader import DataLoader
 
+FREE_TEMP_PIVOT_MODEL = "free_temp_pivot"
+FIXED_TEMP_PIVOT_25C_MODEL = "fixed_temp_pivot_25c"
+MODEL_CHOICES = [FREE_TEMP_PIVOT_MODEL, FIXED_TEMP_PIVOT_25C_MODEL]
+
 
 def _parse_modes(raw_modes: list[str] | None, parser: argparse.ArgumentParser) -> list[str]:
     modes: list[str] = []
@@ -70,6 +74,7 @@ def _build_real_sample(
 
 def build_prior_and_reference_theta(
     model: RacsLow3,
+    chosen_model: str = FREE_TEMP_PIVOT_MODEL,
 ) -> tuple[DipolePriorNP, dict[str, float], float]:
     prior = DipolePriorNP(
         mean_count_range=[6.4, 6.8],
@@ -82,71 +87,90 @@ def build_prior_and_reference_theta(
     prior.add_prior(
         short_name='a',
         simulator_kwarg='temp_slope',
-        low=-0.4,
+        low=-1.,
         high=0,
         dist_type='Uniform'
     )
-    prior.add_prior(
-        short_name='eta',
-        simulator_kwarg='fractional_error_eta',
-        low=0.,
-        high=200.,
-        dist_type='Uniform'
-    )
+    # prior.add_prior(
+    #     short_name='eta',
+    #     simulator_kwarg='fractional_error_eta',
+    #     low=0.,
+    #     high=200.,
+    #     dist_type='Uniform'
+    # )
 
-    temp_slope = -0.2
-    temp_pivot = np.nanmin(model.temperature_map) + (
-        np.nanmax(model.temperature_map) - np.nanmin(model.temperature_map)
-    ) / 2
+    temp_slope_theta0 = -0.2
+    if chosen_model == FREE_TEMP_PIVOT_MODEL:
+        prior.add_prior(
+            short_name='T0',
+            simulator_kwarg='temp_pivot_c',
+            low=10,
+            high=40,
+            dist_type='Uniform'
+        )
+        temp_pivot_theta0 = np.nanmin(model.temperature_map) + (
+            np.nanmax(model.temperature_map) - np.nanmin(model.temperature_map)
+        ) / 2
+    elif chosen_model == FIXED_TEMP_PIVOT_25C_MODEL:
+        temp_pivot_theta0 = 25.0
+    else:
+        raise ValueError(f"Unknown RACS-low3 model: {chosen_model}")
 
     theta_0 = {
         "log10_n_initial_samples": 6.65,
         "observer_speed": 1.0,
         "dipole_longitude": 264.021,
         "dipole_latitude": 48.253,
-        "temp_slope": temp_slope,
-        "temp_pivot_c": temp_pivot,
-        "temp_intercept": -temp_slope + 1,
-        "fractional_error_eta": 20.
+        "temp_slope": temp_slope_theta0,
+        "temp_pivot_c": temp_pivot_theta0,
+        "temp_intercept": -temp_slope_theta0 + 1,
+        # "fractional_error_eta": 20.
     }
-    return prior, theta_0, temp_pivot
+    return prior, theta_0, temp_pivot_theta0
 
 
 def make_simulator_wrapper(
     model: RacsLow3,
-    temp_pivot: float,
+    chosen_model: str = FREE_TEMP_PIVOT_MODEL,
     native_output: bool = False,
 ):
-    attach_native_generate_dipole(model)
-
     def simulator_wrapper(
         rng_key: NPKey | None = None,
         **kwargs,
     ) -> tuple[np.ndarray, np.ndarray]:
         temp_slope = kwargs['temp_slope']
         kwargs['temp_intercept'] = -temp_slope + 1
-        kwargs['temp_pivot_c'] = temp_pivot
-        generate = (
-            model.generate_dipole_native
-            if native_output else model.generate_dipole
-        )
-        return generate(rng_key=rng_key, **kwargs)
+        if chosen_model == FIXED_TEMP_PIVOT_25C_MODEL:
+            kwargs['temp_pivot_c'] = 25.0
+        elif chosen_model != FREE_TEMP_PIVOT_MODEL:
+            raise ValueError(f"Unknown RACS-low3 model: {chosen_model}")
+        if native_output:
+            return _generate_dipole_native(model, rng_key=rng_key, **kwargs)
+        return model.generate_dipole(rng_key=rng_key, **kwargs)
 
     return simulator_wrapper
 
 
-# some kind of class method sorcery to mutate downscale_nside if using native res
+def _generate_dipole_native(
+    model: RacsLow3,
+    *args,
+    **kwargs,
+) -> tuple[np.ndarray, np.ndarray]:
+    original_downscale_nside = model.downscale_nside
+    try:
+        model.downscale_nside = None
+        return model.generate_dipole(*args, **kwargs)
+    finally:
+        model.downscale_nside = original_downscale_nside
+
+
+# Local convenience only. Do not rely on this for joblib worker processes.
 def attach_native_generate_dipole(model: RacsLow3) -> None:
     if hasattr(model, "generate_dipole_native"):
         return
 
     def generate_dipole_native(self: RacsLow3, *args, **kwargs):
-        original_downscale_nside = self.downscale_nside
-        try:
-            self.downscale_nside = None
-            return self.generate_dipole(*args, **kwargs)
-        finally:
-            self.downscale_nside = original_downscale_nside
+        return _generate_dipole_native(self, *args, **kwargs)
 
     model.generate_dipole_native = MethodType(generate_dipole_native, model)  # type: ignore[attr-defined]
 
@@ -264,6 +288,14 @@ if __name__ == "__main__":
         help="Directory to save outputs into.",
     )
     parser.add_argument(
+        "--model",
+        choices=MODEL_CHOICES,
+        default=FREE_TEMP_PIVOT_MODEL,
+        help=(
+            "Choose whether temp_pivot_c is inferred freely or fixed by the simulator."
+        ),
+    )
+    parser.add_argument(
         "--ssnle_seed",
         type=int,
         default=0,
@@ -295,7 +327,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--chunk_size",
         type=int,
-        default=50_000,
+        default=2_500_000,
         help="Chunk size used inside the simulator.",
     )
     parser.add_argument(
@@ -330,6 +362,7 @@ if __name__ == "__main__":
         alpha_mean=args.alpha_mean,
         alpha_sigma=args.alpha_sigma,
         fractional_error_flux_min_mjy=args.fractional_error_flux_min_mjy,
+        paf_temperature_data_dir='/home/oliver/Documents/dipole-utils/data/paf_temps'
     )
     model = RacsLow3(config)
     model.initialise_data()
@@ -341,9 +374,15 @@ if __name__ == "__main__":
     if observed_count <= 0:
         raise ValueError("Observed RACS-low3 map has zero total counts after masking/cuts.")
 
-    prior, theta_0, temp_pivot = build_prior_and_reference_theta(model)
+    prior, theta_0, temp_pivot = build_prior_and_reference_theta(
+        model,
+        chosen_model=args.model,
+    )
     print(temp_pivot)
-    simulator_wrapper = make_simulator_wrapper(model, temp_pivot)
+    simulator_wrapper = make_simulator_wrapper(
+        model,
+        chosen_model=args.model,
+    )
 
     for mode in modes:
         scenario = build_scenario(

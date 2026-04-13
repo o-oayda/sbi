@@ -2,6 +2,10 @@ import argparse
 import os
 import re
 from pathlib import Path
+from dipoleutils.utils.data_loader import DataLoader
+from dipoleutils.utils.samples import CatalogueToMap
+import matplotlib.pyplot as plt
+import matplotlib
 
 # platform_override = os.environ.get("DIPOLESBI_JAX_PLATFORMS")
 # if platform_override is not None:
@@ -10,11 +14,12 @@ from pathlib import Path
 import jax
 import numpy as np
 import healpy as hp
-from catsim import RacsLow3, RacsLow3Config
+from catsim import RacsLow3, RacsLow3Config, smooth_map
 
 from dipolesbi.scripts.based_racs_low3 import (
+    FREE_TEMP_PIVOT_MODEL,
+    MODEL_CHOICES,
     _build_real_sample,
-    attach_native_generate_dipole,
     build_prior_and_reference_theta,
     build_scenario,
     make_model_sim_wrapper,
@@ -101,6 +106,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional round index override. Defaults to parsing from checkpoint name.",
     )
     parser.add_argument(
+        "--model",
+        choices=MODEL_CHOICES,
+        default=FREE_TEMP_PIVOT_MODEL,
+        help="Simulator model to use when reconstructing the posterior predictive.",
+    )
+    parser.add_argument(
         "--n_workers",
         type=int,
         default=None,
@@ -155,6 +166,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    matplotlib.use('TkAgg')
     parser = _build_parser()
     args = parser.parse_args()
 
@@ -193,9 +205,14 @@ def main() -> None:
     x0, mask = _build_real_sample(model, flux_min=args.flux_min)
     effective_nside = int(np.sqrt(x0.size / 12))
 
-    prior, theta_0, temp_pivot = build_prior_and_reference_theta(model)
-    attach_native_generate_dipole(model)
-    simulator_wrapper = make_simulator_wrapper(model, temp_pivot)
+    prior, theta_0, temp_pivot = build_prior_and_reference_theta(
+        model,
+        chosen_model=args.model,
+    )
+    simulator_wrapper = make_simulator_wrapper(
+        model,
+        chosen_model=args.model,
+    )
     model_sim_wrapper = make_model_sim_wrapper(
         simulator_wrapper=simulator_wrapper,
         n_workers=args.n_workers,
@@ -244,7 +261,7 @@ def main() -> None:
         predictive_simulator = make_model_sim_wrapper(
             simulator_wrapper=make_simulator_wrapper(
                 model,
-                temp_pivot,
+                chosen_model=args.model,
                 native_output=True,
             ),
             n_workers=args.n_workers,
@@ -252,6 +269,39 @@ def main() -> None:
         inferer.simulator_function = predictive_simulator
 
     mean_map, mean_mask = inferer.posterior_predictive_mean(args.predictive_samples)
+
+    plt.close('all')
+    hp.projview(mean_map, nest=True)
+    smooth_map(mean_map)
+    plt.show()
+    sim_smap = smooth_map(mean_map, only_return_data=True)
+
+    catalogue = DataLoader("racs", "low3").load()
+    processor = CatalogueToMap(catalogue) # type: ignore
+    processor.make_cut('Total_flux', 15, None)
+    dmap = processor.make_density_map('equatorial', nest=True).astype('float32')
+    dmap[~mean_mask] = np.nan
+
+    real_smap = smooth_map(dmap, only_return_data=True)
+
+    residual_map = sim_smap - real_smap
+    residual_scale = np.nanmax(np.abs(residual_map))
+    hp.projview(
+        residual_map,
+        nest=True,
+        cmap='coolwarm',
+        min=-residual_scale,
+        max=residual_scale,
+    )
+    hp.projview(
+        residual_map,
+        nest=True,
+        cmap='coolwarm',
+        min=-residual_scale,
+        max=residual_scale,
+        coord=['C', 'G']
+    )
+    plt.show()
 
     np.savez_compressed(
         output_path,
