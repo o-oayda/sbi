@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import re
 from typing import Sequence
 
 import math
@@ -12,6 +13,12 @@ import matplotlib.pyplot as plt
 from matplotlib.transforms import Bbox
 from getdist import plots
 from anesthetic import read_csv as nested_read_csv
+from dipoleska.utils.physics import change_source_coordinates, spherical_to_degrees
+from dipoleska.utils.plotting import (
+    ANGLE_LABEL_OVERRIDES,
+    _parameter_latex_label,
+    apply_angle_label_override,
+)
 from dipolesbi.style import paperplot
 
 from .posterior_samples import (
@@ -30,6 +37,8 @@ from .plotting import (
 plots.set_active_style(paperplot.style_name)
 
 AVERAGE_DIAGNOSTIC_STATS = True
+SUPPORTED_ANGLE_COORDINATES: set[str] = {"galactic", "equatorial", "ecliptic"}
+_MULTIPOLE_ANGLE_PATTERN = re.compile(r"^(phi|theta)_(l\d+_\d+)$")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -114,6 +123,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--corner-no-credible-lines",
         action="store_true",
         help="Suppress 1σ credible interval lines in the corner plot.",
+    )
+    parser.add_argument(
+        "--coordinates",
+        nargs="+",
+        default=None,
+        help=(
+            "Coordinate frame spec matching dipoleska plotting methods. "
+            "Pass one frame to express angular parameters in that frame, or "
+            "two frames to rotate from native to target, e.g. "
+            "--coordinates equatorial galactic."
+        ),
     )
     parser.add_argument(
         "--corner-stack-credible-titles",
@@ -251,6 +271,206 @@ def _format_number(value: float) -> str:
     return f"{value:.4g}"
 
 
+def _normalise_coordinates_argument(
+    coordinates: Sequence[str] | None,
+) -> list[str] | None:
+    if coordinates is None:
+        return None
+    if not isinstance(coordinates, (list, tuple)):
+        raise TypeError("coordinates must be a list or tuple of coordinate frame names")
+    if len(coordinates) == 0:
+        raise ValueError("coordinates must contain at least one frame name")
+    if len(coordinates) > 2:
+        raise ValueError("coordinates accepts at most two frame names")
+
+    normalised: list[str] = []
+    for idx, coord in enumerate(coordinates):
+        if not isinstance(coord, str):
+            raise TypeError(
+                f"Coordinate entry {idx} must be a string, got {type(coord).__name__}"
+            )
+        stripped = coord.strip()
+        if not stripped:
+            raise ValueError(f"Coordinate entry {idx} cannot be empty")
+        lowered = stripped.lower()
+        if lowered not in SUPPORTED_ANGLE_COORDINATES:
+            raise ValueError(
+                f'Unsupported coordinate frame "{coord}". '
+                f"Expected one of {sorted(SUPPORTED_ANGLE_COORDINATES)}."
+            )
+        normalised.append(lowered)
+    return normalised
+
+
+def _longitude_latitude_pairs(parameter_names: Sequence[str]) -> list[tuple[int, int]]:
+    index_by_name = {name: idx for idx, name in enumerate(parameter_names)}
+    pairs: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+
+    direct_candidates = [
+        ("dipole_longitude", "dipole_latitude"),
+        ("longitude", "latitude"),
+        ("lon", "lat"),
+    ]
+    for lon_name, lat_name in direct_candidates:
+        lon_idx = index_by_name.get(lon_name)
+        lat_idx = index_by_name.get(lat_name)
+        if lon_idx is None or lat_idx is None:
+            continue
+        pair = (lon_idx, lat_idx)
+        if pair not in seen:
+            pairs.append(pair)
+            seen.add(pair)
+
+    for name, lon_idx in index_by_name.items():
+        if not name.endswith("_longitude"):
+            continue
+        lat_name = f"{name[:-len('_longitude')]}_latitude"
+        lat_idx = index_by_name.get(lat_name)
+        if lat_idx is None:
+            continue
+        pair = (lon_idx, lat_idx)
+        if pair not in seen:
+            pairs.append(pair)
+            seen.add(pair)
+
+    return pairs
+
+
+def _angle_parameter_pairs(parameter_names: Sequence[str]) -> list[tuple[str, int, int]]:
+    index_by_name = {name: idx for idx, name in enumerate(parameter_names)}
+    pairs: list[tuple[str, int, int]] = []
+
+    if ("phi" in index_by_name) and ("theta" in index_by_name):
+        pairs.append(("spherical", index_by_name["phi"], index_by_name["theta"]))
+
+    for name, idx in index_by_name.items():
+        match = _MULTIPOLE_ANGLE_PATTERN.match(name)
+        if not match or match.group(1) != "phi":
+            continue
+        theta_name = f"theta_{match.group(2)}"
+        theta_idx = index_by_name.get(theta_name)
+        if theta_idx is not None:
+            pairs.append(("spherical", idx, theta_idx))
+
+    for lon_idx, lat_idx in _longitude_latitude_pairs(parameter_names):
+        pairs.append(("lonlat", lon_idx, lat_idx))
+
+    return pairs
+
+
+def _convert_parameter_matrix(
+    matrix: np.ndarray,
+    parameter_names: Sequence[str],
+    coordinates: Sequence[str] | None,
+) -> tuple[np.ndarray, bool]:
+    normalised = _normalise_coordinates_argument(coordinates)
+    samples = np.asarray(matrix, dtype=np.float64)
+    converted = samples.copy()
+    if normalised is None:
+        return converted, False
+    angle_pairs = _angle_parameter_pairs(parameter_names)
+    if not angle_pairs:
+        return converted, False
+
+    for pair_kind, phi_idx, theta_idx in angle_pairs:
+        if pair_kind == "spherical":
+            longitude_deg, latitude_deg = spherical_to_degrees(
+                samples[:, phi_idx],
+                samples[:, theta_idx],
+            )
+        else:
+            longitude_deg = samples[:, phi_idx]
+            latitude_deg = samples[:, theta_idx]
+        if normalised is not None and len(normalised) == 2:
+            longitude_deg, latitude_deg = change_source_coordinates(
+                longitude_deg,
+                latitude_deg,
+                native_coordinates=normalised[0],
+                target_coordinates=normalised[1],
+            )
+        converted[:, phi_idx] = longitude_deg
+        converted[:, theta_idx] = latitude_deg
+
+    return converted, True
+
+
+def _convert_lon_lat_columns(
+    longitude_deg: np.ndarray,
+    latitude_deg: np.ndarray,
+    coordinates: Sequence[str] | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    normalised = _normalise_coordinates_argument(coordinates)
+    lon = np.asarray(longitude_deg, dtype=np.float64)
+    lat = np.asarray(latitude_deg, dtype=np.float64)
+    if normalised is None or len(normalised) == 1:
+        return lon, lat
+    return change_source_coordinates(
+        lon,
+        lat,
+        native_coordinates=normalised[0],
+        target_coordinates=normalised[1],
+    )
+
+
+def _coordinate_label_map(
+    parameter_names: Sequence[str],
+    coordinates: Sequence[str] | None,
+) -> dict[str, str]:
+    normalised = _normalise_coordinates_argument(coordinates)
+    if normalised is None or not _angle_parameter_pairs(parameter_names):
+        return {}
+    overrides = ANGLE_LABEL_OVERRIDES.get(normalised[-1])
+    if not overrides:
+        return {}
+
+    def _longitude_base_label(parameter_name: str) -> str:
+        if parameter_name == "dipole_longitude":
+            return r"\phi\,(\mathrm{rad})"
+        if parameter_name.endswith("_longitude"):
+            prefix = parameter_name[:-len("_longitude")]
+            return rf"\phi_{{\mathrm{{{prefix}}}}}\,(\mathrm{{rad}})"
+        return r"\phi\,(\mathrm{rad})"
+
+    def _latitude_base_label(parameter_name: str) -> str:
+        if parameter_name == "dipole_latitude":
+            return r"\theta\,(\mathrm{rad})"
+        if parameter_name.endswith("_latitude"):
+            prefix = parameter_name[:-len("_latitude")]
+            return rf"\theta_{{\mathrm{{{prefix}}}}}\,(\mathrm{{rad}})"
+        return r"\theta\,(\mathrm{rad})"
+
+    def _override_label(parameter_name: str) -> str | None:
+        if parameter_name in {"phi", "dipole_longitude", "longitude", "lon"} or parameter_name.endswith("_longitude"):
+            base_label = (
+                _parameter_latex_label(parameter_name)
+                if parameter_name == "phi"
+                else _longitude_base_label(parameter_name)
+            )
+            return apply_angle_label_override(base_label, "phi", overrides)
+        if parameter_name in {"theta", "dipole_latitude", "latitude", "lat"} or parameter_name.endswith("_latitude"):
+            base_label = (
+                _parameter_latex_label(parameter_name)
+                if parameter_name == "theta"
+                else _latitude_base_label(parameter_name)
+            )
+            return apply_angle_label_override(base_label, "theta", overrides)
+        match = _MULTIPOLE_ANGLE_PATTERN.match(parameter_name)
+        if not match:
+            return None
+        angle_kind, suffix = match.groups()
+        _ = suffix
+        base_label = _parameter_latex_label(parameter_name)
+        return apply_angle_label_override(base_label, angle_kind, overrides)
+
+    label_map: dict[str, str] = {}
+    for name in parameter_names:
+        label = _override_label(name)
+        if label is not None:
+            label_map[name] = label
+    return label_map
+
+
 def _load_true_samples(path: Path) -> PosteriorSamples:
     nested = nested_read_csv(path)
     columns = ["sample_index", "weights", *nested.columns]
@@ -362,11 +582,12 @@ def _weighted_quantiles(values: np.ndarray, weights: np.ndarray | None, quantile
     return np.interp(quantiles, cumulative, values)
 
 
-def _credible_interval_stats(sample_array: PosteriorSamples, param: str) -> tuple[float, float, float] | None:
-    if param not in sample_array.data:
-        return None
-    values = np.asarray(sample_array[param], dtype=np.float64)
-    weights = np.asarray(sample_array.data.get("weights", None), dtype=np.float64) if "weights" in sample_array.data else None
+def _credible_interval_stats(
+    values: np.ndarray,
+    weights: np.ndarray | None,
+) -> tuple[float, float, float] | None:
+    values = np.asarray(values, dtype=np.float64)
+    weights = np.asarray(weights, dtype=np.float64) if weights is not None else None
     mask = np.isfinite(values)
     if weights is not None:
         mask &= np.isfinite(weights)
@@ -418,8 +639,8 @@ def _stack_corner_titles(
     plotter,
     reference_samples,
     param_columns: list[str],
-    sample_objects: list[PosteriorSamples],
-    run_labels: list[str],
+    sample_matrices: list[np.ndarray],
+    sample_weights: list[np.ndarray | None],
 ) -> None:
     subplots = getattr(plotter, "subplots", None)
     if subplots is None:
@@ -445,9 +666,9 @@ def _stack_corner_titles(
 
         offset = 0.17
         base_y = 1.03
-        multi_run = len(sample_objects) > 1
-        for run_idx, samples in enumerate(sample_objects):
-            stats = _credible_interval_stats(samples, param_columns[idx])
+        multi_run = len(sample_matrices) > 1
+        for run_idx, (samples, weights) in enumerate(zip(sample_matrices, sample_weights, strict=True)):
+            stats = _credible_interval_stats(samples[:, idx], weights)
             if stats is None:
                 continue
             median, lower, upper = stats
@@ -578,6 +799,7 @@ def _plot_statistic_vs_round(
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    coordinates = _normalise_coordinates_argument(args.coordinates)
     if args.sky_top_quad and args.sky_top_quad_legacy:
         raise ValueError("Cannot combine --sky-top-quad with --sky-top-quad-legacy.")
 
@@ -798,11 +1020,24 @@ def main(argv: list[str] | None = None) -> int:
 
         mc_samples_list: list = []
         corner_labels: list[str] = []
+        title_sample_matrices: list[np.ndarray] = []
+        title_sample_weights: list[np.ndarray | None] = []
+        label_map = _coordinate_label_map(param_columns, coordinates)
         for s, label in zip(samples_list, labels):
-            mc = s.to_getdist(param_columns=param_columns, weight_column="weights")
+            matrix = np.column_stack([np.asarray(s[col], dtype=np.float64) for col in param_columns])
+            converted_matrix, _ = _convert_parameter_matrix(matrix, param_columns, coordinates)
+            weights = np.asarray(s.data.get("weights", np.ones(s.n_samples)), dtype=np.float64)
+            mc = s.to_getdist(
+                param_columns=param_columns,
+                weight_column="weights",
+                label_map=label_map or None,
+                sample_matrix=converted_matrix,
+            )
             mc.label = label  # type: ignore[attr-defined]
             mc_samples_list.append(mc)
             corner_labels.append(label)
+            title_sample_matrices.append(converted_matrix)
+            title_sample_weights.append(weights)
 
         if args.corner_include_true:
             for idx_true, (iface, label) in enumerate(zip(interfaces, labels)):
@@ -825,9 +1060,13 @@ def main(argv: list[str] | None = None) -> int:
                         f"[yellow]Skipping true samples for {label}; missing columns {missing_cols}[/yellow]"
                     )
                     continue
+                matrix_true = np.column_stack([np.asarray(true_samples[c], dtype=np.float64) for c in param_columns])
+                converted_true, _ = _convert_parameter_matrix(matrix_true, param_columns, coordinates)
                 mc_true = true_samples.to_getdist(
                     param_columns=param_columns,
                     weight_column="weights",
+                    label_map=label_map or None,
+                    sample_matrix=converted_true,
                 )
                 true_label = (
                     true_corner_labels[idx_true]
@@ -842,7 +1081,17 @@ def main(argv: list[str] | None = None) -> int:
         plotter.settings.progress = False
         triangle_kwargs: dict[str, object] = {}
         if args.corner_markers is not None:
-            triangle_kwargs["markers"] = args.corner_markers
+            marker_array = np.asarray(args.corner_markers, dtype=np.float64)
+            if marker_array.size != len(param_columns):
+                raise ValueError(
+                    "Number of --corner-markers entries must match number of plotted corner columns."
+                )
+            converted_markers, _ = _convert_parameter_matrix(
+                marker_array.reshape(1, -1),
+                param_columns,
+                coordinates,
+            )
+            triangle_kwargs["markers"] = converted_markers[0].tolist()
         contour_probs: list[float] | None = None
         if args.corner_sigmas is not None:
             sigma_array = np.asarray(args.corner_sigmas, dtype=np.float64)
@@ -886,7 +1135,13 @@ def main(argv: list[str] | None = None) -> int:
                             if not keep:
                                 line.remove()
         if args.corner_stack_credible_titles and mc_samples_list:
-            _stack_corner_titles(plotter, mc_samples_list[0], list(param_columns), samples_list, labels)
+            _stack_corner_titles(
+                plotter,
+                mc_samples_list[0],
+                list(param_columns),
+                title_sample_matrices,
+                title_sample_weights,
+            )
         elif args.corner_simple_titles and mc_samples_list:
             _simplify_corner_titles(plotter, mc_samples_list[0], list(param_columns))
         corner_path = Path(args.corner).expanduser()
@@ -966,6 +1221,16 @@ def main(argv: list[str] | None = None) -> int:
                 disable_mesh = idx > 0
                 no_axes = idx > 0
                 truth = truth_pairs if idx == 0 else None
+                transformed_truth: list[tuple[float, float]] | None = None
+                if truth is not None:
+                    truth_lon = np.asarray([pair[0] for pair in truth], dtype=np.float64)
+                    truth_lat = np.asarray([pair[1] for pair in truth], dtype=np.float64)
+                    truth_lon, truth_lat = _convert_lon_lat_columns(
+                        truth_lon,
+                        truth_lat,
+                        coordinates,
+                    )
+                    transformed_truth = list(zip(truth_lon.tolist(), truth_lat.tolist(), strict=True))
                 iface.plot_sky_probability(
                     output_path=None,
                     round_id=s.round_id,
@@ -973,7 +1238,7 @@ def main(argv: list[str] | None = None) -> int:
                     lat_column=args.sky_lat_col,
                     nside=args.sky_nside,
                     smooth=args.sky_smooth,
-                    truth_deg=truth,
+                    truth_deg=transformed_truth,
                     show_table=False,
                     disable_mesh=disable_mesh,
                     no_axes=no_axes,
@@ -982,6 +1247,7 @@ def main(argv: list[str] | None = None) -> int:
                     top_quad=(quad_mode == "modern"),
                     top_quad_mode=quad_mode,
                     contour_levels=args.sky_contours,
+                    coordinates=coordinates,
                 )
                 # commented out to suppress prob contours
                 # entry_label = label if idx == 0 else " "

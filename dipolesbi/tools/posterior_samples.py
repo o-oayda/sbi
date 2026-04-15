@@ -21,6 +21,7 @@ from matplotlib import pyplot as plt
 from rich.console import Console
 from rich.prompt import Prompt
 from rich.table import Table
+from dipoleska.utils.physics import change_source_coordinates
 from dipolesbi.tools.configs import CatwiseConfig, ModelConfig
 from dipolesbi.catwise.maps import Catwise
 from dipolesbi.tools.utils import HidePrints, batch_simulate, sigma_to_prob1D
@@ -29,6 +30,31 @@ from dipolesbi.tools.plotting import SKY_PROBABILITY_COLOR_CYCLE, sky_probabilit
 from dipolesbi.tools.maps import average_smooth_map
 
 _RUN_PATTERN = re.compile(r"samples_rnd-(\d+)\.(?:csv|npz)$")
+_SUPPORTED_ANGLE_COORDINATES: set[str] = {"galactic", "equatorial", "ecliptic"}
+
+
+def _normalise_coordinates_argument(
+    coordinates: Sequence[str] | None,
+) -> list[str] | None:
+    if coordinates is None:
+        return None
+    if len(coordinates) == 0:
+        raise ValueError("coordinates must contain at least one frame name")
+    if len(coordinates) > 2:
+        raise ValueError("coordinates accepts at most two frame names")
+
+    normalised: list[str] = []
+    for idx, coord in enumerate(coordinates):
+        stripped = str(coord).strip().lower()
+        if not stripped:
+            raise ValueError(f"Coordinate entry {idx} cannot be empty")
+        if stripped not in _SUPPORTED_ANGLE_COORDINATES:
+            raise ValueError(
+                f'Unsupported coordinate frame "{coord}". '
+                f"Expected one of {sorted(_SUPPORTED_ANGLE_COORDINATES)}."
+            )
+        normalised.append(stripped)
+    return normalised
 
 
 @dataclass(frozen=True)
@@ -81,6 +107,7 @@ class PosteriorSamples:
         weight_column: str = "weights",
         name_map: Mapping[str, str] | None = None,
         label_map: Mapping[str, str] | None = None,
+        sample_matrix: NDArray[np.float64] | None = None,
     ) -> MCSamples:
         param_cols = list(param_columns) if param_columns else self.parameter_columns()
         if not param_cols:
@@ -89,7 +116,17 @@ class PosteriorSamples:
                 "Specify param_columns explicitly."
             )
             raise ValueError(msg)
-        matrix = np.column_stack([np.asarray(self[col], dtype=np.float64) for col in param_cols])
+        if sample_matrix is None:
+            matrix = np.column_stack([np.asarray(self[col], dtype=np.float64) for col in param_cols])
+        else:
+            matrix = np.asarray(sample_matrix, dtype=np.float64)
+            if matrix.ndim != 2:
+                raise ValueError("sample_matrix must be a 2D array.")
+            if matrix.shape != (self.n_samples, len(param_cols)):
+                raise ValueError(
+                    "sample_matrix shape must match the selected parameter columns "
+                    f"({self.n_samples}, {len(param_cols)}); got {matrix.shape}."
+                )
 
         weights = np.asarray(self.data.get(weight_column, np.ones(self.n_samples)), dtype=np.float64)
         if weights.shape == ():
@@ -827,8 +864,10 @@ class PosteriorSamplesInterface:
         top_quad: bool = False,
         top_quad_mode: Literal["none", "legacy", "modern"] | None = None,
         contour_levels: Sequence[float] | None = None,
+        coordinates: Sequence[str] | None = None,
     ) -> Path | None:
         samples = self.load_round(round_id=round_id, show_table=show_table)
+        normalised_coordinates = _normalise_coordinates_argument(coordinates)
         try:
             lon = np.asarray(samples[lon_column], dtype=np.float64)
             lat = np.asarray(samples[lat_column], dtype=np.float64)
@@ -843,6 +882,13 @@ class PosteriorSamplesInterface:
 
         lon = lon[finite_mask]
         lat = lat[finite_mask]
+        if normalised_coordinates is not None and len(normalised_coordinates) == 2:
+            lon, lat = change_source_coordinates(
+                lon,
+                lat,
+                native_coordinates=normalised_coordinates[0],
+                target_coordinates=normalised_coordinates[1],
+            )
 
         weights_col = samples.data.get("weights")
         if weights_col is not None:
