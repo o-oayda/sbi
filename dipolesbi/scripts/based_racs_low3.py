@@ -96,6 +96,13 @@ def build_prior_and_reference_theta(
         high=0,
         dist_type='Uniform'
     )
+    prior.add_prior(
+        'lclus',
+        simulator_kwarg='lambda_clus',
+        low=0,
+        high=3,
+        dist_type='Uniform'
+    )
     # prior.add_prior(
     #     short_name='eta',
     #     simulator_kwarg='fractional_error_eta',
@@ -129,6 +136,7 @@ def build_prior_and_reference_theta(
         "temp_slope": temp_slope_theta0,
         "temp_pivot_c": temp_pivot_theta0,
         "temp_intercept": -temp_slope_theta0 + 1,
+        "lambda_clus": 0.
         # "fractional_error_eta": 20.
     }
     return prior, theta_0, temp_pivot_theta0
