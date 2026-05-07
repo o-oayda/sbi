@@ -28,6 +28,7 @@ dependencies = [
     "anesthetic (<= 2.10.3)",
     "pytest (>=9.0.1,<10.0.0)",
     "catsim @ file:///home/oliver/Documents/catsim",
+    "dipole-utils @ git+https://github.com/o-oayda/dipole-utils.git@racs-paf",
 ]
 
 [project.optional-dependencies]
