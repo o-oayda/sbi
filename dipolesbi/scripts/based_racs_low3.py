@@ -2,6 +2,7 @@ import argparse
 from types import MethodType
 from catsim import RacsLow3, RacsLow3Config
 from catsim.utils.healsphere import downgrade_ignore_nan
+from dipoleutils.utils.samples import CatalogueToMap
 import healpy as hp
 import numpy as np
 from dipolesbi.tools.configs import DataTransformSpec, Scenario
@@ -30,7 +31,11 @@ def _build_real_sample(
     model: RacsLow3,
     flux_min: float,
 ) -> tuple[np.ndarray, np.ndarray]:
-    catalogue = DataLoader("racs", "low3").load()
+    cat = DataLoader("racs", "low3").load()
+    c2map = CatalogueToMap(cat)
+    c2map.crossmatch_local_sources('equatorial', radius=5)
+    catalogue = c2map.get_catalogue()
+
     flux = np.asarray(catalogue["Total_flux"], dtype=np.float64)
     ra = np.asarray(catalogue["RA"], dtype=np.float64)
     dec = np.asarray(catalogue["Dec"], dtype=np.float64)
