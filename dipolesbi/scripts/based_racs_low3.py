@@ -33,7 +33,7 @@ def _build_real_sample(
 ) -> tuple[np.ndarray, np.ndarray]:
     cat = DataLoader("racs", "low3").load()
     c2map = CatalogueToMap(cat)
-    c2map.crossmatch_local_sources('equatorial', radius=5)
+    c2map.crossmatch_local_sources('equatorial', radius=5, source_name_A_column='Name')
     catalogue = c2map.get_catalogue()
 
     flux = np.asarray(catalogue["Total_flux"], dtype=np.float64)
@@ -82,7 +82,7 @@ def build_prior_and_reference_theta(
     chosen_model: str = FREE_TEMP_PIVOT_MODEL,
 ) -> tuple[DipolePriorNP, dict[str, float], float]:
     prior = DipolePriorNP(
-        mean_count_range=[6.4, 6.8],
+        mean_count_range=[6.2, 6.8],
         speed_range=[0, 8],
     )
     prior.change_kwarg(
@@ -97,10 +97,17 @@ def build_prior_and_reference_theta(
         dist_type='Uniform'
     )
     prior.add_prior(
-        'lclus',
-        simulator_kwarg='lambda_clus',
+        'pclus',
+        simulator_kwarg='p_clus',
         low=0,
-        high=3,
+        high=1,
+        dist_type='Uniform'
+    )
+    prior.add_prior(
+        'pstop',
+        simulator_kwarg='clus_stop_prob',
+        low=0.4,
+        high=1,
         dist_type='Uniform'
     )
     # prior.add_prior(
@@ -136,7 +143,8 @@ def build_prior_and_reference_theta(
         "temp_slope": temp_slope_theta0,
         "temp_pivot_c": temp_pivot_theta0,
         "temp_intercept": -temp_slope_theta0 + 1,
-        "lambda_clus": 0.
+        "p_clus": 0.,
+        "clus_stop_prob": 1.
         # "fractional_error_eta": 20.
     }
     return prior, theta_0, temp_pivot_theta0
