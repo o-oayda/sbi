@@ -955,7 +955,11 @@ class MultiRoundInferer:
             self,
             samples: NestedSamples
     ) -> dict[str, NDArray[np.float32]]:
-        samples_dict = samples.to_dict(orient='list')
+        raw_samples_dict = samples.to_dict(orient='list')
+        samples_dict: dict[str, list[float]] = {}
+        for key, values in raw_samples_dict.items():
+            column_name = key[0] if isinstance(key, tuple) else key
+            samples_dict[column_name] = values
 
         del samples_dict['logL']
         del samples_dict['logL_birth']
