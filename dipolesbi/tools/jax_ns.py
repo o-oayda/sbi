@@ -85,6 +85,7 @@ class JaxNestedSampler:
             logL=dead.loglikelihood,
             logL_birth=dead.loglikelihood_birth,
             columns=columns,
+            labels=self.prior.prior_names,
             logzero=jnp.nan,
         )
 
