@@ -12,6 +12,8 @@ from dipolesbi.tools.priors_np import DipolePriorNP
 from dipolesbi.tools.ui import MultiRoundInfererUI
 from dipolesbi.tools.utils import batch_simulate
 from dipoleutils.utils.data_loader import DataLoader
+from dipoleutils.utils.mask import Masker
+import matplotlib.pyplot as plt
 
 FREE_TEMP_PIVOT_MODEL = "free_temp_pivot"
 FIXED_TEMP_PIVOT_25C_MODEL = "fixed_temp_pivot_25c"
@@ -33,34 +35,21 @@ def _build_real_sample(
 ) -> tuple[np.ndarray, np.ndarray]:
     cat = DataLoader("racs", "low3").load()
     c2map = CatalogueToMap(cat)
+    c2map.make_cut('Total_flux', minimum=flux_min, maximum=None)
     c2map.crossmatch_local_sources('equatorial', radius=5, source_name_A_column='Name')
-    catalogue = c2map.get_catalogue()
+    density_map = c2map.make_density_map(
+        coordinate_system='equatorial',
+        nside=model.nside,
+        nest=True
+    ).astype('float32')
 
-    flux = np.asarray(catalogue["Total_flux"], dtype=np.float64)
-    ra = np.asarray(catalogue["RA"], dtype=np.float64)
-    dec = np.asarray(catalogue["Dec"], dtype=np.float64)
-
-    valid = (
-        np.isfinite(flux)
-        & np.isfinite(ra)
-        & np.isfinite(dec)
-        & (flux >= flux_min)
-    )
-    pixel_indices = hp.ang2pix(
-        model.nside,
-        ra[valid],
-        dec[valid],
-        lonlat=True,
-        nest=True,
-    ).astype(np.int64, copy=False)
-
-    density_map = np.bincount(
-        pixel_indices,
-        minlength=hp.nside2npix(model.nside),
-    ).astype(np.float32, copy=False)
     mask = model.mask_map.astype(np.bool_, copy=False)
     density_map = density_map.copy()
     density_map[~mask] = np.nan
+
+    hp.projview(density_map, nest=True)
+    plt.savefig('racslow3.png')
+    plt.close()
 
     if model.downscale_nside is None:
         return density_map, mask
@@ -76,6 +65,19 @@ def _build_real_sample(
     coarse_map[~coarse_mask] = np.nan
     return coarse_map, coarse_mask
 
+def _build_mask(nside: int) -> np.ndarray:
+    masker = Masker(np.ones(hp.nside2npix(nside)), coordinate_system='equatorial')
+
+    masker.mask_galactic_plane(5)
+    masker.mask_a_team_sources(radius_deg=2)
+    masker.mask_equatorial_poles(north_radius=42)
+
+    masker.mask_a_team_sources(radius_deg=3, source_names=['Cygnus A'])
+    masker.mask_a_team_sources(radius_deg=15, source_names=['LMC'])
+    masker.mask_a_team_sources(radius_deg=10, source_names=['SMC'])
+
+    maskmap = masker.get_mask_map()
+    return hp.reorder(maskmap, r2n=True)
 
 def build_prior_and_reference_theta(
     model: RacsLow3,
@@ -379,6 +381,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     modes = _parse_modes(args.mode, parser)
+    mask = _build_mask(args.nside)
 
     config = RacsLow3Config(
         flux_min=args.flux_min,
@@ -390,13 +393,15 @@ if __name__ == "__main__":
         alpha_mean=args.alpha_mean,
         alpha_sigma=args.alpha_sigma,
         fractional_error_flux_min_mjy=args.fractional_error_flux_min_mjy,
-        paf_temperature_data_dir='/home/oliver/Documents/dipole-utils/data/paf_temps'
+        paf_temperature_data_dir='/home/oliver/Documents/dipole-utils/data/paf_temps',
+        mask_map=mask
     )
     model = RacsLow3(config)
     model.initialise_data()
 
     x0, mask = _build_real_sample(model, flux_min=args.flux_min)
     effective_nside = hp.npix2nside(x0.size)
+
 
     observed_count = float(np.nansum(x0))
     if observed_count <= 0:
