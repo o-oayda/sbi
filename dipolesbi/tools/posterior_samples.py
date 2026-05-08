@@ -33,6 +33,13 @@ _RUN_PATTERN = re.compile(r"samples_rnd-(\d+)\.(?:csv|npz)$")
 _SUPPORTED_ANGLE_COORDINATES: set[str] = {"galactic", "equatorial", "ecliptic"}
 
 
+def normalise_nested_column_name(column: object) -> str:
+    """Collapse labelled anesthetic column keys to their primary field name."""
+    if isinstance(column, tuple) and column:
+        return str(column[0])
+    return str(column)
+
+
 def _normalise_coordinates_argument(
     coordinates: Sequence[str] | None,
 ) -> list[str] | None:
@@ -342,7 +349,7 @@ class PosteriorRepository:
 
     def _inspect_csv(self, path: Path, round_id: int) -> PosteriorRunInfo:
         nested = nested_read_csv(path)
-        base_columns = list(nested.columns)
+        base_columns = [normalise_nested_column_name(column) for column in nested.columns]
         columns = ["sample_index", "weights", *base_columns]
         return PosteriorRunInfo(
             round_id=round_id,
@@ -408,7 +415,8 @@ class PosteriorRepository:
         weights = np.asarray(nested.get_weights(), dtype=np.float64)
         data["weights"] = weights
         for column in nested.columns:
-            data[column] = np.asarray(nested[column], dtype=np.float64)
+            column_name = normalise_nested_column_name(column)
+            data[column_name] = np.asarray(nested[column], dtype=np.float64)
         missing = set(expected_columns) - set(data.keys())
         if missing:
             msg = f"Column mismatch when loading {path}: missing {sorted(missing)}."

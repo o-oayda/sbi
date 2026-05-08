@@ -25,6 +25,7 @@ from .posterior_samples import (
     PosteriorSamplesInterface,
     PosteriorSamples,
     PosteriorRunInfo,
+    normalise_nested_column_name,
 )
 from .utils import sigma_to_prob1D
 from .plotting import (
@@ -473,12 +474,14 @@ def _coordinate_label_map(
 
 def _load_true_samples(path: Path) -> PosteriorSamples:
     nested = nested_read_csv(path)
-    columns = ["sample_index", "weights", *nested.columns]
+    base_columns = [normalise_nested_column_name(column) for column in nested.columns]
+    columns = ["sample_index", "weights", *base_columns]
     data: dict[str, np.ndarray] = {}
     data["sample_index"] = np.arange(len(nested), dtype=np.float64)
     data["weights"] = np.asarray(nested.get_weights(), dtype=np.float64)
     for column in nested.columns:
-        data[column] = np.asarray(nested[column], dtype=np.float64)
+        column_name = normalise_nested_column_name(column)
+        data[column_name] = np.asarray(nested[column], dtype=np.float64)
     info = PosteriorRunInfo(
         round_id=-1,
         path=path,

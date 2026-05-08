@@ -18,10 +18,12 @@ from astropy.table import Table
 from catsim import RacsLow3, RacsLow3Config
 from catsim.racs import LOW3_TEMPERATURE_EPSILON_FLOOR
 from dipoleska.models.multipole import Multipole
+from dipoleska.models.dipole import Dipole
 from dipoleutils.utils.data_loader import DataLoader
 from dipoleutils.utils.mask import Masker
 from dipoleutils.utils.plotting import smooth_map
 from dipoleutils.utils.samples import CatalogueToMap
+from dipolesbi.tools.posterior_samples import normalise_nested_column_name
 
 
 ROUND_ID = None
@@ -46,6 +48,8 @@ DEFAULT_VISUAL_FLUX_MIN_MJY = 15.0
 DEFAULT_VISUAL_FLUX_MAX_MJY = 1000.0
 ASKAP_UTC_OFFSET_HOURS = 8.0
 DIPOLE_UTILS_ROOT = Path.home() / "Documents" / "dipole-utils"
+MAP_MIN = None
+MAP_MAX = None
 
 _RUN_PATTERN = re.compile(r"samples_rnd-(\d+)\.csv$")
 
@@ -96,6 +100,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "Fit a dipole to the corrected density map using the point-by-point "
             "likelihood and make a corner plot plus Galactic sky posterior."
         ),
+    )
+    parser.add_argument(
+        "--map-min",
+        type=float,
+        default=MAP_MIN
+    )
+    parser.add_argument(
+        "--map-max",
+        type=float,
+        default=MAP_MAX
     )
     return parser
 
@@ -166,14 +180,16 @@ def _build_temperature_grid() -> np.ndarray:
 
 def _draw_posterior_lines(samples_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     nested = nested_read_csv(samples_path)
+    available_columns = {normalise_nested_column_name(column) for column in nested.columns}
     required_columns = {"temp_slope", "logL"}
-    missing = required_columns.difference(nested.columns)
+    missing = required_columns.difference(available_columns)
     if missing:
         raise KeyError(f"Missing required posterior columns in {samples_path}: {sorted(missing)}")
 
     draws = nested.sample(n=POSTERIOR_SAMPLES, replace=True, random_state=SEED)
     slopes = np.asarray(draws["temp_slope"], dtype=np.float64)
-    if "temp_pivot_c" in draws.columns:
+    draw_columns = {normalise_nested_column_name(column) for column in draws.columns}
+    if "temp_pivot_c" in draw_columns:
         pivots = np.asarray(draws["temp_pivot_c"], dtype=np.float64)
     else:
         pivots = np.full(slopes.shape, DEFAULT_TEMP_PIVOT_C, dtype=np.float64)
@@ -316,9 +332,14 @@ def _build_visual_maps(
     flux_min: float,
     flux_max: float | None,
     nside: int,
-) -> dict[str, np.ndarray]:
+) -> dict[str, np.ndarray | Table]:
     processor = CatalogueToMap(catalogue.copy())
     processor.make_cut(flux_column, flux_min, flux_max)
+    processor.crossmatch_local_sources(
+        'equatorial',
+        radius=5,
+        source_name_A_column='Source_ID'
+    )
     cut_catalogue = processor.get_catalogue()
 
     flux = np.asarray(cut_catalogue[flux_column], dtype=np.float64)
@@ -373,6 +394,9 @@ def _build_visual_maps(
     masker.mask_a_team_sources(radius_deg=3, source_names=["Cygnus A"])
     masker.mask_a_team_sources(radius_deg=2)
     masker.mask_equatorial_poles(north_radius=42)
+    masker.mask_a_team_sources(radius_deg=7, source_names=['LMC', 'SMC'])
+    masker.mask_equatorial_poles(south_radius=5)
+    masker.mask_slice(42, -78, 9)
     (
         masked_density_map,
         masked_flux_map,
@@ -393,6 +417,7 @@ def _build_visual_maps(
         "psf_map": np.asarray(masked_psf_map, dtype=np.float64),
         "time_hours": np.asarray(cut_catalogue["Start_time_hours"], dtype=np.float64),
         "source_temperatures": np.asarray(cut_catalogue["Temperature_C"], dtype=np.float64),
+        "catalogue": cut_catalogue
     }
 
 
@@ -426,7 +451,13 @@ def _save_density_relationship_plot(
     return output_path
 
 
-def _save_smoothed_map(output_path: Path, density_map: np.ndarray, title: str) -> Path:
+def _save_smoothed_map(
+        output_path: Path, 
+        density_map: np.ndarray, 
+        title: str, 
+        map_min: float, 
+        map_max: float
+) -> Path:
     plt.figure(figsize=(9, 6))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
@@ -435,13 +466,22 @@ def _save_smoothed_map(output_path: Path, density_map: np.ndarray, title: str) -
             title=title,
             unit="sources per pixel",
             cmap="viridis",
+            min=map_min,
+            max=map_max,
+            # angle_scale=0.05
         )
     plt.gcf().savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close(plt.gcf())
     return output_path
 
 
-def _save_smoothed_map_galactic(output_path: Path, density_map: np.ndarray, title: str) -> Path:
+def _save_smoothed_map_galactic(
+        output_path: Path, 
+        density_map: np.ndarray, 
+        title: str,
+        map_min: float, 
+        map_max: float
+) -> Path:
     plt.figure(figsize=(9, 6))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
@@ -451,6 +491,9 @@ def _save_smoothed_map_galactic(output_path: Path, density_map: np.ndarray, titl
             unit="sources per pixel",
             cmap="viridis",
             coord=["C", "G"],
+            min=map_min,
+            max=map_max,
+            # angle_scale=0.05
         )
     plt.gcf().savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close(plt.gcf())
@@ -498,6 +541,8 @@ def _save_density_difference_map_galactic(
 
 def _run_visual_correction(
     run_dir: Path,
+    map_min: float,
+    map_max: float,
     slope: float,
     pivot_c: float,
     intercept: float,
@@ -562,21 +607,29 @@ def _run_visual_correction(
             run_dir / "racs_low3_density_uncorrected.png",
             original_maps["density_map"],
             "Uncorrected RACS-low3 density map",
+            map_min,
+            map_max
         ),
         "original_sky_map_galactic": _save_smoothed_map_galactic(
             run_dir / "racs_low3_density_uncorrected_galactic.png",
             original_maps["density_map"],
             "Uncorrected RACS-low3 density map (Galactic)",
+            map_min,
+            map_max
         ),
         "corrected_sky_map": _save_smoothed_map(
             run_dir / "racs_low3_density_corrected.png",
             corrected_maps["density_map"],
             "Temperature-corrected RACS-low3 density map",
+            map_min,
+            map_max
         ),
         "corrected_sky_map_galactic": _save_smoothed_map_galactic(
             run_dir / "racs_low3_density_corrected_galactic.png",
             corrected_maps["density_map"],
             "Temperature-corrected RACS-low3 density map (Galactic)",
+            map_min,
+            map_max
         ),
         "difference_sky_map": _save_density_difference_map(
             run_dir / "racs_low3_density_difference.png",
@@ -593,11 +646,16 @@ def _run_visual_correction(
 
 
 def _fit_corrected_dipole_and_plot(corrected_density_map: np.ndarray):
-    model = Multipole(
+    
+    model = Dipole(
         density_map=np.asarray(corrected_density_map, dtype=np.float64),
-        likelihood="point",
-        ells=[1,2]
+        likelihood="general_poisson"
     )
+    # model = Multipole(
+    #     density_map=np.asarray(corrected_density_map, dtype=np.float64),
+    #     likelihood="point",
+    #     ells=[1]
+    # )
     model.run_nested_sampling(step=True)
     with warnings.catch_warnings():
         warnings.filterwarnings(
@@ -646,9 +704,12 @@ def main() -> None:
 
     visual_outputs: dict[str, Path] = {}
     corrected_density_map: np.ndarray | None = None
+    corrected_maps = None
     if args.apply_visual_correction:
         visual_outputs = _run_visual_correction(
             run_dir=run_dir,
+            map_min=args.map_min,
+            map_max=args.map_max,
             slope=central_slope,
             pivot_c=central_pivot,
             intercept=central_intercept,
@@ -675,21 +736,23 @@ def main() -> None:
 
     dipole_model: Dipole | None = None
     if args.fit_corrected_dipole:
-        if corrected_density_map is None:
-            corrected_catalogue = _build_corrected_catalogue(
-                _load_low3_catalogue_with_temperature(),
-                slope=central_slope,
-                pivot_c=central_pivot,
-                intercept=central_intercept,
-            )
-            corrected_maps = _build_visual_maps(
-                corrected_catalogue,
-                flux_column="Total_flux_temperature_corrected",
-                flux_min=float(args.visual_flux_min),
-                flux_max=None if args.visual_flux_max is None else float(args.visual_flux_max),
-                nside=int(args.visual_nside),
-            )
-            corrected_density_map = corrected_maps["density_map"]
+        assert corrected_maps is not None
+        # if corrected_density_map is None:
+            # corrected_catalogue = _build_corrected_catalogue(
+            #     _load_low3_catalogue_with_temperature(),
+            #     slope=central_slope,
+            #     pivot_c=central_pivot,
+            #     intercept=central_intercept,
+            # )
+            # corrected_maps = _build_visual_maps(
+            #     corrected_catalogue,
+            #     flux_column="Total_flux_temperature_corrected",
+            #     flux_min=float(args.visual_flux_min),
+            #     flux_max=None if args.visual_flux_max is None else float(args.visual_flux_max),
+            #     nside=int(args.visual_nside),
+            # )
+        corrected_density_map = corrected_maps["density_map"]
+        plt.close('all')
         dipole_model = _fit_corrected_dipole_and_plot(corrected_density_map)
 
     print(f"run_dir={run_dir}")
@@ -710,9 +773,9 @@ def main() -> None:
         for key, path in visual_outputs.items():
             print(f"{key}_output_path={path}")
     if dipole_model is not None:
-        print("dipole_fit_likelihood=point")
         print(f"dipole_fit_n_samples={len(dipole_model.samples)}")
 
+    return corrected_maps
 
 if __name__ == "__main__":
-    main()
+    corrected_maps = main()
