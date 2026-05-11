@@ -44,7 +44,7 @@ ALPHA_MEAN = 0.8
 ALPHA_SIGMA = 0.2
 FRACTIONAL_ERROR_FLUX_MIN_MJY = 10.0
 DEFAULT_TEMP_PIVOT_C = 25.0
-DEFAULT_VISUAL_FLUX_MIN_MJY = 15.0
+DEFAULT_VISUAL_FLUX_MIN_MJY = 25.0
 DEFAULT_VISUAL_FLUX_MAX_MJY = 1000.0
 ASKAP_UTC_OFFSET_HOURS = 8.0
 DIPOLE_UTILS_ROOT = Path.home() / "Documents" / "dipole-utils"
@@ -394,9 +394,13 @@ def _build_visual_maps(
     masker.mask_a_team_sources(radius_deg=3, source_names=["Cygnus A"])
     masker.mask_a_team_sources(radius_deg=2)
     masker.mask_equatorial_poles(north_radius=42)
-    masker.mask_a_team_sources(radius_deg=7, source_names=['LMC', 'SMC'])
-    masker.mask_equatorial_poles(south_radius=5)
-    masker.mask_slice(42, -78, 9)
+
+    # integer deg point which removes over-densities
+    masker.mask_a_team_sources(radius_deg=13, source_names=['LMC']) 
+    masker.mask_a_team_sources(radius_deg=8, source_names=['SMC'])
+    # masker.mask_a_team_sources(radius_deg=7, source_names=['LMC', 'SMC'])
+    # masker.mask_equatorial_poles(south_radius=5)
+    # masker.mask_slice(42, -78, 9)
     (
         masked_density_map,
         masked_flux_map,
@@ -779,3 +783,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     corrected_maps = main()
+    dmap = corrected_maps['density_map']
+    matplotlib.use('TkAgg')
