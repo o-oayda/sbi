@@ -1,5 +1,6 @@
 import argparse
 from types import MethodType
+from typing import Literal
 from catsim import RacsLow3, RacsLow3Config
 from catsim.utils.healsphere import downgrade_ignore_nan
 from dipoleutils.utils.samples import CatalogueToMap
@@ -82,7 +83,7 @@ def _build_mask(nside: int) -> np.ndarray:
 def build_prior_and_reference_theta(
     model: RacsLow3,
     chosen_model: str = FREE_TEMP_PIVOT_MODEL,
-    simulate_clustering: bool = False,
+    simulate_clustering: None | Literal['geometric', 'poisson'] = None,
 ) -> tuple[DipolePriorNP, dict[str, float], float]:
     prior = DipolePriorNP(
         mean_count_range=[6.2, 6.8],
@@ -100,20 +101,32 @@ def build_prior_and_reference_theta(
         dist_type='Uniform'
     )
     if simulate_clustering:
-        prior.add_prior(
-            'pclus',
-            simulator_kwarg='p_clus',
-            low=0,
-            high=1,
-            dist_type='Uniform'
-        )
-        prior.add_prior(
-            'pstop',
-            simulator_kwarg='clus_stop_prob',
-            low=0.4,
-            high=1,
-            dist_type='Uniform'
-        )
+        if simulate_clustering == 'geometric':
+            prior.add_prior(
+                'pclus',
+                simulator_kwarg='p_clus',
+                low=0,
+                high=1,
+                dist_type='Uniform'
+            )
+            prior.add_prior(
+                'pstop',
+                simulator_kwarg='clus_stop_prob',
+                low=0.4,
+                high=1,
+                dist_type='Uniform'
+            )
+        elif simulate_clustering == 'poisson':
+            prior.add_prior(
+                'lclus',
+                simulator_kwarg='lambda_clus',
+                low=0,
+                high=5,
+                dist_type='Uniform'
+            )
+        else:
+            raise ValueError(f'{simulate_clustering} not recognised.')
+
     # prior.add_prior(
     #     short_name='eta',
     #     simulator_kwarg='fractional_error_eta',
@@ -375,7 +388,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--simulate_clustering",
-        action="store_true",
+        type=str,
         help="Use clustering model to represent extended sources."
     )
     args = parser.parse_args()
@@ -383,11 +396,17 @@ if __name__ == "__main__":
     modes = _parse_modes(args.mode, parser)
     mask = _build_mask(args.nside)
 
+    if not args.simulate_clustering:
+        clus_model_cfg = 'geometric'
+    else:
+        clus_model_cfg = args.simulate_clustering
+
     config = RacsLow3Config(
         flux_min=args.flux_min,
         nside=args.nside,
         chunk_size=args.chunk_size,
         use_float32=False,
+        cluster_count_model=clus_model_cfg,
         downscale_nside=args.downscale_nside,
         store_final_samples=True,
         alpha_mean=args.alpha_mean,
@@ -412,7 +431,6 @@ if __name__ == "__main__":
         chosen_model=args.model,
         simulate_clustering=args.simulate_clustering
     )
-    print(temp_pivot)
     simulator_wrapper = make_simulator_wrapper(
         model,
         chosen_model=args.model,
