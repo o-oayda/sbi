@@ -40,6 +40,68 @@ def normalise_nested_column_name(column: object) -> str:
     return str(column)
 
 
+def _validate_nested_samples_csv(samples_path: Path | str) -> Path:
+    path = Path(samples_path).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(f"Nested sample CSV {path} not found.")
+    if path.suffix.lower() != ".csv":
+        raise ValueError(f"Nested sample path must be a CSV file, got {path}.")
+    return path
+
+
+def sample_posterior_csv(
+    samples_path: Path | str,
+    n_draws: int,
+    *,
+    replace: bool = True,
+    random_state: int | np.random.Generator | None = None,
+) -> Any:
+    """Load nested samples and draw posterior samples with anesthetic.
+
+    ``samples_path`` is used as given after validating that it is an existing
+    CSV file. The returned object is the rich DataFrame-like anesthetic sample
+    output.
+    """
+    if n_draws <= 0:
+        raise ValueError("n_draws must be positive.")
+    nested = nested_read_csv(_validate_nested_samples_csv(samples_path))
+    return nested.sample(n=n_draws, replace=replace, random_state=random_state)
+
+
+def _posterior_parameter_columns(draws) -> list[Any]:
+    column_names = [normalise_nested_column_name(column) for column in draws.columns]
+    parameter_names = set(default_parameter_columns(column_names))
+    parameter_columns = [
+        column
+        for column in draws.columns
+        if normalise_nested_column_name(column) in parameter_names
+    ]
+    if not parameter_columns:
+        raise ValueError("No posterior parameter columns found in nested sample CSV.")
+    return parameter_columns
+
+
+def format_posterior_samples(
+    draws,
+    *,
+    output: Literal["array", "dict"] = "array",
+) -> NDArray[np.float64] | dict[str, NDArray[np.float64]]:
+    """Convert rich anesthetic posterior draws to simpler data structures."""
+    parameter_columns = _posterior_parameter_columns(draws)
+    parameter_draws = draws.loc[:, parameter_columns]
+    if output == "array":
+        return parameter_draws.to_numpy(dtype=np.float64)
+    if output == "dict":
+        return {
+            normalise_nested_column_name(column): np.asarray(
+                parameter_draws.loc[:, column],
+                dtype=np.float64,
+            )
+            for column in parameter_columns
+        }
+    raise ValueError("output must be 'array' or 'dict'.")
+
+
 def _normalise_coordinates_argument(
     coordinates: Sequence[str] | None,
 ) -> list[str] | None:
