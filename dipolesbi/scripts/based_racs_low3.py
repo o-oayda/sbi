@@ -74,8 +74,8 @@ def _build_mask(nside: int) -> np.ndarray:
     masker.mask_equatorial_poles(north_radius=42)
 
     masker.mask_a_team_sources(radius_deg=3, source_names=['Cygnus A'])
-    masker.mask_a_team_sources(radius_deg=15, source_names=['LMC'])
-    masker.mask_a_team_sources(radius_deg=10, source_names=['SMC'])
+    masker.mask_a_team_sources(radius_deg=13, source_names=['LMC'])
+    masker.mask_a_team_sources(radius_deg=8, source_names=['SMC'])
 
     maskmap = masker.get_mask_map()
     return hp.reorder(maskmap, r2n=True)
@@ -462,6 +462,6 @@ if __name__ == "__main__":
             nflow_config=scenario.flow,
             train_config=scenario.training,
             use_ui=not args.no_ui,
-            model_config=RacsLow3Config
+            model_config=config
         )
         inferer.run()
