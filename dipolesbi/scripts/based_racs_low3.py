@@ -16,9 +16,9 @@ from dipoleutils.utils.data_loader import DataLoader
 from dipoleutils.utils.mask import Masker
 import matplotlib.pyplot as plt
 
-FREE_TEMP_PIVOT_MODEL = "free_temp_pivot"
-FIXED_TEMP_PIVOT_25C_MODEL = "fixed_temp_pivot_25c"
-MODEL_CHOICES = [FREE_TEMP_PIVOT_MODEL, FIXED_TEMP_PIVOT_25C_MODEL]
+# FREE_TEMP_PIVOT_MODEL = "free_temp_pivot"
+# FIXED_TEMP_PIVOT_25C_MODEL = "fixed_temp_pivot_25c"
+# MODEL_CHOICES = [FREE_TEMP_PIVOT_MODEL, FIXED_TEMP_PIVOT_25C_MODEL]
 
 
 def _parse_modes(raw_modes: list[str] | None, parser: argparse.ArgumentParser) -> list[str]:
@@ -82,11 +82,11 @@ def _build_mask(nside: int) -> np.ndarray:
 
 def build_prior_and_reference_theta(
     model: RacsLow3,
-    chosen_model: str = FREE_TEMP_PIVOT_MODEL,
+    # chosen_model: str = FREE_TEMP_PIVOT_MODEL,
     simulate_clustering: None | Literal['geometric', 'poisson'] = None,
-) -> tuple[DipolePriorNP, dict[str, float], float]:
+) -> tuple[DipolePriorNP, dict[str, float]]:
     prior = DipolePriorNP(
-        mean_count_range=[6.2, 6.8],
+        mean_count_range=[5.6, 6.8],
         speed_range=[0, 8],
     )
     prior.change_kwarg(
@@ -94,10 +94,10 @@ def build_prior_and_reference_theta(
         new_kwarg="log10_n_initial_samples",
     )
     prior.add_prior(
-        short_name='a',
-        simulator_kwarg='temp_slope',
-        low=-1.,
-        high=0,
+        short_name='beta',
+        simulator_kwarg='temp_beta',
+        low=0.,
+        high=0.05,
         dist_type='Uniform'
     )
     if simulate_clustering:
@@ -121,7 +121,7 @@ def build_prior_and_reference_theta(
                 'lclus',
                 simulator_kwarg='lambda_clus',
                 low=0,
-                high=5,
+                high=8,
                 dist_type='Uniform'
             )
         else:
@@ -135,53 +135,56 @@ def build_prior_and_reference_theta(
     #     dist_type='Uniform'
     # )
 
-    temp_slope_theta0 = -0.2
-    if chosen_model == FREE_TEMP_PIVOT_MODEL:
-        prior.add_prior(
-            short_name='T0',
-            simulator_kwarg='temp_pivot_c',
-            low=10,
-            high=40,
-            dist_type='Uniform'
-        )
-        temp_pivot_theta0 = np.nanmin(model.temperature_map) + (
-            np.nanmax(model.temperature_map) - np.nanmin(model.temperature_map)
-        ) / 2
-    elif chosen_model == FIXED_TEMP_PIVOT_25C_MODEL:
-        temp_pivot_theta0 = 25.0
-    else:
-        raise ValueError(f"Unknown RACS-low3 model: {chosen_model}")
+    temp_beta_theta0 = 0.02
+    # if chosen_model == FREE_TEMP_PIVOT_MODEL:
+    #     prior.add_prior(
+    #         short_name='T0',
+    #         simulator_kwarg='temp_pivot_c',
+    #         low=10,
+    #         high=40,
+    #         dist_type='Uniform'
+    #     )
+    #     temp_pivot_theta0 = np.nanmin(model.temperature_map) + (
+    #         np.nanmax(model.temperature_map) - np.nanmin(model.temperature_map)
+    #     ) / 2
+    # elif chosen_model == FIXED_TEMP_PIVOT_25C_MODEL:
+    #     temp_pivot_theta0 = 25.0
+    # else:
+    #     raise ValueError(f"Unknown RACS-low3 model: {chosen_model}")
 
     theta_0 = {
         "log10_n_initial_samples": 6.65,
         "observer_speed": 1.0,
         "dipole_longitude": 264.021,
         "dipole_latitude": 48.253,
-        "temp_slope": temp_slope_theta0,
-        "temp_pivot_c": temp_pivot_theta0,
-        "temp_intercept": -temp_slope_theta0 + 1,
+        "temp_beta": temp_beta_theta0,
+        # "temp_pivot_c": temp_pivot_theta0,
+        # "temp_intercept": -temp_beta_theta0 + 1,
         "p_clus": 0.,
         "clus_stop_prob": 1.
         # "fractional_error_eta": 20.
     }
-    return prior, theta_0, temp_pivot_theta0
+    if simulate_clustering == 'poisson':
+        theta_0['lambda_clus'] = 0.
+
+    return prior, theta_0#, temp_pivot_theta0
 
 
 def make_simulator_wrapper(
     model: RacsLow3,
-    chosen_model: str = FREE_TEMP_PIVOT_MODEL,
+    # chosen_model: str = FREE_TEMP_PIVOT_MODEL,
     native_output: bool = False,
 ):
     def simulator_wrapper(
         rng_key: NPKey | None = None,
         **kwargs,
     ) -> tuple[np.ndarray, np.ndarray]:
-        temp_slope = kwargs['temp_slope']
-        kwargs['temp_intercept'] = -temp_slope + 1
-        if chosen_model == FIXED_TEMP_PIVOT_25C_MODEL:
-            kwargs['temp_pivot_c'] = 25.0
-        elif chosen_model != FREE_TEMP_PIVOT_MODEL:
-            raise ValueError(f"Unknown RACS-low3 model: {chosen_model}")
+        # temp_slope = kwargs['temp_slope']
+        # kwargs['temp_intercept'] = -temp_slope + 1
+        # if chosen_model == FIXED_TEMP_PIVOT_25C_MODEL:
+        #     kwargs['temp_pivot_c'] = 25.0
+        # elif chosen_model != FREE_TEMP_PIVOT_MODEL:
+        #     raise ValueError(f"Unknown RACS-low3 model: {chosen_model}")
         if native_output:
             return _generate_dipole_native(model, rng_key=rng_key, **kwargs)
         return model.generate_dipole(rng_key=rng_key, **kwargs)
@@ -325,14 +328,14 @@ if __name__ == "__main__":
         required=True,
         help="Directory to save outputs into.",
     )
-    parser.add_argument(
-        "--model",
-        choices=MODEL_CHOICES,
-        default=FREE_TEMP_PIVOT_MODEL,
-        help=(
-            "Choose whether temp_pivot_c is inferred freely or fixed by the simulator."
-        ),
-    )
+    # parser.add_argument(
+    #     "--model",
+    #     choices=MODEL_CHOICES,
+    #     default=FREE_TEMP_PIVOT_MODEL,
+    #     help=(
+    #         "Choose whether temp_pivot_c is inferred freely or fixed by the simulator."
+    #     ),
+    # )
     parser.add_argument(
         "--ssnle_seed",
         type=int,
@@ -426,14 +429,14 @@ if __name__ == "__main__":
     if observed_count <= 0:
         raise ValueError("Observed RACS-low3 map has zero total counts after masking/cuts.")
 
-    prior, theta_0, temp_pivot = build_prior_and_reference_theta(
+    prior, theta_0 = build_prior_and_reference_theta(
         model,
-        chosen_model=args.model,
+        # chosen_model=args.model,
         simulate_clustering=args.simulate_clustering
     )
     simulator_wrapper = make_simulator_wrapper(
         model,
-        chosen_model=args.model,
+        # chosen_model=args.model,
     )
 
     for mode in modes:
