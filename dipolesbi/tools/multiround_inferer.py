@@ -1,6 +1,8 @@
 import os
 import time
-from typing import Callable, Literal, Optional, cast
+from dataclasses import asdict, is_dataclass
+from pprint import pformat
+from typing import Any, Callable, Literal, Optional, cast
 from anesthetic import NestedSamples
 from blackjax.types import PRNGKey
 from getdist import MCSamples, plots
@@ -13,7 +15,6 @@ import matplotlib; matplotlib.use('Agg') # stop async errors when calling plots 
 from matplotlib import pyplot as plt
 import healpy as hp
 from dipolesbi.tools.configs import (
-    ModelConfig,
     MultiRoundInfererConfig, 
     NeuralFlowConfig, 
     TrainingConfig, 
@@ -23,6 +24,7 @@ from dipolesbi.tools.dataloader import split_train_val_dict
 from dipolesbi.tools.jax_ns import JaxNestedSampler
 from dipolesbi.tools.dataloader import healpix_map_dataset, healpix_map_dataset_idx
 from dipolesbi.tools.neural_flows import NeuralFlow
+from dipolesbi.tools.model_config_io import save_model_config
 from dipolesbi.tools.np_rngkey import NPKey, npkey_from_jax
 from dipolesbi.tools.priors_np import DipolePriorNP
 from dipolesbi.tools.ui import MultiRoundInfererUI, NullMultiRoundInfererUI
@@ -30,6 +32,18 @@ from dipolesbi.tools.utils import HidePrints, load_dict_npz, save_dict_npz
 from jax import lax
 import datetime
 from corner import corner
+
+
+def _format_model_config_for_log(model_config: Any) -> str:
+    if model_config is None:
+        return "None"
+    if is_dataclass(model_config) and not isinstance(model_config, type):
+        config_type = type(model_config)
+        return (
+            f"{config_type.__module__}.{config_type.__name__}:\n"
+            f"{pformat(asdict(model_config), sort_dicts=True)}"
+        )
+    return str(model_config)
 
 
 class MultiRoundInferer:
@@ -46,7 +60,7 @@ class MultiRoundInferer:
             nflow_config: NeuralFlowConfig,
             transform_config: TransformConfig,
             train_config: TrainingConfig = TrainingConfig(),
-            model_config: Optional[ModelConfig] = None,
+            model_config: Optional[Any] = None,
             true_logl: Optional[Callable[[dict[str, jnp.ndarray]], jnp.ndarray]] = None,
             use_ui: bool = True
     ) -> None:
@@ -401,9 +415,21 @@ class MultiRoundInferer:
             f.write("TransformConfig:\n")
             f.write(str(self.transform_config) + "\n\n")
             f.write("ModelConfig:\n")
-            f.write(str(self.model_config) + "\n\n")
+            f.write(_format_model_config_for_log(self.model_config) + "\n\n")
             f.write("PriorConfig:\n")
             f.write(str(self.initial_proposal) + "\n")
+        if (
+            self.model_config is not None
+            and is_dataclass(self.model_config)
+            and not isinstance(self.model_config, type)
+        ):
+            try:
+                save_model_config(
+                    self.model_config,
+                    os.path.join(self.mr_config.plot_save_dir, "model_config.json"),
+                )
+            except TypeError:
+                pass
 
     def _to_jnp_array(self, theta: dict[str, jnp.ndarray]) -> jnp.ndarray:
         arrays = [theta[k] for k in theta.keys()]
