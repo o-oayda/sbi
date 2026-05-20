@@ -49,6 +49,15 @@ def _validate_nested_samples_csv(samples_path: Path | str) -> Path:
     return path
 
 
+def _validate_posterior_samples_npz(samples_path: Path | str) -> Path:
+    path = Path(samples_path).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(f"Posterior sample NPZ {path} not found.")
+    if path.suffix.lower() != ".npz":
+        raise ValueError(f"Posterior sample path must be an NPZ file, got {path}.")
+    return path
+
+
 def sample_posterior_csv(
     samples_path: Path | str,
     n_draws: int,
@@ -66,6 +75,44 @@ def sample_posterior_csv(
         raise ValueError("n_draws must be positive.")
     nested = nested_read_csv(_validate_nested_samples_csv(samples_path))
     return nested.sample(n=n_draws, replace=replace, random_state=random_state)
+
+
+def sample_posterior_npz(
+    samples_path: Path | str,
+    n_draws: int,
+    *,
+    replace: bool = True,
+    random_state: int | np.random.Generator | None = None,
+) -> dict[str, NDArray[np.float64]]:
+    """Load NPZ posterior samples and draw rows consistently across parameters."""
+    if n_draws <= 0:
+        raise ValueError("n_draws must be positive.")
+
+    rng = np.random.default_rng(random_state)
+    with np.load(_validate_posterior_samples_npz(samples_path), allow_pickle=False) as npz:
+        samples = {
+            name: np.asarray(npz[name], dtype=np.float64).reshape(-1)
+            for name in npz.files
+        }
+
+    if not samples:
+        raise ValueError("Posterior sample NPZ contains no arrays.")
+
+    lengths = {name: values.shape[0] for name, values in samples.items()}
+    n_samples = next(iter(lengths.values()))
+    inconsistent = {
+        name: length for name, length in lengths.items() if length != n_samples
+    }
+    if inconsistent:
+        raise ValueError(
+            "Posterior sample NPZ arrays must all have the same leading length; "
+            f"got {inconsistent}."
+        )
+    if n_samples == 0:
+        raise ValueError("Posterior sample NPZ contains zero samples.")
+
+    indices = rng.choice(n_samples, size=n_draws, replace=replace)
+    return {name: values[indices] for name, values in samples.items()}
 
 
 def _posterior_parameter_columns(draws) -> list[Any]:
@@ -87,6 +134,20 @@ def format_posterior_samples(
     output: Literal["array", "dict"] = "array",
 ) -> NDArray[np.float64] | dict[str, NDArray[np.float64]]:
     """Convert rich anesthetic posterior draws to simpler data structures."""
+    if isinstance(draws, Mapping):
+        sample_dict = {
+            str(name): np.asarray(values, dtype=np.float64).reshape(-1)
+            for name, values in draws.items()
+        }
+        columns = default_parameter_columns(tuple(sample_dict.keys()))
+        if not columns:
+            raise ValueError("No posterior parameter columns found in samples.")
+        if output == "array":
+            return np.column_stack([sample_dict[column] for column in columns])
+        if output == "dict":
+            return {column: sample_dict[column] for column in columns}
+        raise ValueError("output must be 'array' or 'dict'.")
+
     parameter_columns = _posterior_parameter_columns(draws)
     parameter_draws = draws.loc[:, parameter_columns]
     if output == "array":

@@ -9,6 +9,7 @@ __all__ = [
     "format_posterior_samples",
     "load_model_config",
     "sample_posterior_csv",
+    "sample_posterior_npz",
     "save_corner_plot",
     "save_model_config",
 ]
@@ -28,6 +29,7 @@ if TYPE_CHECKING:  # pragma: no cover
         PosteriorSamplesInterface,
         format_posterior_samples,
         sample_posterior_csv,
+        sample_posterior_npz,
         save_corner_plot,
     )
 
