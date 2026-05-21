@@ -33,6 +33,9 @@ def _parse_modes(raw_modes: list[str] | None, parser: argparse.ArgumentParser) -
 def _build_real_sample(
     model: RacsLow3,
     flux_min: float,
+    append_native_count_hist: bool = False,
+    hist_max_count: int = 30,
+    hist_eps: float = 1e-6,
 ) -> tuple[np.ndarray, np.ndarray]:
     cat = DataLoader("racs", "low3").load()
     c2map = CatalogueToMap(cat)
@@ -52,6 +55,20 @@ def _build_real_sample(
     plt.savefig('racslow3.png')
     plt.close()
 
+    if append_native_count_hist:
+        if model.downscale_nside is None:
+            raise ValueError(
+                "--append_native_count_hist requires --downscale_nside so the "
+                "map part of the hybrid target is well-defined."
+            )
+        return _build_hybrid_sample_from_native(
+            density_map,
+            mask,
+            downscale_nside=model.downscale_nside,
+            hist_max_count=hist_max_count,
+            hist_eps=hist_eps,
+        )
+
     if model.downscale_nside is None:
         return density_map, mask
 
@@ -65,6 +82,65 @@ def _build_real_sample(
     coarse_map = coarse_map.copy()
     coarse_map[~coarse_mask] = np.nan
     return coarse_map, coarse_mask
+
+
+def _native_count_hist_features(
+    native_map: np.ndarray,
+    native_mask: np.ndarray,
+    max_count: int,
+    eps: float,
+) -> np.ndarray:
+    if max_count < 1:
+        raise ValueError("hist_max_count must be at least 1.")
+    if eps <= 0:
+        raise ValueError("hist_eps must be positive.")
+    if native_map.shape != native_mask.shape:
+        raise ValueError("native_map and native_mask must have matching shapes.")
+
+    valid = native_mask.astype(bool, copy=False) & np.isfinite(native_map)
+    if not np.any(valid):
+        raise ValueError("Cannot build count histogram with no unmasked native pixels.")
+
+    counts = np.asarray(native_map[valid])
+    rounded_counts = np.rint(counts)
+    if np.any(rounded_counts < 0):
+        raise ValueError("Native count histogram received negative counts.")
+
+    # implements hist ceiling, k >= max_count
+    bin_index = np.minimum(rounded_counts.astype(np.int64), max_count)
+    hist = np.bincount(bin_index, minlength=max_count + 1)[: max_count + 1]
+    probabilities = hist.astype(np.float64) / float(hist.sum())
+    return np.log(probabilities + eps).astype(np.float32)
+
+
+def _build_hybrid_sample_from_native(
+    native_map: np.ndarray,
+    native_mask: np.ndarray,
+    downscale_nside: int,
+    hist_max_count: int,
+    hist_eps: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    coarse_map, coarse_mask = downgrade_ignore_nan(
+        native_map,
+        native_mask,
+        downscale_nside,
+    )
+    coarse_map = coarse_map.astype(np.float32, copy=False)
+    coarse_mask = coarse_mask.astype(np.bool_, copy=False)
+    coarse_map = coarse_map.copy()
+    coarse_map[~coarse_mask] = np.nan
+
+    hist_features = _native_count_hist_features(
+        native_map,
+        native_mask,
+        max_count=hist_max_count,
+        eps=hist_eps,
+    )
+    hist_mask = np.ones(hist_features.shape, dtype=np.bool_)
+
+    hybrid = np.concatenate([coarse_map, hist_features]).astype(np.float32, copy=False)
+    hybrid_mask = np.concatenate([coarse_mask, hist_mask]).astype(np.bool_, copy=False)
+    return hybrid, hybrid_mask
 
 def _build_mask(nside: int) -> np.ndarray:
     masker = Masker(np.ones(hp.nside2npix(nside)), coordinate_system='equatorial')
@@ -174,6 +250,9 @@ def make_simulator_wrapper(
     model: RacsLow3,
     # chosen_model: str = FREE_TEMP_PIVOT_MODEL,
     native_output: bool = False,
+    append_native_count_hist: bool = False,
+    hist_max_count: int = 30,
+    hist_eps: float = 1e-6,
 ):
     def simulator_wrapper(
         rng_key: NPKey | None = None,
@@ -185,6 +264,24 @@ def make_simulator_wrapper(
         #     kwargs['temp_pivot_c'] = 25.0
         # elif chosen_model != FREE_TEMP_PIVOT_MODEL:
         #     raise ValueError(f"Unknown RACS-low3 model: {chosen_model}")
+        if append_native_count_hist:
+            if model.downscale_nside is None:
+                raise ValueError(
+                    "append_native_count_hist requires model.downscale_nside."
+                )
+            native_map, native_mask = _generate_dipole_native(
+                model,
+                rng_key=rng_key,
+                **kwargs,
+            )
+            return _build_hybrid_sample_from_native(
+                native_map,
+                native_mask,
+                downscale_nside=model.downscale_nside,
+                hist_max_count=hist_max_count,
+                hist_eps=hist_eps,
+            )
+
         if native_output:
             return _generate_dipole_native(model, rng_key=rng_key, **kwargs)
         return model.generate_dipole(rng_key=rng_key, **kwargs)
@@ -225,6 +322,10 @@ def build_scenario(
     ssnle_seed: int,
     n_rounds: int,
     n_simulations: int,
+    map_ndim: int | None = None,
+    summary_ndim: int | None = None,
+    hist_max_count: int | None = None,
+    hist_eps: float | None = None,
 ) -> Scenario:
     prior_jax = prior.to_jax()
 
@@ -262,6 +363,10 @@ def build_scenario(
                 "n_rounds": n_rounds,
                 "likelihood_chunk_size_gb": 0.5,
                 "n_likelihood_samples": 10_000,
+                "map_ndim": map_ndim,
+                "summary_ndim": summary_ndim,
+                "native_count_hist_max_count": hist_max_count,
+                "native_count_hist_eps": hist_eps,
             },
             flow_overrides={
                 "decoder_n_neurons": 128,
@@ -394,9 +499,37 @@ if __name__ == "__main__":
         type=str,
         help="Use clustering model to represent extended sources."
     )
+    parser.add_argument(
+        "--append_native_count_hist",
+        action="store_true",
+        help=(
+            "Append log one-point native-nside count histogram features to the "
+            "downscaled map for NLE."
+        ),
+    )
+    parser.add_argument(
+        "--hist_max_count",
+        type=int,
+        default=30,
+        help=(
+            "First native count assigned to the overflow bin; explicit bins are "
+            "0..hist_max_count-1 and overflow is >= hist_max_count."
+        ),
+    )
+    parser.add_argument(
+        "--hist_eps",
+        type=float,
+        default=1e-6,
+        help="Positive epsilon added before taking log histogram probabilities.",
+    )
     args = parser.parse_args()
 
+    if args.append_native_count_hist and args.downscale_nside is None:
+        parser.error("--append_native_count_hist requires --downscale_nside.")
+
     modes = _parse_modes(args.mode, parser)
+    if args.append_native_count_hist and any(mode != "NLE" for mode in modes):
+        parser.error("--append_native_count_hist is currently supported for NLE only.")
     mask = _build_mask(args.nside)
 
     if not args.simulate_clustering:
@@ -421,11 +554,26 @@ if __name__ == "__main__":
     model = RacsLow3(config)
     model.initialise_data()
 
-    x0, mask = _build_real_sample(model, flux_min=args.flux_min)
-    effective_nside = hp.npix2nside(x0.size)
+    x0, mask = _build_real_sample(
+        model,
+        flux_min=args.flux_min,
+        append_native_count_hist=args.append_native_count_hist,
+        hist_max_count=args.hist_max_count,
+        hist_eps=args.hist_eps,
+    )
+    if args.append_native_count_hist:
+        assert args.downscale_nside is not None
+        map_ndim = hp.nside2npix(args.downscale_nside)
+        summary_ndim = args.hist_max_count + 1
+        effective_nside = args.downscale_nside
+    else:
+        map_ndim = None
+        summary_ndim = None
+        effective_nside = hp.npix2nside(x0.size)
 
 
-    observed_count = float(np.nansum(x0))
+    observed_map = x0[:map_ndim] if map_ndim is not None else x0
+    observed_count = float(np.nansum(observed_map))
     if observed_count <= 0:
         raise ValueError("Observed RACS-low3 map has zero total counts after masking/cuts.")
 
@@ -437,6 +585,9 @@ if __name__ == "__main__":
     simulator_wrapper = make_simulator_wrapper(
         model,
         # chosen_model=args.model,
+        append_native_count_hist=args.append_native_count_hist,
+        hist_max_count=args.hist_max_count,
+        hist_eps=args.hist_eps,
     )
 
     for mode in modes:
@@ -449,6 +600,10 @@ if __name__ == "__main__":
             ssnle_seed=args.ssnle_seed,
             n_rounds=args.n_rounds,
             n_simulations=args.n_simulations,
+            map_ndim=map_ndim,
+            summary_ndim=summary_ndim,
+            hist_max_count=args.hist_max_count if args.append_native_count_hist else None,
+            hist_eps=args.hist_eps if args.append_native_count_hist else None,
         )
         model_sim_wrapper = make_model_sim_wrapper(
             simulator_wrapper=simulator_wrapper,

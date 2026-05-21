@@ -217,6 +217,10 @@ class MultiRoundInfererConfig:
     likelihood_chunk_size_gb: float = 0.25
     save_round_simulations: bool = True
     round_simulation_subdir: str = 'round_simulations'
+    map_ndim: Optional[int] = None
+    summary_ndim: Optional[int] = None
+    native_count_hist_max_count: Optional[int] = None
+    native_count_hist_eps: Optional[float] = None
 
     def __post_init__(self) -> None:
         self.simulations_per_round = self.simulation_budget // self.n_rounds
@@ -230,6 +234,21 @@ class MultiRoundInfererConfig:
             assert self.n_requantisations is not None, (
                 'Supply number of requantisations when setting dequantise_data=True.'
             )
+
+        if self.map_ndim is not None and self.map_ndim <= 0:
+            raise ValueError('map_ndim must be positive when supplied.')
+        if self.summary_ndim is not None and self.summary_ndim <= 0:
+            raise ValueError('summary_ndim must be positive when supplied.')
+        if (
+            self.native_count_hist_max_count is not None
+            and self.native_count_hist_max_count < 1
+        ):
+            raise ValueError('native_count_hist_max_count must be at least 1.')
+        if (
+            self.native_count_hist_eps is not None
+            and self.native_count_hist_eps <= 0
+        ):
+            raise ValueError('native_count_hist_eps must be positive.')
 
 @dataclass(frozen=True)
 class DataTransformSpec:

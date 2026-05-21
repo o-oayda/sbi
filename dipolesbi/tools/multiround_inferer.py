@@ -34,6 +34,13 @@ import datetime
 from corner import corner
 
 
+def _is_valid_healpix_npix(npix: int) -> bool:
+    try:
+        return hp.nside2npix(hp.npix2nside(npix)) == npix
+    except Exception:
+        return False
+
+
 def _format_model_config_for_log(model_config: Any) -> str:
     if model_config is None:
         return "None"
@@ -79,7 +86,33 @@ class MultiRoundInferer:
         self.true_logl = true_logl
         self.data_ndim = self.reference_data.shape[-1]
         self.theta_ndim = initial_proposal.ndim
-        self.nside = hp.npix2nside(self.data_ndim)
+        self.map_ndim = self.mr_config.map_ndim
+        if self.map_ndim is None and _is_valid_healpix_npix(self.data_ndim):
+            self.map_ndim = self.data_ndim
+        if self.map_ndim is not None:
+            if self.map_ndim > self.data_ndim:
+                raise ValueError("map_ndim cannot exceed the target data dimension.")
+            self.nside = hp.npix2nside(self.map_ndim)
+        else:
+            self.nside = None
+        self.summary_start = self.map_ndim
+        self.summary_ndim = (
+            self.mr_config.summary_ndim
+            if self.mr_config.summary_ndim is not None
+            else (
+                self.data_ndim - self.map_ndim
+                if self.map_ndim is not None and self.map_ndim < self.data_ndim
+                else None
+            )
+        )
+        if self.summary_ndim is not None:
+            if self.map_ndim is None:
+                raise ValueError("summary_ndim requires map_ndim.")
+            expected_ndim = self.map_ndim + self.summary_ndim
+            if expected_ndim != self.data_ndim:
+                raise ValueError(
+                    "map_ndim + summary_ndim must equal reference data dimension."
+                )
 
         reference_theta = self.mr_config.reference_theta
         if reference_theta is not None:
@@ -147,6 +180,16 @@ class MultiRoundInferer:
             return self.theta_ndim
         else:
             raise Exception(f'Mode {self.mode} not recognised.')
+
+    def _map_slice(self, data: NDArray) -> NDArray:
+        if self.map_ndim is None:
+            raise ValueError("No HEALPix map dimension is configured for this data.")
+        return data[..., :self.map_ndim]
+
+    def _mask_map_slice(self, mask: NDArray[np.bool_]) -> NDArray[np.bool_]:
+        if self.map_ndim is None:
+            raise ValueError("No HEALPix map dimension is configured for this mask.")
+        return mask[..., :self.map_ndim]
 
     def run(self) -> None:
         if self.mode == 'NLE':
@@ -522,14 +565,22 @@ class MultiRoundInferer:
         )
         self.mean_samples = samples_untransformed.mean(axis=0)
         self.mean_samples[~mask[0, :]] = np.nan
+        if self.map_ndim is None:
+            self.ui.log(
+                "Skipping learned-likelihood HEALPix plot: no map dimension configured."
+            )
+            return
+
+        mean_map = self._map_slice(self.mean_samples)
+        true_mean_map = self._map_slice(true_mean_likelihood)
 
         plt.figure()
         hp.projview(
-            self.mean_samples, nest=True, graticule=True, sub=211,
+            mean_map, nest=True, graticule=True, sub=211,
             title='NLE mean P(D | theta)'
         )
         hp.projview(
-            true_mean_likelihood, nest=True, graticule=True, sub=212, 
+            true_mean_map, nest=True, graticule=True, sub=212, 
             title=(
                 'True mean P(D | theta)' if self.true_logl is not None
                 else 'Simulated D | theta_0'
