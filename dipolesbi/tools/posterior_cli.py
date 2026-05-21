@@ -654,7 +654,7 @@ def _stack_corner_titles(
         return
 
     param_labels = _parameter_label_list(reference_samples, param_columns)
-    colors = _corner_line_colors(plotter, diag_axes, len(sample_objects))
+    colors = _corner_line_colors(plotter, diag_axes, len(sample_matrices))
 
     for idx, (ax, param_label) in enumerate(zip(diag_axes, param_labels)):
         if ax is None:
