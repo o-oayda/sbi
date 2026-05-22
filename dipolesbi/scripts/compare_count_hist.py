@@ -1,22 +1,41 @@
 from catsim import RacsLow3, RacsLow3Config
 from dipolesbi.tools import sample_posterior_csv, format_posterior_samples
 from dipolesbi.tools.plotting import smooth_map
+from dipolesbi.tools.posterior_samples import sample_posterior_npz
 from dipolesbi.tools.utils import batch_simulate
-from dipolesbi.scripts.based_racs_low3 import _build_mask
+from dipolesbi.scripts.based_racs_low3 import _build_mask, _build_real_sample
 import healpy as hp
-import matplotlib; matplotlib.use('macosx')
+import matplotlib; matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
+import numpy as np
+from scipy.stats import poisson
 
 
 N_DRAWS: int = 100
 N_CPUS: int = 12
-# RUN: str = 'racs/20260517_190530_SEED0_NLE'
-RUN: str = 'racs/20260518_122920_SEED0_NLE'
+# RUN: str = 'racs/20260519_105023_SEED0_NLE' # no clustering, ln Z ~ -1018
+# RUN: str = 'racs/20260519_164312' + '_SEED0_NLE' # clustering, ln Z ~ -1008
+# RUN: str = 'racs/20260520_103733' + '_SEED0_NPE'
+RUN: str = 'racs/20260519_213520' + '_SEED0_NLE'
 ROUND: int = 14
-path_to_samples = f'{RUN}/samples_rnd-14.csv'
 
-samples = sample_posterior_csv(path_to_samples, n_draws=N_DRAWS)
+if RUN.split('_')[-1] == 'NLE':
+    path_to_samples = f'{RUN}/samples_rnd-14.csv'
+    samples = sample_posterior_csv(path_to_samples, n_draws=N_DRAWS)
+else:
+    path_to_samples = f'{RUN}/samples_rnd-14.npz'
+    samples = sample_posterior_npz(path_to_samples, n_draws=N_DRAWS)
+
 samples_fmt = format_posterior_samples(samples, output='dict')
+# samples_fmt['lambda_clus'] = 0.8 * np.ones((N_DRAWS,))
+# temp_intercept = [-samples_fmt['temp_slope'][i]+1 for i in range(len(samples_fmt['temp_slope']))]
+# samples_fmt['temp_intercept'] = temp_intercept
+single_sample = {key: val[0] for key, val in samples_fmt.items()}
+
+
+# temp intercept!!!!
+# for some reason poisson clustering model is WAY too overdispersed despite the
+# evidence being higher than a non-clustering model
 
 # need a better way to make the model config portable otherwise I'm guessing
 # at the params
@@ -37,5 +56,22 @@ config = RacsLow3Config(
 )
 model = RacsLow3(config)
 model.initialise_data()
-x, mask = model.generate_dipole(**samples_fmt)
-# x, mask = batch_simulate(samples_fmt, model.generate_dipole, n_workers=N_CPUS)
+x0, mask0 = _build_real_sample(model, 15)
+x, mask = batch_simulate(samples_fmt, model.generate_dipole, n_workers=N_CPUS)
+x_av = np.nanmean(x, axis=0)
+x_single, mask = model.generate_dipole(**single_sample)
+
+bins = np.arange(np.nanmin(x), np.nanmax(x))
+x_flat = x.flatten()
+
+plt.hist(x_flat, bins=bins, alpha=0.3, density=True, label='Simulation', color='tab:blue')
+plt.hist(x_flat, bins=bins, histtype='step', density=True, color='tab:blue')
+# plt.hist(x_single, bins, alpha=0.3, density=True, label='Single sim.')
+plt.hist(x0, bins=bins, density=True, alpha=0.3, label='Real', color='tab:orange')
+plt.hist(x0, bins=bins, density=True, histtype='step', color='tab:orange')
+
+x = bins
+y = poisson(np.nanmean(x0)).pmf(bins)
+plt.scatter(x+0.5, y, c='tab:red', label=r'$\mathrm{Pois}(\bar{\lambda}_{\mathrm{real}})$')
+plt.legend()
+plt.show()
