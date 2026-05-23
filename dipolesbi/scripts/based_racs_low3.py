@@ -1,10 +1,11 @@
 import argparse
 from types import MethodType
 from typing import Literal
-from catsim import RacsLow3, RacsLow3Config
+from catsim import RacsLow3, RacsLow3Config, RacsLow3Jax
 from catsim.utils.healsphere import downgrade_ignore_nan
 from dipoleutils.utils.samples import CatalogueToMap
 import healpy as hp
+import jax
 import numpy as np
 from dipolesbi.tools.configs import DataTransformSpec, Scenario
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
@@ -401,6 +402,95 @@ def make_model_sim_wrapper(
     return model_sim_wrapper
 
 
+def _jax_key_from_npkey(key: NPKey) -> jax.Array:
+    if isinstance(key, NPKey):
+        key_data = key._ss.generate_state(2, dtype=np.uint32)
+    else:
+        key_data = np.asarray(key, dtype=np.uint32).reshape(2)
+    return jax.device_put(key_data)
+
+
+def _batch_generate_dipole_native(
+    model: RacsLow3Jax,
+    theta: dict[str, np.ndarray],
+    key: jax.Array,
+    batch_size: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    original_downscale_nside = model.downscale_nside
+    try:
+        model.downscale_nside = None
+        return model.batch_generate_dipole(
+            theta, key, batch_size=batch_size, show_progress=True
+        )
+    finally:
+        model.downscale_nside = original_downscale_nside
+
+
+def _build_hybrid_batch_from_native(
+    native_maps: np.ndarray,
+    native_masks: np.ndarray,
+    downscale_nside: int,
+    hist_max_count: int,
+    hist_eps: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    outputs = [
+        _build_hybrid_sample_from_native(
+            native_map,
+            native_mask,
+            downscale_nside=downscale_nside,
+            hist_max_count=hist_max_count,
+            hist_eps=hist_eps,
+        )
+        for native_map, native_mask in zip(native_maps, native_masks)
+    ]
+    x = np.stack([output[0] for output in outputs], axis=0)
+    mask = np.stack([output[1] for output in outputs], axis=0)
+    return x, mask
+
+
+def make_jax_model_sim_wrapper(
+    model: RacsLow3Jax,
+    batch_size: int,
+    append_native_count_hist: bool = False,
+    hist_max_count: int = 30,
+    hist_eps: float = 1e-6,
+):
+    def model_sim_wrapper(
+        npkey: NPKey,
+        params: dict[str, np.ndarray],
+        noise: bool = True,
+        ui: MultiRoundInfererUI | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        jax_key = _jax_key_from_npkey(npkey)
+        theta = {key: np.asarray(value) for key, value in params.items()}
+
+        if append_native_count_hist:
+            if model.downscale_nside is None:
+                raise ValueError(
+                    "append_native_count_hist requires model.downscale_nside."
+                )
+            downscale_nside = model.downscale_nside
+            native_maps, native_masks = _batch_generate_dipole_native(
+                model,
+                theta,
+                jax_key,
+                batch_size=batch_size,
+            )
+            return _build_hybrid_batch_from_native(
+                native_maps,
+                native_masks,
+                downscale_nside=downscale_nside,
+                hist_max_count=hist_max_count,
+                hist_eps=hist_eps,
+            )
+
+        return model.batch_generate_dipole(
+            theta, jax_key, batch_size=batch_size, show_progress=True
+        )
+
+    return model_sim_wrapper
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -425,7 +515,18 @@ if __name__ == "__main__":
         "--n_workers",
         type=int,
         default=None,
-        help="Number of local workers to use for simulation batches.",
+        help="Number of local workers to use for NumPy simulation batches.",
+    )
+    parser.add_argument(
+        "--use_jax",
+        action="store_true",
+        help="Use catsim's JAX batched RACS-low3 simulator.",
+    )
+    parser.add_argument(
+        "--jax_batch_size",
+        type=int,
+        default=5,
+        help="Batch size passed to RacsLow3Jax.batch_generate_dipole.",
     )
     parser.add_argument(
         "--out_dir",
@@ -473,8 +574,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--chunk_size",
         type=int,
-        default=2_500_000,
-        help="Chunk size used inside the simulator.",
+        default=None,
+        help=(
+            "Chunk size used inside the simulator. Defaults to 2_500_000 for "
+            "NumPy and 140_000 for JAX."
+        ),
     )
     parser.add_argument(
         "--alpha_mean",
@@ -524,6 +628,13 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    if args.chunk_size is None:
+        args.chunk_size = 140_000 if args.use_jax else 2_500_000
+    if args.use_jax and args.n_workers is not None:
+        parser.error("--n_workers is only used by the NumPy simulator.")
+    if args.use_jax and args.jax_batch_size <= 0:
+        parser.error("--jax_batch_size must be positive.")
+
     if args.append_native_count_hist and args.downscale_nside is None:
         parser.error("--append_native_count_hist requires --downscale_nside.")
 
@@ -544,14 +655,14 @@ if __name__ == "__main__":
         use_float32=False,
         cluster_count_model=clus_model_cfg,
         downscale_nside=args.downscale_nside,
-        store_final_samples=True,
+        store_final_samples=not args.use_jax,
         alpha_mean=args.alpha_mean,
         alpha_sigma=args.alpha_sigma,
         fractional_error_flux_min_mjy=args.fractional_error_flux_min_mjy,
         paf_temperature_data_dir='/home/oliver/Documents/dipole-utils/data/paf_temps',
         mask_map=mask
     )
-    model = RacsLow3(config)
+    model = RacsLow3Jax(config) if args.use_jax else RacsLow3(config)
     model.initialise_data()
 
     x0, mask = _build_real_sample(
@@ -582,13 +693,26 @@ if __name__ == "__main__":
         # chosen_model=args.model,
         simulate_clustering=args.simulate_clustering
     )
-    simulator_wrapper = make_simulator_wrapper(
-        model,
-        # chosen_model=args.model,
-        append_native_count_hist=args.append_native_count_hist,
-        hist_max_count=args.hist_max_count,
-        hist_eps=args.hist_eps,
-    )
+    if args.use_jax:
+        model_sim_wrapper = make_jax_model_sim_wrapper(
+            model,
+            batch_size=args.jax_batch_size,
+            append_native_count_hist=args.append_native_count_hist,
+            hist_max_count=args.hist_max_count,
+            hist_eps=args.hist_eps,
+        )
+    else:
+        simulator_wrapper = make_simulator_wrapper(
+            model,
+            # chosen_model=args.model,
+            append_native_count_hist=args.append_native_count_hist,
+            hist_max_count=args.hist_max_count,
+            hist_eps=args.hist_eps,
+        )
+        model_sim_wrapper = make_model_sim_wrapper(
+            simulator_wrapper=simulator_wrapper,
+            n_workers=args.n_workers,
+        )
 
     for mode in modes:
         scenario = build_scenario(
@@ -605,11 +729,6 @@ if __name__ == "__main__":
             hist_max_count=args.hist_max_count if args.append_native_count_hist else None,
             hist_eps=args.hist_eps if args.append_native_count_hist else None,
         )
-        model_sim_wrapper = make_model_sim_wrapper(
-            simulator_wrapper=simulator_wrapper,
-            n_workers=args.n_workers,
-        )
-
         inferer = MultiRoundInferer(
             mode,
             prior,
