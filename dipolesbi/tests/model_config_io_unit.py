@@ -12,6 +12,18 @@ from dipolesbi.tools.model_config_io import load_model_config, save_model_config
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
 
 
+@dataclass
+class ArrayConfig:
+    values: np.ndarray
+
+
+def _reference_observation_kwargs() -> dict[str, np.ndarray]:
+    return {
+        "reference_data": np.array([1.0, 2.0, 3.0], dtype=np.float32),
+        "reference_mask": np.array([True, False, True], dtype=bool),
+    }
+
+
 def test_racs_low3_config_round_trip(tmp_path):
     config = RacsLow3Config(
         flux_min=15.0,
@@ -26,6 +38,21 @@ def test_racs_low3_config_round_trip(tmp_path):
     loaded = load_model_config(path)
 
     assert loaded == config
+
+
+def test_racs_low3_config_omits_mask_map_from_json(tmp_path):
+    config = RacsLow3Config(
+        flux_min=15.0,
+        mask_map=np.ones(49152, dtype=bool),
+    )
+    path = tmp_path / "model_config.json"
+
+    save_model_config(config, path)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert "mask_map" not in payload["fields"]
+    loaded = load_model_config(path)
+    assert loaded.mask_map is None
 
 
 def test_load_model_config_rejects_missing_class_name(tmp_path):
@@ -109,6 +136,7 @@ def test_dump_configs_writes_model_config_json(tmp_path):
         transform_config="transform",
         model_config=config,
         initial_proposal="prior",
+        **_reference_observation_kwargs(),
     )
 
     MultiRoundInferer._dump_configs(inferer)
@@ -118,24 +146,25 @@ def test_dump_configs_writes_model_config_json(tmp_path):
     assert "'flux_min': 15.0" in config_text
     assert "'chunk_size': 16" in config_text
     assert load_model_config(tmp_path / "model_config.json") == config
+    with np.load(tmp_path / "reference_observation.npz") as reference:
+        np.testing.assert_array_equal(reference["x0"], inferer.reference_data)
+        np.testing.assert_array_equal(reference["mask"], inferer.reference_mask)
 
 
-def test_dump_configs_skips_non_json_dataclass_without_blocking(tmp_path):
-    @dataclass
-    class NonJsonConfig:
-        values: np.ndarray
-
+def test_dump_configs_writes_ndarray_model_config(tmp_path):
     inferer = SimpleNamespace(
         mr_config=SimpleNamespace(plot_save_dir=str(tmp_path)),
         nflow_config="flow",
         nflow=None,
         train_config="train",
         transform_config="transform",
-        model_config=NonJsonConfig(np.ones(2)),
+        model_config=ArrayConfig(np.arange(6, dtype=np.float32).reshape(2, 3)),
         initial_proposal="prior",
+        **_reference_observation_kwargs(),
     )
 
     MultiRoundInferer._dump_configs(inferer)
 
     assert (tmp_path / "configs.txt").exists()
-    assert not (tmp_path / "model_config.json").exists()
+    loaded = load_model_config(tmp_path / "model_config.json")
+    np.testing.assert_array_equal(loaded.values, inferer.model_config.values)

@@ -444,6 +444,13 @@ class MultiRoundInferer:
         self.all_data = jnp.array(np.load(f'{simulation_path}/data.npy', allow_pickle=True))
         self.all_theta = load_dict_npz(f'{simulation_path}/theta.npz')
 
+    def _dump_reference_observation(self) -> None:
+        np.savez_compressed(
+            os.path.join(self.mr_config.plot_save_dir, "reference_observation.npz"),
+            x0=jax.device_get(self.reference_data),
+            mask=jax.device_get(self.reference_mask),
+        )
+
     def _dump_configs(self) -> None:
         config_path = os.path.join(self.mr_config.plot_save_dir, "configs.txt")
         with open(config_path, "w") as f:
@@ -461,6 +468,7 @@ class MultiRoundInferer:
             f.write(_format_model_config_for_log(self.model_config) + "\n\n")
             f.write("PriorConfig:\n")
             f.write(str(self.initial_proposal) + "\n")
+        MultiRoundInferer._dump_reference_observation(self)
         if (
             self.model_config is not None
             and is_dataclass(self.model_config)
@@ -471,7 +479,8 @@ class MultiRoundInferer:
                     self.model_config,
                     os.path.join(self.mr_config.plot_save_dir, "model_config.json"),
                 )
-            except TypeError:
+            except TypeError as e:
+                print(e)
                 pass
 
     def _to_jnp_array(self, theta: dict[str, jnp.ndarray]) -> jnp.ndarray:
