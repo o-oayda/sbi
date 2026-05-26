@@ -626,6 +626,11 @@ if __name__ == "__main__":
         default=1e-6,
         help="Positive epsilon added before taking log histogram probabilities.",
     )
+    parser.add_argument(
+        "--max_children",
+        type=int,
+        default=16
+    )
     args = parser.parse_args()
 
     if args.chunk_size is None:
@@ -660,7 +665,8 @@ if __name__ == "__main__":
         alpha_sigma=args.alpha_sigma,
         fractional_error_flux_min_mjy=args.fractional_error_flux_min_mjy,
         paf_temperature_data_dir='/home/oliver/Documents/dipole-utils/data/paf_temps',
-        mask_map=mask
+        mask_map=mask,
+        max_cluster_children_per_parent=args.max_children
     )
     model = RacsLow3Jax(config) if args.use_jax else RacsLow3(config)
     model.initialise_data()
