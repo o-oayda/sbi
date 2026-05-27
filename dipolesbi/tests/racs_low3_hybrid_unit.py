@@ -109,3 +109,43 @@ def test_multiround_inferer_accepts_hybrid_target_dimension(tmp_path):
     assert inferer.summary_start == map_ndim
     assert inferer.summary_ndim == summary_ndim
     assert inferer.nside == 1
+
+
+def test_multiround_config_jax_ns_defaults_and_overrides():
+    cfg = MultiRoundInfererConfig(simulation_budget=10, n_rounds=2)
+
+    assert cfg.jax_ns_n_live == 5_000
+    assert cfg.jax_ns_n_delete == 2_000
+
+    cfg = MultiRoundInfererConfig(
+        simulation_budget=10,
+        n_rounds=2,
+        jax_ns_n_live=2_000,
+        jax_ns_n_delete=400,
+    )
+
+    assert cfg.jax_ns_n_live == 2_000
+    assert cfg.jax_ns_n_delete == 400
+
+
+@pytest.mark.parametrize(
+    ("n_live", "n_delete", "match"),
+    [
+        (1, 1, "greater than 1"),
+        (10, 0, "positive"),
+        (10, 10, "less than jax_ns_n_live"),
+        (10, 11, "less than jax_ns_n_live"),
+    ],
+)
+def test_multiround_config_rejects_invalid_jax_ns_settings(
+    n_live,
+    n_delete,
+    match,
+):
+    with pytest.raises(ValueError, match=match):
+        MultiRoundInfererConfig(
+            simulation_budget=10,
+            n_rounds=2,
+            jax_ns_n_live=n_live,
+            jax_ns_n_delete=n_delete,
+        )

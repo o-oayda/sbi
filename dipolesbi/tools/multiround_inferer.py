@@ -611,7 +611,11 @@ class MultiRoundInferer:
             self.initial_proposal_jax,
             ui=self.ui
         )
-        self.classic_jax_ns.setup(rng_key, n_live=1000, n_delete=200)
+        self.classic_jax_ns.setup(
+            rng_key,
+            n_live=self.mr_config.jax_ns_n_live,
+            n_delete=self.mr_config.jax_ns_n_delete,
+        )
         self.classic_nested_samples = self.classic_jax_ns.run()
 
         self.true_lnZ = float(self.classic_nested_samples.logZ()) # type: ignore
@@ -825,7 +829,11 @@ class MultiRoundInferer:
             self.initial_proposal_jax, 
             self.ui
         )
-        self.jax_ns.setup(ns_key, n_live=1000, n_delete=200)
+        self.jax_ns.setup(
+            ns_key,
+            n_live=self.mr_config.jax_ns_n_live,
+            n_delete=self.mr_config.jax_ns_n_delete,
+        )
         self.current_nested_samples = self.jax_ns.run()
 
         kinds = {'lower': 'kde_2d', 'diagonal': 'hist_1d', 'upper': 'scatter_2d'}

@@ -217,6 +217,8 @@ class MultiRoundInfererConfig:
     likelihood_chunk_size_gb: float = 0.25
     save_round_simulations: bool = True
     round_simulation_subdir: str = 'round_simulations'
+    jax_ns_n_live: int = 5_000
+    jax_ns_n_delete: int = 2_000
     map_ndim: Optional[int] = None
     summary_ndim: Optional[int] = None
     native_count_hist_max_count: Optional[int] = None
@@ -239,6 +241,12 @@ class MultiRoundInfererConfig:
             raise ValueError('map_ndim must be positive when supplied.')
         if self.summary_ndim is not None and self.summary_ndim <= 0:
             raise ValueError('summary_ndim must be positive when supplied.')
+        if self.jax_ns_n_live <= 1:
+            raise ValueError('jax_ns_n_live must be greater than 1.')
+        if self.jax_ns_n_delete <= 0:
+            raise ValueError('jax_ns_n_delete must be positive.')
+        if self.jax_ns_n_delete >= self.jax_ns_n_live:
+            raise ValueError('jax_ns_n_delete must be less than jax_ns_n_live.')
         if (
             self.native_count_hist_max_count is not None
             and self.native_count_hist_max_count < 1
