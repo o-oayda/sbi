@@ -61,6 +61,12 @@ class NPKey:
         bitgen = np.random.PCG64(self._ss)
         return np.random.Generator(bitgen)
 
+    def generator(self) -> np.random.Generator:
+        """
+        Return a deterministic NumPy Generator for downstream random_state APIs.
+        """
+        return self._generator()
+
     # ---- stateless sampling helpers (JAX-like) ------------------------------
     def normal(self, shape: Iterable[int] = (), loc=0.0, scale=1.0, dtype=np.float32):
         g = self._generator()

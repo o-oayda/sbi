@@ -50,6 +50,17 @@ class TestNPKey(unittest.TestCase):
         vals = integers(k, 0, 10, shape=(1000,))
         self.assertTrue(np.all((0 <= vals) & (vals < 10)))
 
+    def test_generator_is_deterministic(self):
+        k1 = prng_key(123)
+        k2 = prng_key(123)
+
+        g1 = k1.generator()
+        g2 = k2.generator()
+
+        self.assertIsInstance(g1, np.random.Generator)
+        self.assertTrue(np.array_equal(g1.integers(0, 100, size=10),
+                                       g2.integers(0, 100, size=10)))
+
 class TestNPKeyPoisson(unittest.TestCase):
 
     def test_poisson_deterministic(self):

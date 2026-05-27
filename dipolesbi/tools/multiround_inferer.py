@@ -122,7 +122,6 @@ class MultiRoundInferer:
         else:
             self.reference_theta_jax: dict[str, jnp.ndarray] = {}
 
-        self.sample_posterior_seed = 0
         self.mr_config.plot_save_dir = self._get_output_dir()
         if self.mr_config.save_round_simulations:
             self._round_sim_save_dir = os.path.join(
@@ -976,12 +975,11 @@ class MultiRoundInferer:
         if n_samples == 0:
             return
 
-        self.sample_posterior_seed += 1
-
         if self.mode == 'NLE':
             posterior_samples = self.current_nested_samples.sample(
                 n=n_samples,
-                random_state=self.sample_posterior_seed
+                random_state=key.generator(),
+                replace=True
             )
             posterior_samples = self._reformat_samples(posterior_samples)
 
@@ -989,7 +987,7 @@ class MultiRoundInferer:
             assert self.current_posterior_samples is not None
             tree = self.current_posterior_samples
             n_available = next(iter(tree.values())).shape[0]
-            idx = np.random.choice(n_available, size=n_samples, replace=True)
+            idx = key.choice(n_available, shape=(n_samples,), replace=True)
             posterior_samples = {
                 key: np.asarray(value[idx]) for key, value in tree.items()
             }
