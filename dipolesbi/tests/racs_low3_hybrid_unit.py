@@ -8,6 +8,8 @@ import pytest
 
 from dipolesbi.scripts.based_racs_low3 import (
     _build_hybrid_sample_from_native,
+    _helmert_ilr_basis,
+    _inverse_ilr_to_probabilities,
     _native_count_hist_features,
 )
 from dipolesbi.tools.configs import (
@@ -38,6 +40,48 @@ def test_native_count_hist_features_logs_normalized_counts():
     assert features.dtype == np.float32
 
 
+def test_helmert_ilr_basis_is_orthonormal_on_simplex():
+    n_bins = 6
+    basis = _helmert_ilr_basis(n_bins)
+
+    assert basis.shape == (n_bins, n_bins - 1)
+    np.testing.assert_allclose(basis.sum(axis=0), np.zeros(n_bins - 1), atol=1e-12)
+    np.testing.assert_allclose(basis.T @ basis, np.eye(n_bins - 1), atol=1e-12)
+
+
+def test_ilr_round_trip_recovers_positive_composition():
+    probabilities = np.asarray([0.05, 0.15, 0.30, 0.20, 0.30], dtype=np.float64)
+    basis = _helmert_ilr_basis(probabilities.size)
+
+    z = np.log(probabilities) @ basis
+    recovered = _inverse_ilr_to_probabilities(z, basis)
+
+    np.testing.assert_allclose(recovered, probabilities, rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.parametrize(
+    ("transform", "expected_ndim"),
+    [
+        ("logprob", 6),
+        ("ilr", 5),
+    ],
+)
+def test_native_count_hist_feature_dimensions(transform, expected_ndim):
+    native_map = np.asarray([0, 1, 1, 2, 5, 9, 100], dtype=np.float32)
+    native_mask = np.ones_like(native_map, dtype=bool)
+
+    features = _native_count_hist_features(
+        native_map,
+        native_mask,
+        max_count=5,
+        eps=1e-6,
+        transform=transform,
+    )
+
+    assert features.shape == (expected_ndim,)
+    assert np.isfinite(features).all()
+
+
 def test_native_count_hist_features_rejects_empty_mask():
     native_map = np.asarray([0, 1, 2], dtype=np.float32)
     native_mask = np.zeros(3, dtype=bool)
@@ -64,6 +108,34 @@ def test_build_hybrid_sample_appends_all_true_summary_mask():
 
     map_ndim = hp.nside2npix(downscale_nside)
     summary_ndim = 5
+    assert hybrid.shape == (map_ndim + summary_ndim,)
+    assert hybrid_mask.shape == hybrid.shape
+    np.testing.assert_array_equal(
+        hybrid_mask[map_ndim:],
+        np.ones(summary_ndim, dtype=bool),
+    )
+    assert np.isfinite(hybrid[map_ndim:]).all()
+
+
+def test_build_hybrid_sample_appends_all_true_ilr_summary_mask():
+    native_nside = 2
+    downscale_nside = 1
+    native_map = np.arange(hp.nside2npix(native_nside), dtype=np.float32)
+    native_mask = np.ones_like(native_map, dtype=bool)
+    native_mask[:4] = False
+    native_map[:4] = np.nan
+
+    hybrid, hybrid_mask = _build_hybrid_sample_from_native(
+        native_map,
+        native_mask,
+        downscale_nside=downscale_nside,
+        hist_max_count=4,
+        hist_eps=1e-6,
+        native_count_hist_transform="ilr",
+    )
+
+    map_ndim = hp.nside2npix(downscale_nside)
+    summary_ndim = 4
     assert hybrid.shape == (map_ndim + summary_ndim,)
     assert hybrid_mask.shape == hybrid.shape
     np.testing.assert_array_equal(

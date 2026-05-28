@@ -223,6 +223,7 @@ class MultiRoundInfererConfig:
     summary_ndim: Optional[int] = None
     native_count_hist_max_count: Optional[int] = None
     native_count_hist_eps: Optional[float] = None
+    native_count_hist_transform: Optional[Literal['logprob', 'ilr']] = None
 
     def __post_init__(self) -> None:
         self.simulations_per_round = self.simulation_budget // self.n_rounds
@@ -257,6 +258,13 @@ class MultiRoundInfererConfig:
             and self.native_count_hist_eps <= 0
         ):
             raise ValueError('native_count_hist_eps must be positive.')
+        if (
+            self.native_count_hist_transform is not None
+            and self.native_count_hist_transform not in {'logprob', 'ilr'}
+        ):
+            raise ValueError(
+                "native_count_hist_transform must be 'logprob' or 'ilr'."
+            )
 
 @dataclass(frozen=True)
 class DataTransformSpec:

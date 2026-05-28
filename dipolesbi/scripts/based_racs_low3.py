@@ -17,6 +17,8 @@ from dipoleutils.utils.data_loader import DataLoader
 from dipoleutils.utils.mask import Masker
 import matplotlib.pyplot as plt
 
+NativeCountHistTransform = Literal["logprob", "ilr"]
+
 # FREE_TEMP_PIVOT_MODEL = "free_temp_pivot"
 # FIXED_TEMP_PIVOT_25C_MODEL = "fixed_temp_pivot_25c"
 # MODEL_CHOICES = [FREE_TEMP_PIVOT_MODEL, FIXED_TEMP_PIVOT_25C_MODEL]
@@ -37,6 +39,7 @@ def _build_real_sample(
     append_native_count_hist: bool = False,
     hist_max_count: int = 30,
     hist_eps: float = 1e-6,
+    native_count_hist_transform: NativeCountHistTransform = "logprob",
 ) -> tuple[np.ndarray, np.ndarray]:
     cat = DataLoader("racs", "low3").load()
     c2map = CatalogueToMap(cat)
@@ -68,6 +71,7 @@ def _build_real_sample(
             downscale_nside=model.downscale_nside,
             hist_max_count=hist_max_count,
             hist_eps=hist_eps,
+            native_count_hist_transform=native_count_hist_transform,
         )
 
     if model.downscale_nside is None:
@@ -85,7 +89,19 @@ def _build_real_sample(
     return coarse_map, coarse_mask
 
 
-def _native_count_hist_features(
+def _helmert_ilr_basis(n_bins: int) -> np.ndarray:
+    if n_bins < 2:
+        raise ValueError("ILR basis requires at least two bins.")
+
+    basis = np.zeros((n_bins, n_bins - 1), dtype=np.float64)
+    for col in range(n_bins - 1):
+        scale = np.sqrt((col + 1) * (col + 2))
+        basis[: col + 1, col] = 1.0 / scale
+        basis[col + 1, col] = -(col + 1) / scale
+    return basis
+
+
+def _native_count_hist_probabilities(
     native_map: np.ndarray,
     native_mask: np.ndarray,
     max_count: int,
@@ -93,8 +109,8 @@ def _native_count_hist_features(
 ) -> np.ndarray:
     if max_count < 1:
         raise ValueError("hist_max_count must be at least 1.")
-    if eps <= 0:
-        raise ValueError("hist_eps must be positive.")
+    if eps < 0:
+        raise ValueError("hist_eps must be non-negative.")
     if native_map.shape != native_mask.shape:
         raise ValueError("native_map and native_mask must have matching shapes.")
 
@@ -110,8 +126,70 @@ def _native_count_hist_features(
     # implements hist ceiling, k >= max_count
     bin_index = np.minimum(rounded_counts.astype(np.int64), max_count)
     hist = np.bincount(bin_index, minlength=max_count + 1)[: max_count + 1]
-    probabilities = hist.astype(np.float64) / float(hist.sum())
-    return np.log(probabilities + eps).astype(np.float32)
+    smoothed_hist = hist.astype(np.float64) + eps
+    probabilities = smoothed_hist / float(smoothed_hist.sum())
+    return probabilities
+
+
+def _native_count_hist_features(
+    native_map: np.ndarray,
+    native_mask: np.ndarray,
+    max_count: int,
+    eps: float,
+    transform: NativeCountHistTransform = "logprob",
+) -> np.ndarray:
+    if eps <= 0:
+        raise ValueError("hist_eps must be positive.")
+    if transform == "logprob":
+        probabilities = _native_count_hist_probabilities(
+            native_map,
+            native_mask,
+            max_count=max_count,
+            eps=0.0,
+        )
+        return np.log(probabilities + eps).astype(np.float32)
+    if transform == "ilr":
+        # ILR is the summary-coordinate definition for this experiment, not a
+        # runtime InvertibleDataTransform. The learned likelihood is in
+        # coarse_map + ILR(histogram) coordinates, with no Jacobian tracked
+        # back to raw normalized histogram probabilities. This coordinate
+        # choice is shared by model comparisons and is theta-independent.
+        probabilities = _native_count_hist_probabilities(
+            native_map,
+            native_mask,
+            max_count=max_count,
+            eps=eps,
+        )
+        basis = _helmert_ilr_basis(max_count + 1)
+        features = np.log(probabilities) @ basis
+        return features.astype(np.float32)
+
+    raise ValueError(f"Unknown native count histogram transform: {transform}")
+
+
+def _inverse_ilr_to_probabilities(z: np.ndarray, basis: np.ndarray) -> np.ndarray:
+    z = np.asarray(z, dtype=np.float64)
+    basis = np.asarray(basis, dtype=np.float64)
+    if basis.ndim != 2:
+        raise ValueError("basis must be a two-dimensional array.")
+    if z.shape[-1] != basis.shape[1]:
+        raise ValueError("ILR coordinate dimension does not match basis.")
+
+    clr = z @ basis.T
+    clr = clr - np.max(clr, axis=-1, keepdims=True)
+    probabilities = np.exp(clr)
+    return probabilities / np.sum(probabilities, axis=-1, keepdims=True)
+
+
+def _native_count_hist_feature_ndim(
+    hist_max_count: int,
+    transform: NativeCountHistTransform,
+) -> int:
+    if transform == "logprob":
+        return hist_max_count + 1
+    if transform == "ilr":
+        return hist_max_count
+    raise ValueError(f"Unknown native count histogram transform: {transform}")
 
 
 def _build_hybrid_sample_from_native(
@@ -120,6 +198,7 @@ def _build_hybrid_sample_from_native(
     downscale_nside: int,
     hist_max_count: int,
     hist_eps: float,
+    native_count_hist_transform: NativeCountHistTransform = "logprob",
 ) -> tuple[np.ndarray, np.ndarray]:
     coarse_map, coarse_mask = downgrade_ignore_nan(
         native_map,
@@ -136,6 +215,7 @@ def _build_hybrid_sample_from_native(
         native_mask,
         max_count=hist_max_count,
         eps=hist_eps,
+        transform=native_count_hist_transform,
     )
     hist_mask = np.ones(hist_features.shape, dtype=np.bool_)
 
@@ -254,6 +334,7 @@ def make_simulator_wrapper(
     append_native_count_hist: bool = False,
     hist_max_count: int = 30,
     hist_eps: float = 1e-6,
+    native_count_hist_transform: NativeCountHistTransform = "logprob",
 ):
     def simulator_wrapper(
         rng_key: NPKey | None = None,
@@ -281,6 +362,7 @@ def make_simulator_wrapper(
                 downscale_nside=model.downscale_nside,
                 hist_max_count=hist_max_count,
                 hist_eps=hist_eps,
+                native_count_hist_transform=native_count_hist_transform,
             )
 
         if native_output:
@@ -327,6 +409,7 @@ def build_scenario(
     summary_ndim: int | None = None,
     hist_max_count: int | None = None,
     hist_eps: float | None = None,
+    native_count_hist_transform: NativeCountHistTransform | None = None,
 ) -> Scenario:
     prior_jax = prior.to_jax()
 
@@ -368,6 +451,7 @@ def build_scenario(
                 "summary_ndim": summary_ndim,
                 "native_count_hist_max_count": hist_max_count,
                 "native_count_hist_eps": hist_eps,
+                "native_count_hist_transform": native_count_hist_transform,
             },
             flow_overrides={
                 "decoder_n_neurons": 128,
@@ -432,6 +516,7 @@ def _build_hybrid_batch_from_native(
     downscale_nside: int,
     hist_max_count: int,
     hist_eps: float,
+    native_count_hist_transform: NativeCountHistTransform = "logprob",
 ) -> tuple[np.ndarray, np.ndarray]:
     outputs = [
         _build_hybrid_sample_from_native(
@@ -440,6 +525,7 @@ def _build_hybrid_batch_from_native(
             downscale_nside=downscale_nside,
             hist_max_count=hist_max_count,
             hist_eps=hist_eps,
+            native_count_hist_transform=native_count_hist_transform,
         )
         for native_map, native_mask in zip(native_maps, native_masks)
     ]
@@ -454,6 +540,7 @@ def make_jax_model_sim_wrapper(
     append_native_count_hist: bool = False,
     hist_max_count: int = 30,
     hist_eps: float = 1e-6,
+    native_count_hist_transform: NativeCountHistTransform = "logprob",
 ):
     def model_sim_wrapper(
         npkey: NPKey,
@@ -482,6 +569,7 @@ def make_jax_model_sim_wrapper(
                 downscale_nside=downscale_nside,
                 hist_max_count=hist_max_count,
                 hist_eps=hist_eps,
+                native_count_hist_transform=native_count_hist_transform,
             )
 
         return model.batch_generate_dipole(
@@ -624,7 +712,20 @@ if __name__ == "__main__":
         "--hist_eps",
         type=float,
         default=1e-6,
-        help="Positive epsilon added before taking log histogram probabilities.",
+        help=(
+            "Positive histogram stabilizer: added inside log(p + eps) for "
+            "logprob, or as an additive bin-count pseudocount for ilr."
+        ),
+    )
+    parser.add_argument(
+        "--native_count_hist_transform",
+        choices=["logprob", "ilr"],
+        default="logprob",
+        help=(
+            "Coordinate transform for appended native count histogram features. "
+            "logprob preserves the original per-bin log(p + eps) features; ilr "
+            "uses additive hist_eps smoothing then Helmert ILR coordinates."
+        ),
     )
     parser.add_argument(
         "--max_children",
@@ -677,11 +778,15 @@ if __name__ == "__main__":
         append_native_count_hist=args.append_native_count_hist,
         hist_max_count=args.hist_max_count,
         hist_eps=args.hist_eps,
+        native_count_hist_transform=args.native_count_hist_transform,
     )
     if args.append_native_count_hist:
         assert args.downscale_nside is not None
         map_ndim = hp.nside2npix(args.downscale_nside)
-        summary_ndim = args.hist_max_count + 1
+        summary_ndim = _native_count_hist_feature_ndim(
+            args.hist_max_count,
+            args.native_count_hist_transform,
+        )
         effective_nside = args.downscale_nside
     else:
         map_ndim = None
@@ -706,6 +811,7 @@ if __name__ == "__main__":
             append_native_count_hist=args.append_native_count_hist,
             hist_max_count=args.hist_max_count,
             hist_eps=args.hist_eps,
+            native_count_hist_transform=args.native_count_hist_transform,
         )
     else:
         simulator_wrapper = make_simulator_wrapper(
@@ -714,6 +820,7 @@ if __name__ == "__main__":
             append_native_count_hist=args.append_native_count_hist,
             hist_max_count=args.hist_max_count,
             hist_eps=args.hist_eps,
+            native_count_hist_transform=args.native_count_hist_transform,
         )
         model_sim_wrapper = make_model_sim_wrapper(
             simulator_wrapper=simulator_wrapper,
@@ -734,6 +841,11 @@ if __name__ == "__main__":
             summary_ndim=summary_ndim,
             hist_max_count=args.hist_max_count if args.append_native_count_hist else None,
             hist_eps=args.hist_eps if args.append_native_count_hist else None,
+            native_count_hist_transform=(
+                args.native_count_hist_transform
+                if args.append_native_count_hist
+                else None
+            ),
         )
         inferer = MultiRoundInferer(
             mode,
