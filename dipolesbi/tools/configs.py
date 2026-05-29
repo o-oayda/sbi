@@ -224,6 +224,7 @@ class MultiRoundInfererConfig:
     native_count_hist_max_count: Optional[int] = None
     native_count_hist_eps: Optional[float] = None
     native_count_hist_transform: Optional[Literal['logprob', 'ilr']] = None
+    native_count_summary: Optional[Literal['hist_logprob', 'hist_ilr', 'log_dispersion']] = None
 
     def __post_init__(self) -> None:
         self.simulations_per_round = self.simulation_budget // self.n_rounds
@@ -264,6 +265,15 @@ class MultiRoundInfererConfig:
         ):
             raise ValueError(
                 "native_count_hist_transform must be 'logprob' or 'ilr'."
+            )
+        if (
+            self.native_count_summary is not None
+            and self.native_count_summary
+            not in {'hist_logprob', 'hist_ilr', 'log_dispersion'}
+        ):
+            raise ValueError(
+                "native_count_summary must be 'hist_logprob', 'hist_ilr', "
+                "or 'log_dispersion'."
             )
 
 @dataclass(frozen=True)

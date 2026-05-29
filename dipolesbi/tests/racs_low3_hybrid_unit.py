@@ -11,6 +11,7 @@ from dipolesbi.scripts.based_racs_low3 import (
     _helmert_ilr_basis,
     _inverse_ilr_to_probabilities,
     _native_count_hist_features,
+    _native_count_summary_features,
 )
 from dipolesbi.tools.configs import (
     DataTransformConfig,
@@ -59,6 +60,24 @@ def test_ilr_round_trip_recovers_positive_composition():
     np.testing.assert_allclose(recovered, probabilities, rtol=1e-12, atol=1e-12)
 
 
+def test_native_count_log_dispersion_feature():
+    native_map = np.asarray([0, 1, 1, 2, 5, np.nan], dtype=np.float32)
+    native_mask = np.asarray([True, True, True, True, True, True])
+
+    features = _native_count_summary_features(
+        native_map,
+        native_mask,
+        max_count=5,
+        eps=1e-6,
+        summary="log_dispersion",
+    )
+
+    counts = np.asarray([0, 1, 1, 2, 5], dtype=np.float64)
+    expected = np.log(np.var(counts, ddof=1) / np.mean(counts))
+    np.testing.assert_allclose(features, np.asarray([expected], dtype=np.float32))
+    assert features.dtype == np.float32
+
+
 @pytest.mark.parametrize(
     ("transform", "expected_ndim"),
     [
@@ -79,6 +98,22 @@ def test_native_count_hist_feature_dimensions(transform, expected_ndim):
     )
 
     assert features.shape == (expected_ndim,)
+    assert np.isfinite(features).all()
+
+
+def test_native_count_log_dispersion_feature_dimension():
+    native_map = np.asarray([0, 1, 1, 2, 5, 9, 100], dtype=np.float32)
+    native_mask = np.ones_like(native_map, dtype=bool)
+
+    features = _native_count_summary_features(
+        native_map,
+        native_mask,
+        max_count=5,
+        eps=1e-6,
+        summary="log_dispersion",
+    )
+
+    assert features.shape == (1,)
     assert np.isfinite(features).all()
 
 
@@ -145,6 +180,28 @@ def test_build_hybrid_sample_appends_all_true_ilr_summary_mask():
     assert np.isfinite(hybrid[map_ndim:]).all()
 
 
+def test_build_hybrid_sample_appends_log_dispersion_summary():
+    native_nside = 2
+    downscale_nside = 1
+    native_map = np.arange(hp.nside2npix(native_nside), dtype=np.float32)
+    native_mask = np.ones_like(native_map, dtype=bool)
+
+    hybrid, hybrid_mask = _build_hybrid_sample_from_native(
+        native_map,
+        native_mask,
+        downscale_nside=downscale_nside,
+        hist_max_count=4,
+        hist_eps=1e-6,
+        native_count_summary="log_dispersion",
+    )
+
+    map_ndim = hp.nside2npix(downscale_nside)
+    assert hybrid.shape == (map_ndim + 1,)
+    assert hybrid_mask.shape == hybrid.shape
+    assert bool(hybrid_mask[-1])
+    assert np.isfinite(hybrid[-1])
+
+
 def test_multiround_inferer_accepts_hybrid_target_dimension(tmp_path):
     map_ndim = hp.nside2npix(1)
     summary_ndim = 3
@@ -198,6 +255,16 @@ def test_multiround_config_jax_ns_defaults_and_overrides():
 
     assert cfg.jax_ns_n_live == 2_000
     assert cfg.jax_ns_n_delete == 400
+
+
+def test_multiround_config_accepts_native_count_summary():
+    cfg = MultiRoundInfererConfig(
+        simulation_budget=10,
+        n_rounds=2,
+        native_count_summary="log_dispersion",
+    )
+
+    assert cfg.native_count_summary == "log_dispersion"
 
 
 @pytest.mark.parametrize(
