@@ -1,20 +1,17 @@
-from contextlib import nullcontext
 from functools import partial
-from typing import Optional
+from typing import Any, Optional
 from catsim.utils.healsphere import downgrade_ignore_nan
 from numpy.typing import NDArray
-from catsim import Catwise, CatwiseConfig
+from catsim import Catwise, CatwiseConfig, CatwiseJax
 from dipolesbi.tools.configs import DataTransformSpec, Scenario
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
 from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.priors_np import DipolePriorNP
 from dipolesbi.tools.ui import MultiRoundInfererUI
 import argparse
-from dataclasses import asdict
+import jax
 import numpy as np
-from joblib import parallel_backend
 from dipolesbi.tools.utils import batch_simulate
-from dipolesbi.tools.remote_sim import ensure_worker_model, remote_generate_dipole
 import matplotlib.pyplot as plt
 
 
@@ -40,7 +37,27 @@ if __name__ == '__main__':
     parser.add_argument(
         '--n_workers',
         type=int,
-        help='Number of workers to distribute simuation over.'
+        help='Number of local workers to distribute NumPy simulation over.'
+    )
+    parser.add_argument(
+        '--use_jax',
+        action='store_true',
+        help="Use catsim's JAX batched CatWISE simulator."
+    )
+    parser.add_argument(
+        '--jax_batch_size',
+        type=int,
+        default=5,
+        help='Batch size passed to CatwiseJax.batch_generate_dipole.'
+    )
+    parser.add_argument(
+        '--chunk_size',
+        type=int,
+        default=None,
+        help=(
+            'Chunk size used inside the simulator. Defaults to 25_000 for '
+            'NumPy and 140_000 for JAX.'
+        )
     )
     parser.add_argument(
         '--out_dir',
@@ -68,27 +85,17 @@ if __name__ == '__main__':
         )
     )
     parser.add_argument(
+        '--append_native_count_summary',
+        action='store_true',
+        help=(
+            'Append the native-nside log count-dispersion summary statistic '
+            'to the downscaled map for NLE.'
+        )
+    )
+    parser.add_argument(
         '--no_ui',
         action='store_true',
         help='Disable the Rich multi-round progress UI.'
-    )
-    parser.add_argument(
-        '--simulation_backend',
-        choices=['joblib', 'dask'],
-        default='joblib',
-        help='Choose how simulations are dispatched; defaults to local joblib workers.'
-    )
-    parser.add_argument(
-        '--dask_scheduler',
-        type=str,
-        default=None,
-        help='Optional Dask scheduler address (e.g. "tcp://head:8786") when using --simulation_backend dask.'
-    )
-    parser.add_argument(
-        '--expected_dask_workers',
-        type=int,
-        default=None,
-        help='Optional hint for how many Dask workers to wait for before starting simulations.'
     )
     parser.add_argument(
         '--catwise_version',
@@ -100,6 +107,13 @@ if __name__ == '__main__':
         '--use_clusters',
         action='store_true',
         help='If specified, generated clustered/correlated points.'
+    )
+    parser.add_argument(
+        '--simulate_clustering',
+        type=str,
+        choices=['poisson'],
+        default=None,
+        help='Clustering model to infer. Only "poisson" is supported.'
     )
     parser.add_argument(
         '--unique_error',
@@ -122,7 +136,25 @@ if __name__ == '__main__':
         '--wide_v_prior',
         action='store_true'
     )
+    parser.add_argument(
+        "--max_children",
+        type=int,
+        default=16
+    )
     args = parser.parse_args()
+
+    if args.chunk_size is None:
+        args.chunk_size = 140_000 if args.use_jax else 25_000
+    if args.use_jax and args.n_workers is not None:
+        parser.error('--n_workers is only used by the NumPy simulator.')
+    if args.use_jax and args.jax_batch_size <= 0:
+        parser.error('--jax_batch_size must be positive.')
+    if args.use_jax and args.use_clusters:
+        parser.error('CatwiseJax does not yet support --use_clusters.')
+    if args.use_jax and args.add_confusion_noise:
+        parser.error('CatwiseJax does not yet support --add_confusion_noise.')
+    if args.simulate_clustering == 'poisson' and args.use_clusters:
+        parser.error('--simulate_clustering poisson cannot be combined with --use_clusters.')
 
     raw_modes = args.mode or []
     modes: list[str] = []
@@ -130,6 +162,10 @@ if __name__ == '__main__':
         modes.extend(part.strip().upper() for part in entry.split(',') if part.strip())
     if not modes:
         parser.error('At least one mode must be provided via --mode.')
+    if args.append_native_count_summary and args.downscale_nside is None:
+        parser.error('--append_native_count_summary requires --downscale_nside.')
+    if args.append_native_count_summary and any(mode != 'NLE' for mode in modes):
+        parser.error('--append_native_count_summary is currently supported for NLE only.')
 
     N_SIM = args.n_simulations
     N_WORKERS = args.n_workers
@@ -144,45 +180,8 @@ if __name__ == '__main__':
     ADD_CONFUSION = args.add_confusion_noise
     WIDE_V_PRIOR = args.wide_v_prior
     USE_CLUSTERS = args.use_clusters
-    SIM_BACKEND = args.simulation_backend
-    DASK_SCHEDULER = args.dask_scheduler
-    dask_client = None
-    warmed_configs = set()
-    EXPECTED_DASK_WORKERS = (
-        args.expected_dask_workers if args.expected_dask_workers and args.expected_dask_workers > 0 else None
-    )
-
-    if SIM_BACKEND != 'dask' and DASK_SCHEDULER is not None:
-        parser.error(
-            '--dask_scheduler is only valid when using --simulation_backend dask.'
-        )
-    if SIM_BACKEND == 'dask':
-        try:
-            from dask.distributed import Client, get_client
-        except ImportError as exc:
-            parser.error(
-                'Using --simulation_backend dask requires dask.distributed to be installed.'
-            )
-        try:
-            dask_client = get_client()
-        except ValueError:
-            dask_client = Client(DASK_SCHEDULER) if DASK_SCHEDULER else Client()
-        try:
-            target_workers = EXPECTED_DASK_WORKERS or 1
-            dask_client.wait_for_workers(target_workers, timeout=120)
-        except TimeoutError:
-            print(
-                'Warning: Timed out waiting for the expected number of Dask workers; '
-                'continuing anyway.'
-            )
-
-    def _parallel_backend_context():
-        if SIM_BACKEND == 'dask':
-            backend_kwargs = {}
-            if DASK_SCHEDULER:
-                backend_kwargs['scheduler_host'] = DASK_SCHEDULER
-            return parallel_backend('dask', **backend_kwargs)
-        return nullcontext()
+    APPEND_NATIVE_COUNT_SUMMARY = args.append_native_count_summary
+    SIMULATE_CLUSTERING = args.simulate_clustering
 
     def simulator_wrapper(
             rng_key: Optional[NPKey] = None,
@@ -193,6 +192,243 @@ if __name__ == '__main__':
             w1_max=16.5 if args.catwise_version == 'S22' else 16.4,
             **kwargs
         )
+
+    def _partial_keywords(func: Any) -> dict[str, Any]:
+        fixed_kwargs: dict[str, Any] = {}
+        current = func
+        while isinstance(current, partial):
+            if current.keywords:
+                fixed_kwargs = {**current.keywords, **fixed_kwargs}
+            current = current.func
+        return fixed_kwargs
+
+    def _jax_key_from_npkey(key: NPKey) -> jax.Array:
+        if isinstance(key, NPKey):
+            key_data = key._ss.generate_state(2, dtype=np.uint32)
+        else:
+            key_data = np.asarray(key, dtype=np.uint32).reshape(2)
+        return jax.device_put(key_data)
+
+    def _n_sims_from_params(params: dict[str, NDArray]) -> int:
+        if 'log10_n_initial_samples' in params:
+            values = np.asarray(params['log10_n_initial_samples'])
+        else:
+            values = np.asarray(next(iter(params.values())))
+        return 1 if values.ndim == 0 else int(values.shape[0])
+
+    def _batch_parameter(value: Any, n_sims: int) -> NDArray:
+        if value is None:
+            value = np.nan
+        values = np.asarray(value)
+        if values.ndim == 0:
+            return np.full(n_sims, values.item())
+        if values.shape != (n_sims,):
+            raise ValueError(
+                f'Fixed JAX simulator parameter must be scalar or shape ({n_sims},).'
+            )
+        return values
+
+    def _native_counts(
+            native_map: NDArray,
+            native_mask: NDArray[np.bool_]
+    ) -> NDArray[np.int64]:
+        if native_map.shape != native_mask.shape:
+            raise ValueError('native_map and native_mask must have matching shapes.')
+
+        valid = native_mask.astype(bool, copy=False) & np.isfinite(native_map)
+        if not np.any(valid):
+            raise ValueError(
+                'Cannot build native-count summary with no unmasked native pixels.'
+            )
+
+        counts = np.asarray(native_map[valid])
+        rounded_counts = np.rint(counts)
+        if np.any(rounded_counts < 0):
+            raise ValueError('Native-count summary received negative counts.')
+        return rounded_counts.astype(np.int64)
+
+    def _native_count_log_dispersion_feature(
+            native_map: NDArray,
+            native_mask: NDArray[np.bool_]
+    ) -> NDArray[np.float32]:
+        counts = _native_counts(native_map, native_mask).astype(np.float64)
+        if counts.size < 2:
+            raise ValueError(
+                'Native-count log dispersion requires at least two pixels.'
+            )
+        mean = float(np.mean(counts))
+        if mean <= 0.0:
+            raise ValueError(
+                'Native-count log dispersion requires positive mean counts.'
+            )
+        dispersion = float(np.var(counts, ddof=1) / mean)
+        if dispersion <= 0.0:
+            raise ValueError(
+                'Native-count log dispersion requires positive dispersion.'
+            )
+        return np.asarray([np.log(dispersion)], dtype=np.float32)
+
+    def _build_hybrid_sample_from_native(
+            native_map: NDArray,
+            native_mask: NDArray[np.bool_],
+            downscale_nside: int
+    ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
+        coarse_map, coarse_mask = downgrade_ignore_nan(
+            native_map,
+            native_mask,
+            downscale_nside,
+        )
+        coarse_map = coarse_map.astype(np.float32, copy=False)
+        coarse_mask = coarse_mask.astype(np.bool_, copy=False)
+        coarse_map = coarse_map.copy()
+        coarse_map[~coarse_mask] = np.nan
+
+        summary_features = _native_count_log_dispersion_feature(
+            native_map,
+            native_mask
+        )
+        summary_mask = np.ones(summary_features.shape, dtype=np.bool_)
+
+        hybrid = np.concatenate([coarse_map, summary_features])
+        hybrid_mask = np.concatenate([coarse_mask, summary_mask])
+        return (
+            hybrid.astype(np.float32, copy=False),
+            hybrid_mask.astype(np.bool_, copy=False)
+        )
+
+    def _build_hybrid_batch_from_native(
+            native_maps: NDArray,
+            native_masks: NDArray[np.bool_],
+            downscale_nside: int
+    ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
+        outputs = [
+            _build_hybrid_sample_from_native(
+                native_map,
+                native_mask,
+                downscale_nside=downscale_nside
+            )
+            for native_map, native_mask in zip(native_maps, native_masks)
+        ]
+        x = np.stack([output[0] for output in outputs], axis=0)
+        mask = np.stack([output[1] for output in outputs], axis=0)
+        return x, mask
+
+    def _generate_native_with_callable(
+            catwise_model: Catwise,
+            sim_callable,
+            *args,
+            **kwargs
+    ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
+        original_downscale_nside = catwise_model.downscale_nside
+        try:
+            catwise_model.downscale_nside = None
+            return sim_callable(*args, **kwargs)
+        finally:
+            catwise_model.downscale_nside = original_downscale_nside
+
+    def _make_real_sample_native(
+            catwise_model: Catwise
+    ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
+        original_downscale_nside = catwise_model.downscale_nside
+        try:
+            catwise_model.downscale_nside = None
+            return catwise_model.make_real_sample()
+        finally:
+            catwise_model.downscale_nside = original_downscale_nside
+
+    def make_native_count_summary_simulator(
+            catwise_model: Catwise,
+            sim_callable,
+            downscale_nside: int
+    ):
+        def simulator_with_summary(
+                rng_key: Optional[NPKey] = None,
+                **kwargs
+        ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
+            native_map, native_mask = _generate_native_with_callable(
+                catwise_model,
+                sim_callable,
+                rng_key=rng_key,
+                **kwargs
+            )
+            return _build_hybrid_sample_from_native(
+                native_map,
+                native_mask,
+                downscale_nside=downscale_nside
+            )
+
+        return simulator_with_summary
+
+    def _batch_generate_dipole_native(
+            jax_model: CatwiseJax,
+            theta: dict[str, NDArray],
+            key: jax.Array,
+            batch_size: int
+    ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
+        original_downscale_nside = jax_model.downscale_nside
+        try:
+            jax_model.downscale_nside = None
+            return jax_model.batch_generate_dipole(
+                theta,
+                key,
+                batch_size=batch_size,
+                show_progress=True
+            )
+        finally:
+            jax_model.downscale_nside = original_downscale_nside
+
+    def make_jax_model_sim_wrapper(
+            jax_model: CatwiseJax,
+            fixed_kwargs: dict[str, Any],
+            catwise_version: str,
+            batch_size: int,
+            append_native_count_summary: bool = False
+    ):
+        def model_sim_wrapper(
+                npkey: NPKey,
+                params: dict[str, NDArray],
+                noise: bool = True,
+                ui: Optional[MultiRoundInfererUI] = None
+        ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
+            n_sims = _n_sims_from_params(params)
+            theta = {
+                key: _batch_parameter(value, n_sims)
+                for key, value in fixed_kwargs.items()
+            }
+            theta.update({key: np.asarray(value) for key, value in params.items()})
+            theta['w1_max'] = np.full(
+                n_sims,
+                16.5 if catwise_version == 'S22' else 16.4,
+                dtype=np.float64,
+            )
+
+            jax_key = _jax_key_from_npkey(npkey)
+            if append_native_count_summary:
+                if jax_model.downscale_nside is None:
+                    raise ValueError(
+                        'append_native_count_summary requires model.downscale_nside.'
+                    )
+                downscale_nside = jax_model.downscale_nside
+                native_maps, native_masks = _batch_generate_dipole_native(
+                    jax_model,
+                    theta,
+                    jax_key,
+                    batch_size=batch_size
+                )
+                return _build_hybrid_batch_from_native(
+                    native_maps,
+                    native_masks,
+                    downscale_nside=downscale_nside
+                )
+
+            return jax_model.batch_generate_dipole(
+                theta,
+                jax_key,
+                batch_size=batch_size,
+                show_progress=True
+            )
+
+        return model_sim_wrapper
 
     prior = DipolePriorNP(
         mean_count_range=[np.log10(30_000_000), np.log10(40_000_000)], #U[7.5,7.6]
@@ -251,6 +487,15 @@ if __name__ == '__main__':
             dist_type='uniform',
         )
 
+    def add_poisson_cluster_params(prior: DipolePriorNP):
+        prior.add_prior(
+            short_name='lambda_clus',
+            simulator_kwarg='lambda_clus',
+            low=0,
+            high=8,
+            dist_type='uniform',
+        )
+
     def add_confusion_params(prior: DipolePriorNP):
         prior.add_prior(
             short_name='log10_kw1',
@@ -282,6 +527,10 @@ if __name__ == '__main__':
         add_cluster_params(prior)
         theta_0['cluster_rate_param'] = 10
         theta_0['log10_cluster_scale_param'] = 3
+
+    if SIMULATE_CLUSTERING == 'poisson':
+        add_poisson_cluster_params(prior)
+        theta_0['lambda_clus'] = 0.
 
     if not COMMON_ERROR:
         theta_0['w2_extra_error'] = 4.
@@ -440,6 +689,12 @@ if __name__ == '__main__':
             case 'NLE':
                 nside = DOWNSCALE_NSIDE
                 current_downscale = DOWNSCALE_NSIDE
+                map_ndim = (
+                    12 * current_downscale**2
+                    if APPEND_NATIVE_COUNT_SUMMARY and current_downscale is not None
+                    else None
+                )
+                summary_ndim = 1 if APPEND_NATIVE_COUNT_SUMMARY else None
                 data_spec = DataTransformSpec.zscore(
                     method='batchwise'
                 )
@@ -457,7 +712,13 @@ if __name__ == '__main__':
                         'simulation_budget': N_SIM,
                         'n_rounds': N_ROUNDS,
                         'likelihood_chunk_size_gb': 0.5,
-                        'n_likelihood_samples':  10_000
+                        'n_likelihood_samples':  10_000,
+                        'map_ndim': map_ndim,
+                        'summary_ndim': summary_ndim,
+                        'native_count_summary': (
+                            'log_dispersion'
+                            if APPEND_NATIVE_COUNT_SUMMARY else None
+                        )
                     },
                     flow_overrides={
                         'decoder_n_neurons': 128,
@@ -475,6 +736,7 @@ if __name__ == '__main__':
             cat_w12_min=0.5,
             magnitude_error_dist=ERROR_DIST,
             use_float32=USE_FLOAT32,
+            chunk_size=args.chunk_size,
             use_common_extra_error=COMMON_ERROR,
             model_identifier=args.model,
             downscale_nside=current_downscale,
@@ -482,74 +744,74 @@ if __name__ == '__main__':
             generate_correlated_points=USE_CLUSTERS,
             s21_catalogue_path='/home/oliver/Documents/catsim/src/catsim/data/catwise_agns_masked_final_w1lt16p5_alpha.fits',
             use_noecl_mask=NOECL_MASK,
-            add_confusion_noise=ADD_CONFUSION
+            add_confusion_noise=ADD_CONFUSION,
+            max_cluster_children_per_parent=args.max_children
         )
 
-        model = Catwise(config)
+        model = CatwiseJax(config) if args.use_jax else Catwise(config)
         model.initialise_data()
 
-        if SIM_BACKEND == 'dask':
-            config_payload = asdict(config)
-            if dask_client is not None:
-                config_key = tuple(sorted(config_payload.items()))
-                if config_key not in warmed_configs:
-                    try:
-                        dask_client.run(ensure_worker_model, config_payload)
-                        warmed_configs.add(config_key)
-                    except OSError as exc:
-                        print(
-                            'Warning: Failed to warm Dask workers for Catwise config; '
-                            f'continuing without preloading ({exc}).'
-                        )
-
-            def _make_remote_sim_callable(base_callable):
-                fixed_kwargs: dict[str, object] = {}
-                current = base_callable
-                while isinstance(current, partial):
-                    if current.keywords:
-                        fixed_kwargs = {**current.keywords, **fixed_kwargs}
-                    current = current.func
-
-                def _remote_sim_callable(**kwargs):
-                    call_kwargs = {**fixed_kwargs, **kwargs}
-                    rng_key = call_kwargs.pop('rng_key', None)
-                    return remote_generate_dipole(config_payload, call_kwargs, rng_key)
-
-                return _remote_sim_callable
-
-            sim_callable = _make_remote_sim_callable(simulator)
-            parallel_opts = {'batch_size': 1}
+        if args.use_jax:
+            model_sim_wrapper = make_jax_model_sim_wrapper(
+                model,
+                fixed_kwargs=_partial_keywords(simulator),
+                catwise_version=args.catwise_version,
+                batch_size=args.jax_batch_size,
+                append_native_count_summary=APPEND_NATIVE_COUNT_SUMMARY
+            )
         else:
-            sim_callable = simulator
-            parallel_opts = None
+            sim_callable = (
+                make_native_count_summary_simulator(
+                    model,
+                    simulator,
+                    downscale_nside=current_downscale
+                )
+                if APPEND_NATIVE_COUNT_SUMMARY else simulator
+            )
 
-        def model_sim_wrapper(
-                npkey: NPKey,
-                params: dict[str, NDArray],
-                noise: bool = True,
-                ui: Optional[MultiRoundInfererUI] = None
-        ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
-            with _parallel_backend_context():
+            def model_sim_wrapper(
+                    npkey: NPKey,
+                    params: dict[str, NDArray],
+                    noise: bool = True,
+                    ui: Optional[MultiRoundInfererUI] = None
+            ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
                 return batch_simulate(
                     params,
                     sim_callable,
                     n_workers=N_WORKERS,
                     ui=ui,
-                    rng_key=npkey,
-                    parallel_kwargs=parallel_opts
+                    rng_key=npkey
                 )
 
+        data_model = Catwise(config) if args.use_jax else model
+        if args.use_jax:
+            data_model.initialise_data()
+
         if args.catwise_version == 'S21':
-            x0, mask = model.make_real_sample()
+            if APPEND_NATIVE_COUNT_SUMMARY:
+                native_x0, native_mask = _make_real_sample_native(data_model)
+                x0, mask = _build_hybrid_sample_from_native(
+                    native_x0,
+                    native_mask,
+                    downscale_nside=current_downscale
+                )
+            else:
+                x0, mask = data_model.make_real_sample()
         elif args.catwise_version == 'S22':
             x0 = np.asarray(
                 np.load('dipolesbi/catwise/catwise_S22.npy'), dtype=np.float32
             )
-            mask = model.binary_mask
+            mask = data_model.binary_mask
             x0[~mask] = np.nan
 
-            if DOWNSCALE_NSIDE:
-                x0, mask = downgrade_ignore_nan(x0, mask, DOWNSCALE_NSIDE)
+            if APPEND_NATIVE_COUNT_SUMMARY:
+                x0, mask = _build_hybrid_sample_from_native(
+                    x0,
+                    mask,
+                    downscale_nside=current_downscale
+                )
+            elif current_downscale:
+                x0, mask = downgrade_ignore_nan(x0, mask, current_downscale)
         else:
             raise ValueError(
                 f'Catwise version ({args.catwise_version} not recognised).'
