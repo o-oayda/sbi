@@ -142,7 +142,7 @@ def test_dump_configs_writes_model_config_json(tmp_path):
     MultiRoundInferer._dump_configs(inferer)
 
     config_text = (tmp_path / "configs.txt").read_text(encoding="utf-8")
-    assert "catsim.racs.RacsLow3Config" in config_text
+    assert "catsim.racs.RacsConfig" in config_text
     assert "'flux_min': 15.0" in config_text
     assert "'chunk_size': 16" in config_text
     assert load_model_config(tmp_path / "model_config.json") == config

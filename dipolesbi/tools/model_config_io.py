@@ -32,6 +32,8 @@ def _json_ready(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_json_ready(v) for v in value]
     if _is_dataclass_instance(value):
+        if type(value).__module__ == "catsim.racs_products" and hasattr(value, "key"):
+            return getattr(value, "key")
         return _config_fields_json_ready(value)
     if isinstance(value, Path):
         return str(value)

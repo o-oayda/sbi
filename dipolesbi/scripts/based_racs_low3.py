@@ -1,7 +1,7 @@
 import argparse
 from types import MethodType
 from typing import Literal
-from catsim import RacsLow3, RacsLow3Config, RacsLow3Jax
+from catsim import RACS_PRODUCTS, Racs, RacsConfig, RacsJax
 from catsim.utils.healsphere import downgrade_ignore_nan
 from dipoleutils.utils.samples import CatalogueToMap
 import healpy as hp
@@ -34,18 +34,31 @@ def _parse_modes(raw_modes: list[str] | None, parser: argparse.ArgumentParser) -
     return modes
 
 
+def _model_product(model: Racs | RacsJax):
+    product = getattr(model, "product", None)
+    if product is not None:
+        return product
+    return model.cfg.product
+
+
 def _build_real_sample(
-    model: RacsLow3,
+    model: Racs | RacsJax,
     flux_min: float,
     append_native_count_summary: bool = False,
     hist_max_count: int = 30,
     hist_eps: float = 1e-6,
     native_count_summary: NativeCountSummary = "hist_logprob",
 ) -> tuple[np.ndarray, np.ndarray]:
-    cat = DataLoader("racs", "low3").load()
+    product = _model_product(model)
+    cat = DataLoader(*product.data_loader_args).load()
     c2map = CatalogueToMap(cat)
-    c2map.make_cut('Total_flux', minimum=flux_min, maximum=None)
-    c2map.crossmatch_local_sources('equatorial', radius=5, source_name_A_column='Name')
+    c2map.make_cut(product.columns.total_flux, minimum=flux_min, maximum=None)
+    if "Name" in cat.colnames:
+        c2map.crossmatch_local_sources(
+            'equatorial',
+            radius=5,
+            source_name_A_column='Name',
+        )
     density_map = c2map.make_density_map(
         coordinate_system='equatorial',
         nside=model.nside,
@@ -57,7 +70,7 @@ def _build_real_sample(
     density_map[~mask] = np.nan
 
     hp.projview(density_map, nest=True)
-    plt.savefig('racslow3.png')
+    plt.savefig(f'racs_{product.key}.png')
     plt.close()
 
     if append_native_count_summary:
@@ -307,8 +320,44 @@ def _build_mask(nside: int) -> np.ndarray:
     maskmap = masker.get_mask_map()
     return hp.reorder(maskmap, r2n=True)
 
+
+def build_racs_config(
+    *,
+    racs_epoch: str,
+    flux_min: float,
+    nside: int,
+    chunk_size: int,
+    use_jax: bool,
+    cluster_count_model: str,
+    downscale_nside: int | None,
+    alpha_mean: float,
+    alpha_sigma: float,
+    fractional_error_flux_min_mjy: float,
+    mask_map: np.ndarray,
+    max_cluster_children_per_parent: int,
+    openmeteo_fallback: bool = False,
+) -> RacsConfig:
+    return RacsConfig(
+        product=racs_epoch,
+        flux_min=flux_min,
+        nside=nside,
+        chunk_size=chunk_size,
+        use_float32=False,
+        cluster_count_model=cluster_count_model,
+        downscale_nside=downscale_nside,
+        store_final_samples=not use_jax,
+        alpha_mean=alpha_mean,
+        alpha_sigma=alpha_sigma,
+        fractional_error_flux_min_mjy=fractional_error_flux_min_mjy,
+        paf_temperature_data_dir='/home/oliver/Documents/dipole-utils/data/paf_temps',
+        temperature_fallback="open_meteo" if openmeteo_fallback else "none",
+        mask_map=mask_map,
+        max_cluster_children_per_parent=max_cluster_children_per_parent,
+    )
+
+
 def build_prior_and_reference_theta(
-    model: RacsLow3,
+    model: Racs,
     # chosen_model: str = FREE_TEMP_PIVOT_MODEL,
     simulate_clustering: None | Literal['geometric', 'poisson'] = None,
 ) -> tuple[DipolePriorNP, dict[str, float]]:
@@ -348,7 +397,7 @@ def build_prior_and_reference_theta(
                 'lclus',
                 simulator_kwarg='lambda_clus',
                 low=0,
-                high=8,
+                high=3,
                 dist_type='Uniform'
             )
         else:
@@ -398,7 +447,7 @@ def build_prior_and_reference_theta(
 
 
 def make_simulator_wrapper(
-    model: RacsLow3,
+    model: Racs,
     # chosen_model: str = FREE_TEMP_PIVOT_MODEL,
     native_output: bool = False,
     append_native_count_summary: bool = False,
@@ -443,7 +492,7 @@ def make_simulator_wrapper(
 
 
 def _generate_dipole_native(
-    model: RacsLow3,
+    model: Racs,
     *args,
     **kwargs,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -456,11 +505,11 @@ def _generate_dipole_native(
 
 
 # Local convenience only. Do not rely on this for joblib worker processes.
-def attach_native_generate_dipole(model: RacsLow3) -> None:
+def attach_native_generate_dipole(model: Racs) -> None:
     if hasattr(model, "generate_dipole_native"):
         return
 
-    def generate_dipole_native(self: RacsLow3, *args, **kwargs):
+    def generate_dipole_native(self: Racs, *args, **kwargs):
         return _generate_dipole_native(self, *args, **kwargs)
 
     model.generate_dipole_native = MethodType(generate_dipole_native, model)  # type: ignore[attr-defined]
@@ -565,7 +614,7 @@ def _jax_key_from_npkey(key: NPKey) -> jax.Array:
 
 
 def _batch_generate_dipole_native(
-    model: RacsLow3Jax,
+    model: RacsJax,
     theta: dict[str, np.ndarray],
     key: jax.Array,
     batch_size: int,
@@ -605,7 +654,7 @@ def _build_hybrid_batch_from_native(
 
 
 def make_jax_model_sim_wrapper(
-    model: RacsLow3Jax,
+    model: RacsJax,
     batch_size: int,
     append_native_count_summary: bool = False,
     hist_max_count: int = 30,
@@ -678,13 +727,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--use_jax",
         action="store_true",
-        help="Use catsim's JAX batched RACS-low3 simulator.",
+        help="Use catsim's JAX batched RACS simulator.",
     )
     parser.add_argument(
         "--jax_batch_size",
         type=int,
         default=5,
-        help="Batch size passed to RacsLow3Jax.batch_generate_dipole.",
+        help="Batch size passed to RacsJax.batch_generate_dipole.",
     )
     parser.add_argument(
         "--out_dir",
@@ -721,7 +770,18 @@ if __name__ == "__main__":
         "--flux_min",
         type=float,
         default=2.0,
-        help="RACS-low3 flux threshold in mJy.",
+        help="RACS flux threshold in mJy.",
+    )
+    parser.add_argument(
+        "--racs_epoch",
+        choices=sorted(RACS_PRODUCTS),
+        default="low3",
+        help="RACS product/epoch to simulate.",
+    )
+    parser.add_argument(
+        "--openmeteo_fallback",
+        action="store_true",
+        help="Use Open-Meteo ambient temperatures when PAF temperatures are unavailable.",
     )
     parser.add_argument(
         "--nside",
@@ -861,22 +921,22 @@ if __name__ == "__main__":
     else:
         clus_model_cfg = args.simulate_clustering
 
-    config = RacsLow3Config(
+    config = build_racs_config(
+        racs_epoch=args.racs_epoch,
         flux_min=args.flux_min,
         nside=args.nside,
         chunk_size=args.chunk_size,
-        use_float32=False,
+        use_jax=args.use_jax,
         cluster_count_model=clus_model_cfg,
         downscale_nside=args.downscale_nside,
-        store_final_samples=not args.use_jax,
         alpha_mean=args.alpha_mean,
         alpha_sigma=args.alpha_sigma,
         fractional_error_flux_min_mjy=args.fractional_error_flux_min_mjy,
-        paf_temperature_data_dir='/home/oliver/Documents/dipole-utils/data/paf_temps',
+        openmeteo_fallback=args.openmeteo_fallback,
         mask_map=mask,
-        max_cluster_children_per_parent=args.max_children
+        max_cluster_children_per_parent=args.max_children,
     )
-    model = RacsLow3Jax(config) if args.use_jax else RacsLow3(config)
+    model = RacsJax(config) if args.use_jax else Racs(config)
     model.initialise_data()
 
     x0, mask = _build_real_sample(
@@ -904,7 +964,10 @@ if __name__ == "__main__":
     observed_map = x0[:map_ndim] if map_ndim is not None else x0
     observed_count = float(np.nansum(observed_map))
     if observed_count <= 0:
-        raise ValueError("Observed RACS-low3 map has zero total counts after masking/cuts.")
+        product = _model_product(model)
+        raise ValueError(
+            f"Observed {product.label} map has zero total counts after masking/cuts."
+        )
 
     prior, theta_0 = build_prior_and_reference_theta(
         model,

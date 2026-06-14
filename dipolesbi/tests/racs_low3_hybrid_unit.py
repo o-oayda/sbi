@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from dipolesbi.scripts.based_racs_low3 import (
+    build_racs_config,
     _build_hybrid_sample_from_native,
     _helmert_ilr_basis,
     _inverse_ilr_to_probabilities,
@@ -23,6 +24,51 @@ from dipolesbi.tools.configs import (
 )
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
 from dipolesbi.tools.priors_np import DipolePriorNP
+
+
+def _minimal_racs_config_kwargs(**overrides):
+    kwargs = {
+        "racs_epoch": "low3",
+        "flux_min": 2.0,
+        "nside": 1,
+        "chunk_size": 16,
+        "use_jax": False,
+        "cluster_count_model": "geometric",
+        "downscale_nside": None,
+        "alpha_mean": 0.8,
+        "alpha_sigma": 0.2,
+        "fractional_error_flux_min_mjy": 10.0,
+        "mask_map": np.ones(hp.nside2npix(1), dtype=bool),
+        "max_cluster_children_per_parent": 16,
+        "openmeteo_fallback": False,
+    }
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_build_racs_config_defaults_to_low3_product():
+    config = build_racs_config(**_minimal_racs_config_kwargs())
+
+    assert config.product.key == "low3"
+    assert config.temperature_fallback == "none"
+    assert config.store_final_samples is True
+
+
+def test_build_racs_config_selects_mid1_product():
+    config = build_racs_config(
+        **_minimal_racs_config_kwargs(racs_epoch="mid1", use_jax=True)
+    )
+
+    assert config.product.key == "mid1"
+    assert config.store_final_samples is False
+
+
+def test_build_racs_config_enables_openmeteo_fallback():
+    config = build_racs_config(
+        **_minimal_racs_config_kwargs(openmeteo_fallback=True)
+    )
+
+    assert config.temperature_fallback == "open_meteo"
 
 
 def test_native_count_hist_features_logs_normalized_counts():
