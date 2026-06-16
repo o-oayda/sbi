@@ -19,6 +19,8 @@ import matplotlib.pyplot as plt
 
 NativeCountSummary = Literal["hist_logprob", "hist_ilr", "log_dispersion"]
 NativeCountHistTransform = Literal["logprob", "ilr"]
+FLUX_TEMPERATURE_N_BINS = 10
+FLUX_TEMPERATURE_QUANTILES = (0.10, 0.25, 0.50, 0.75, 0.90)
 
 # FREE_TEMP_PIVOT_MODEL = "free_temp_pivot"
 # FIXED_TEMP_PIVOT_25C_MODEL = "fixed_temp_pivot_25c"
@@ -41,14 +43,151 @@ def _model_product(model: Racs | RacsJax):
     return model.cfg.product
 
 
+def _flux_temperature_edges(
+    model: Racs,
+    n_bins: int = FLUX_TEMPERATURE_N_BINS,
+) -> np.ndarray:
+    if n_bins < 1:
+        raise ValueError("flux-temperature summary requires at least one bin.")
+    temperatures = getattr(model, "tile_temperature_by_index", None)
+    if temperatures is None:
+        raise ValueError(
+            "Flux-temperature summary requires model.tile_temperature_by_index."
+        )
+    finite = np.asarray(temperatures, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        raise ValueError("Flux-temperature summary found no finite tile temperatures.")
+    temp_min = float(np.min(finite))
+    temp_max = float(np.max(finite))
+    if not temp_min < temp_max:
+        raise ValueError(
+            "Flux-temperature summary requires a non-zero temperature range."
+        )
+    return np.linspace(temp_min, temp_max, n_bins + 1, dtype=np.float64)
+
+
+def _flux_temperature_quantile_ndim(
+    n_temp_bins: int = FLUX_TEMPERATURE_N_BINS,
+    quantiles: tuple[float, ...] = FLUX_TEMPERATURE_QUANTILES,
+) -> int:
+    return n_temp_bins * len(quantiles)
+
+
+def _flux_temperature_quantile_features(
+    observed_flux: np.ndarray,
+    temperature: np.ndarray,
+    temp_edges: np.ndarray,
+    quantiles: tuple[float, ...] = FLUX_TEMPERATURE_QUANTILES,
+) -> np.ndarray:
+    observed_flux = np.asarray(observed_flux, dtype=np.float64)
+    temperature = np.asarray(temperature, dtype=np.float64)
+    temp_edges = np.asarray(temp_edges, dtype=np.float64)
+    quantile_array = np.asarray(quantiles, dtype=np.float64)
+
+    if observed_flux.shape != temperature.shape:
+        raise ValueError("observed_flux and temperature must have matching shapes.")
+    if temp_edges.ndim != 1 or temp_edges.size < 2:
+        raise ValueError("temp_edges must be a one-dimensional array of bin edges.")
+    if np.any(~np.isfinite(temp_edges)) or np.any(np.diff(temp_edges) <= 0):
+        raise ValueError("temp_edges must be finite and strictly increasing.")
+    if quantile_array.ndim != 1 or quantile_array.size == 0:
+        raise ValueError("At least one flux quantile is required.")
+    if np.any((quantile_array < 0.0) | (quantile_array > 1.0)):
+        raise ValueError("Flux quantiles must lie in [0, 1].")
+
+    valid = np.isfinite(observed_flux) & np.isfinite(temperature)
+    flux = observed_flux[valid]
+    temp = temperature[valid]
+    if flux.size == 0:
+        raise ValueError("Flux-temperature summary has no finite flux/temperature pairs.")
+
+    features: list[float] = []
+    for bin_idx, (lo, hi) in enumerate(zip(temp_edges[:-1], temp_edges[1:])):
+        if bin_idx == temp_edges.size - 2:
+            in_bin = (temp >= lo) & (temp <= hi)
+        else:
+            in_bin = (temp >= lo) & (temp < hi)
+        if not np.any(in_bin):
+            raise ValueError(
+                "Flux-temperature summary has an empty temperature bin "
+                f"[{lo:.6g}, {hi:.6g}{']' if bin_idx == temp_edges.size - 2 else ')'}."
+            )
+        features.extend(np.quantile(flux[in_bin], quantile_array))
+
+    return np.asarray(features, dtype=np.float32)
+
+
+def _append_summary_features(
+    data: np.ndarray,
+    mask: np.ndarray,
+    summary_features: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    summary_features = np.asarray(summary_features, dtype=np.float32)
+    if summary_features.ndim != 1:
+        raise ValueError("summary_features must be one-dimensional.")
+    summary_mask = np.ones(summary_features.shape, dtype=np.bool_)
+    hybrid = np.concatenate(
+        [np.asarray(data, dtype=np.float32), summary_features],
+    ).astype(np.float32, copy=False)
+    hybrid_mask = np.concatenate(
+        [np.asarray(mask, dtype=np.bool_), summary_mask],
+    ).astype(np.bool_, copy=False)
+    return hybrid, hybrid_mask
+
+
+def _real_catalogue_flux_temperature_samples(
+    model: Racs,
+    c2map: CatalogueToMap,
+) -> tuple[np.ndarray, np.ndarray]:
+    product = _model_product(model)
+    if getattr(model, "tile_temperature_by_index", None) is None:
+        raise ValueError(
+            "Flux-temperature summary requires model.tile_temperature_by_index."
+        )
+    if not hasattr(model, "_tile_index_from_sbid"):
+        raise ValueError("Flux-temperature summary requires Racs tile metadata.")
+
+    cut_catalogue = c2map.get_catalogue()
+    ra = np.asarray(cut_catalogue[product.columns.ra], dtype=np.float64)
+    dec = np.asarray(cut_catalogue[product.columns.dec], dtype=np.float64)
+    flux = np.asarray(cut_catalogue[product.columns.total_flux], dtype=np.float64)
+    sbid = np.asarray(cut_catalogue[product.columns.tile_id], dtype=np.int64)
+
+    pixel_indices = hp.ang2pix(model.nside, ra, dec, lonlat=True, nest=True)
+    in_mask = model.mask_map[pixel_indices].astype(bool, copy=False)
+    if not np.any(in_mask):
+        raise ValueError("Flux-temperature real summary has no sources in the mask.")
+
+    tile_indices = np.full(sbid.shape, -1, dtype=np.int32)
+    for idx, source_sbid in enumerate(sbid):
+        tile_indices[idx] = model._tile_index_from_sbid.get(int(source_sbid), -1)
+    valid_tile = tile_indices >= 0
+    temperatures = np.full(flux.shape, np.nan, dtype=np.float64)
+    temperatures[valid_tile] = np.asarray(
+        model.tile_temperature_by_index,
+        dtype=np.float64,
+    )[tile_indices[valid_tile]]
+
+    keep = in_mask & valid_tile & np.isfinite(flux) & np.isfinite(temperatures)
+    if not np.any(keep):
+        raise ValueError(
+            "Flux-temperature real summary has no finite retained flux/temperature pairs."
+        )
+    return flux[keep], temperatures[keep]
+
+
 def _build_real_sample(
     model: Racs | RacsJax,
     flux_min: float,
     append_native_count_summary: bool = False,
+    append_flux_temperature_summary: bool = False,
     hist_max_count: int = 30,
     hist_eps: float = 1e-6,
     native_count_summary: NativeCountSummary = "hist_logprob",
 ) -> tuple[np.ndarray, np.ndarray]:
+    if append_flux_temperature_summary and not isinstance(model, Racs):
+        raise ValueError("Flux-temperature summary is only supported for NumPy Racs.")
     product = _model_product(model)
     cat = DataLoader(*product.data_loader_args).load()
     c2map = CatalogueToMap(cat)
@@ -79,7 +218,7 @@ def _build_real_sample(
                 "--append_native_count_summary requires --downscale_nside so the "
                 "map part of the hybrid target is well-defined."
             )
-        return _build_hybrid_sample_from_native(
+        output_map, output_mask = _build_hybrid_sample_from_native(
             density_map,
             mask,
             downscale_nside=model.downscale_nside,
@@ -87,20 +226,42 @@ def _build_real_sample(
             hist_eps=hist_eps,
             native_count_summary=native_count_summary,
         )
+        if append_flux_temperature_summary:
+            assert isinstance(model, Racs)
+            flux, temperature = _real_catalogue_flux_temperature_samples(model, c2map)
+            summary_features = _flux_temperature_quantile_features(
+                flux,
+                temperature,
+                temp_edges=_flux_temperature_edges(model),
+            )
+            return _append_summary_features(output_map, output_mask, summary_features)
+        return output_map, output_mask
 
     if model.downscale_nside is None:
-        return density_map, mask
+        output_map, output_mask = density_map, mask
+    else:
+        coarse_map, coarse_mask = downgrade_ignore_nan(
+            density_map,
+            mask,
+            model.downscale_nside,
+        )
+        coarse_map = coarse_map.astype(np.float32, copy=False)
+        coarse_mask = coarse_mask.astype(np.bool_, copy=False)
+        coarse_map = coarse_map.copy()
+        coarse_map[~coarse_mask] = np.nan
+        output_map, output_mask = coarse_map, coarse_mask
 
-    coarse_map, coarse_mask = downgrade_ignore_nan(
-        density_map,
-        mask,
-        model.downscale_nside,
-    )
-    coarse_map = coarse_map.astype(np.float32, copy=False)
-    coarse_mask = coarse_mask.astype(np.bool_, copy=False)
-    coarse_map = coarse_map.copy()
-    coarse_map[~coarse_mask] = np.nan
-    return coarse_map, coarse_mask
+    if append_flux_temperature_summary:
+        assert isinstance(model, Racs)
+        flux, temperature = _real_catalogue_flux_temperature_samples(model, c2map)
+        summary_features = _flux_temperature_quantile_features(
+            flux,
+            temperature,
+            temp_edges=_flux_temperature_edges(model),
+        )
+        return _append_summary_features(output_map, output_mask, summary_features)
+
+    return output_map, output_mask
 
 
 def _helmert_ilr_basis(n_bins: int) -> np.ndarray:
@@ -451,6 +612,7 @@ def make_simulator_wrapper(
     # chosen_model: str = FREE_TEMP_PIVOT_MODEL,
     native_output: bool = False,
     append_native_count_summary: bool = False,
+    append_flux_temperature_summary: bool = False,
     hist_max_count: int = 30,
     hist_eps: float = 1e-6,
     native_count_summary: NativeCountSummary = "hist_logprob",
@@ -475,13 +637,61 @@ def make_simulator_wrapper(
                 rng_key=rng_key,
                 **kwargs,
             )
-            return _build_hybrid_sample_from_native(
+            output_map, output_mask = _build_hybrid_sample_from_native(
                 native_map,
                 native_mask,
                 downscale_nside=model.downscale_nside,
                 hist_max_count=hist_max_count,
                 hist_eps=hist_eps,
                 native_count_summary=native_count_summary,
+            )
+            if append_flux_temperature_summary:
+                if model.final_observed_flux_samples is None:
+                    raise ValueError(
+                        "Flux-temperature summary requires stored final flux samples."
+                    )
+                if model.final_temperature_samples is None:
+                    raise ValueError(
+                        "Flux-temperature summary requires stored final temperature samples."
+                    )
+                summary_features = _flux_temperature_quantile_features(
+                    model.final_observed_flux_samples,
+                    model.final_temperature_samples,
+                    temp_edges=_flux_temperature_edges(model),
+                )
+                return _append_summary_features(
+                    output_map,
+                    output_mask,
+                    summary_features,
+                )
+            return output_map, output_mask
+
+        if append_flux_temperature_summary:
+            if model.downscale_nside is None:
+                raise ValueError(
+                    "append_flux_temperature_summary requires model.downscale_nside."
+                )
+            output_map, output_mask = model.generate_dipole(
+                rng_key=rng_key,
+                **kwargs,
+            )
+            if model.final_observed_flux_samples is None:
+                raise ValueError(
+                    "Flux-temperature summary requires stored final flux samples."
+                )
+            if model.final_temperature_samples is None:
+                raise ValueError(
+                    "Flux-temperature summary requires stored final temperature samples."
+                )
+            summary_features = _flux_temperature_quantile_features(
+                model.final_observed_flux_samples,
+                model.final_temperature_samples,
+                temp_edges=_flux_temperature_edges(model),
+            )
+            return _append_summary_features(
+                output_map,
+                output_mask,
+                summary_features,
             )
 
         if native_output:
@@ -838,6 +1048,14 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--append_flux_temperature_summary",
+        action="store_true",
+        help=(
+            "Append per-temperature-bin retained-flux quantiles to the "
+            "downscaled map for NumPy NLE."
+        ),
+    )
+    parser.add_argument(
         "--hist_max_count",
         type=int,
         default=30,
@@ -899,6 +1117,7 @@ if __name__ == "__main__":
     append_native_count_summary = (
         args.append_native_count_summary or args.append_native_count_hist
     )
+    append_flux_temperature_summary = args.append_flux_temperature_summary
     if args.native_count_summary is not None:
         native_count_summary = args.native_count_summary
     elif args.native_count_hist_transform is not None:
@@ -910,10 +1129,18 @@ if __name__ == "__main__":
 
     if append_native_count_summary and args.downscale_nside is None:
         parser.error("--append_native_count_summary requires --downscale_nside.")
+    if append_flux_temperature_summary and args.downscale_nside is None:
+        parser.error("--append_flux_temperature_summary requires --downscale_nside.")
+    if append_flux_temperature_summary and args.use_jax:
+        parser.error("--append_flux_temperature_summary is only supported without --use_jax.")
 
     modes = _parse_modes(args.mode, parser)
     if append_native_count_summary and any(mode != "NLE" for mode in modes):
         parser.error("--append_native_count_summary is currently supported for NLE only.")
+    if append_flux_temperature_summary and any(mode != "NLE" for mode in modes):
+        parser.error(
+            "--append_flux_temperature_summary is currently supported for NLE only."
+        )
     mask = _build_mask(args.nside)
 
     if not args.simulate_clustering:
@@ -943,17 +1170,22 @@ if __name__ == "__main__":
         model,
         flux_min=args.flux_min,
         append_native_count_summary=append_native_count_summary,
+        append_flux_temperature_summary=append_flux_temperature_summary,
         hist_max_count=args.hist_max_count,
         hist_eps=args.hist_eps,
         native_count_summary=native_count_summary,
     )
-    if append_native_count_summary:
+    if append_native_count_summary or append_flux_temperature_summary:
         assert args.downscale_nside is not None
         map_ndim = hp.nside2npix(args.downscale_nside)
-        summary_ndim = _native_count_summary_ndim(
-            args.hist_max_count,
-            native_count_summary,
-        )
+        summary_ndim = 0
+        if append_native_count_summary:
+            summary_ndim += _native_count_summary_ndim(
+                args.hist_max_count,
+                native_count_summary,
+            )
+        if append_flux_temperature_summary:
+            summary_ndim += _flux_temperature_quantile_ndim()
         effective_nside = args.downscale_nside
     else:
         map_ndim = None
@@ -988,6 +1220,7 @@ if __name__ == "__main__":
             model,
             # chosen_model=args.model,
             append_native_count_summary=append_native_count_summary,
+            append_flux_temperature_summary=append_flux_temperature_summary,
             hist_max_count=args.hist_max_count,
             hist_eps=args.hist_eps,
             native_count_summary=native_count_summary,

@@ -8,11 +8,16 @@ import pytest
 
 from dipolesbi.scripts.based_racs_low3 import (
     build_racs_config,
+    FLUX_TEMPERATURE_QUANTILES,
     _build_hybrid_sample_from_native,
+    _flux_temperature_edges,
+    _flux_temperature_quantile_features,
+    _flux_temperature_quantile_ndim,
     _helmert_ilr_basis,
     _inverse_ilr_to_probabilities,
     _native_count_hist_features,
     _native_count_summary_features,
+    make_simulator_wrapper,
 )
 from dipolesbi.tools.configs import (
     DataTransformConfig,
@@ -169,6 +174,108 @@ def test_native_count_hist_features_rejects_empty_mask():
 
     with pytest.raises(ValueError, match="no unmasked native pixels"):
         _native_count_hist_features(native_map, native_mask, max_count=5, eps=1e-6)
+
+
+def test_flux_temperature_edges_use_finite_tile_temperature_range():
+    class Model:
+        tile_temperature_by_index = np.asarray([np.nan, 20.0, 25.0, 35.0])
+
+    edges = _flux_temperature_edges(Model(), n_bins=3)
+
+    np.testing.assert_allclose(edges, np.asarray([20.0, 25.0, 30.0, 35.0]))
+
+
+def test_flux_temperature_quantile_features_by_temperature_bin():
+    temp_edges = np.asarray([0.0, 10.0, 20.0], dtype=np.float64)
+    flux = np.asarray([1.0, 3.0, 10.0, 30.0], dtype=np.float64)
+    temperature = np.asarray([1.0, 9.0, 10.0, 20.0], dtype=np.float64)
+
+    features = _flux_temperature_quantile_features(
+        flux,
+        temperature,
+        temp_edges=temp_edges,
+        quantiles=(0.0, 0.5, 1.0),
+    )
+
+    expected = np.asarray([1.0, 2.0, 3.0, 10.0, 20.0, 30.0], dtype=np.float32)
+    np.testing.assert_allclose(features, expected)
+    assert features.dtype == np.float32
+
+
+def test_flux_temperature_quantile_features_rejects_empty_bins():
+    with pytest.raises(ValueError, match="empty temperature bin"):
+        _flux_temperature_quantile_features(
+            observed_flux=np.asarray([1.0, 2.0]),
+            temperature=np.asarray([1.0, 2.0]),
+            temp_edges=np.asarray([0.0, 5.0, 10.0]),
+        )
+
+
+def test_flux_temperature_summary_dimension_defaults_to_fifty():
+    assert _flux_temperature_quantile_ndim() == 10 * len(FLUX_TEMPERATURE_QUANTILES)
+
+
+def test_simulator_wrapper_appends_flux_temperature_summary():
+    class Model:
+        downscale_nside = 1
+        tile_temperature_by_index = np.linspace(0.0, 10.0, 11)
+        final_observed_flux_samples = None
+        final_temperature_samples = None
+
+        def generate_dipole(self, *args, **kwargs):
+            self.final_temperature_samples = np.arange(10, dtype=np.float32) + 0.5
+            self.final_observed_flux_samples = np.arange(10, dtype=np.float32) + 1.0
+            return (
+                np.zeros(hp.nside2npix(1), dtype=np.float32),
+                np.ones(hp.nside2npix(1), dtype=bool),
+            )
+
+    wrapper = make_simulator_wrapper(
+        Model(),
+        append_flux_temperature_summary=True,
+    )
+
+    data, mask = wrapper()
+
+    map_ndim = hp.nside2npix(1)
+    assert data.shape == (map_ndim + 50,)
+    assert mask.shape == data.shape
+    np.testing.assert_array_equal(mask[map_ndim:], np.ones(50, dtype=bool))
+    expected_summary = np.repeat(np.arange(10, dtype=np.float32) + 1.0, 5)
+    np.testing.assert_allclose(data[map_ndim:], expected_summary)
+
+
+def test_simulator_wrapper_appends_native_and_flux_temperature_summaries():
+    class Model:
+        downscale_nside = 1
+        tile_temperature_by_index = np.linspace(0.0, 10.0, 11)
+        final_observed_flux_samples = None
+        final_temperature_samples = None
+
+        def generate_dipole(self, *args, **kwargs):
+            self.final_temperature_samples = np.arange(10, dtype=np.float32) + 0.5
+            self.final_observed_flux_samples = np.arange(10, dtype=np.float32) + 1.0
+            native_map = np.arange(hp.nside2npix(2), dtype=np.float32)
+            native_mask = np.ones(hp.nside2npix(2), dtype=bool)
+            return native_map, native_mask
+
+    wrapper = make_simulator_wrapper(
+        Model(),
+        append_native_count_summary=True,
+        append_flux_temperature_summary=True,
+        hist_max_count=4,
+        native_count_summary="log_dispersion",
+    )
+
+    data, mask = wrapper()
+
+    map_ndim = hp.nside2npix(1)
+    assert data.shape == (map_ndim + 1 + 50,)
+    assert mask.shape == data.shape
+    assert bool(mask[map_ndim])
+    np.testing.assert_array_equal(mask[map_ndim + 1 :], np.ones(50, dtype=bool))
+    expected_flux_temperature = np.repeat(np.arange(10, dtype=np.float32) + 1.0, 5)
+    np.testing.assert_allclose(data[map_ndim + 1 :], expected_flux_temperature)
 
 
 def test_build_hybrid_sample_appends_all_true_summary_mask():
