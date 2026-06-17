@@ -14,6 +14,7 @@ import numpy as np
 
 from dipolesbi.pipelines.summary_stats import (
     _flux_temperature_edges,
+    _flux_temperature_histogram_quantile_features,
     _flux_temperature_quantile_features,
     _flux_temperature_quantile_ndim,
     _native_count_log_dispersion_feature,
@@ -29,6 +30,7 @@ from dipolesbi.tools.utils import batch_simulate
 SummaryFeature = Literal["log_dispersion", "flux_quantiles"]
 DEFAULT_FLUX_TEMPERATURE_N_BINS = 10
 DEFAULT_FLUX_TEMPERATURE_QUANTILES = (0.10, 0.25, 0.50, 0.75, 0.90)
+DEFAULT_FLUX_TEMPERATURE_JAX_FLUX_BINS = 128
 DEFAULT_PAF_TEMPERATURE_DATA_DIR = "/home/oliver/Documents/dipole-utils/data/paf_temps"
 
 
@@ -208,8 +210,6 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         parser.error("--flux_temperature_quantiles must contain at least one value.")
     if any(q < 0.0 or q > 1.0 for q in args.flux_temperature_quantiles):
         parser.error("--flux_temperature_quantiles values must lie in [0, 1].")
-    if args.use_jax and "flux_quantiles" in args.summary_features:
-        parser.error("--summary_features flux_quantiles is only supported without --use_jax.")
     _validate_prior_bounds(args, parser)
 
     modes = _parse_modes(args.mode, parser)
@@ -443,8 +443,6 @@ def build_real_sample(
     save_map_plot: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     summary_features = list(summary_features or [])
-    if "flux_quantiles" in summary_features and not isinstance(model, Racs):
-        raise ValueError("Flux-temperature summary is only supported for NumPy Racs.")
 
     product = _model_product(model)
     cat = DataLoader(*product.data_loader_args).load()
@@ -472,19 +470,46 @@ def build_real_sample(
         plt.close()
 
     flux = temperature = None
+    summary_values: np.ndarray | None = None
     if "flux_quantiles" in summary_features:
-        assert isinstance(model, Racs)
         flux, temperature = _real_catalogue_flux_temperature_samples(model, c2map)
-    summary_values = _build_summary_features(
-        native_map,
-        native_mask,
-        summary_features,
-        model=model if isinstance(model, Racs) else None,
-        flux=flux,
-        temperature=temperature,
-        flux_temperature_n_bins=flux_temperature_n_bins,
-        flux_temperature_quantiles=flux_temperature_quantiles,
-    )
+        if isinstance(model, RacsJax):
+            stats: list[np.ndarray] = []
+            for summary in summary_features:
+                if summary == "log_dispersion":
+                    stats.append(_native_count_log_dispersion_feature(native_map, native_mask))
+                elif summary == "flux_quantiles":
+                    flux_max = model.flux_temperature_summary_flux_max_mjy
+                    if flux_max is None:
+                        raise ValueError("JAX flux-temperature summary requires flux_max.")
+                    stats.append(
+                        _flux_temperature_histogram_quantile_features(
+                            flux,
+                            temperature,
+                            temp_edges=_flux_temperature_edges(
+                                model,
+                                flux_temperature_n_bins,
+                            ),
+                            quantiles=flux_temperature_quantiles,
+                            flux_min_mjy=flux_min,
+                            flux_max_mjy=flux_max,
+                            n_flux_bins=DEFAULT_FLUX_TEMPERATURE_JAX_FLUX_BINS,
+                        )
+                    )
+                else:
+                    raise ValueError(f"Unknown summary feature: {summary}")
+            summary_values = np.concatenate(stats, axis=0).astype(np.float32, copy=False)
+    if summary_values is None:
+        summary_values = _build_summary_features(
+            native_map,
+            native_mask,
+            summary_features,
+            model=model if isinstance(model, Racs) else None,
+            flux=flux,
+            temperature=temperature,
+            flux_temperature_n_bins=flux_temperature_n_bins,
+            flux_temperature_quantiles=flux_temperature_quantiles,
+        )
     return build_hybrid_sample_from_native(
         native_map,
         native_mask,
@@ -689,6 +714,9 @@ def make_jax_model_sim_wrapper(
     batch_size: int,
     *,
     summary_features: list[SummaryFeature] | None = None,
+    flux_temperature_n_bins: int = DEFAULT_FLUX_TEMPERATURE_N_BINS,
+    flux_temperature_quantiles: tuple[float, ...] = DEFAULT_FLUX_TEMPERATURE_QUANTILES,
+    flux_temperature_jax_flux_bins: int = DEFAULT_FLUX_TEMPERATURE_JAX_FLUX_BINS,
 ):
     summary_features = list(summary_features or [])
 
@@ -709,21 +737,65 @@ def make_jax_model_sim_wrapper(
                 show_progress=True,
             )
 
-        native_maps, native_masks = _batch_generate_dipole_native(
-            model,
-            theta,
-            jax_key,
-            batch_size=batch_size,
-        )
-        outputs = [
-            build_hybrid_sample_from_native(
-                native_map,
-                native_mask,
-                downscale_nside=model.downscale_nside,
-                summary_features=summary_features,
+        if "flux_quantiles" in summary_features:
+            original_downscale_nside = model.downscale_nside
+            try:
+                model.downscale_nside = None
+                native_maps, native_masks, flux_summaries = (
+                    model.batch_generate_dipole_with_flux_temperature_summary(
+                        theta,
+                        jax_key,
+                        batch_size=batch_size,
+                        temperature_edges=_flux_temperature_edges(
+                            model,
+                            flux_temperature_n_bins,
+                        ),
+                        quantiles=flux_temperature_quantiles,
+                        n_flux_bins=flux_temperature_jax_flux_bins,
+                        show_progress=True,
+                    )
+                )
+            finally:
+                model.downscale_nside = original_downscale_nside
+        else:
+            native_maps, native_masks = _batch_generate_dipole_native(
+                model,
+                theta,
+                jax_key,
+                batch_size=batch_size,
             )
-            for native_map, native_mask in zip(native_maps, native_masks)
-        ]
+            flux_summaries = [None] * native_maps.shape[0]
+        outputs = []
+        for native_map, native_mask, flux_summary in zip(
+            native_maps,
+            native_masks,
+            flux_summaries,
+        ):
+            summary_parts: list[np.ndarray] = []
+            for summary in summary_features:
+                if summary == "log_dispersion":
+                    summary_parts.append(
+                        _native_count_log_dispersion_feature(native_map, native_mask)
+                    )
+                elif summary == "flux_quantiles":
+                    if flux_summary is None:
+                        raise ValueError("JAX flux quantile summary was not computed.")
+                    summary_parts.append(np.asarray(flux_summary, dtype=np.float32))
+                else:
+                    raise ValueError(f"Unknown summary feature: {summary}")
+            summary_values = (
+                np.concatenate(summary_parts, axis=0).astype(np.float32, copy=False)
+                if summary_parts else None
+            )
+            outputs.append(
+                build_hybrid_sample_from_native(
+                    native_map,
+                    native_mask,
+                    downscale_nside=model.downscale_nside,
+                    summary_features=summary_features,
+                    summary_values=summary_values,
+                )
+            )
         x = np.stack([output[0] for output in outputs], axis=0)
         mask = np.stack([output[1] for output in outputs], axis=0)
         return x, mask
@@ -876,6 +948,8 @@ def main() -> None:
             model,
             batch_size=args.jax_batch_size,
             summary_features=summary_features,
+            flux_temperature_n_bins=args.flux_temperature_n_bins,
+            flux_temperature_quantiles=args.flux_temperature_quantiles,
         )
     else:
         simulator_wrapper = make_simulator_wrapper(

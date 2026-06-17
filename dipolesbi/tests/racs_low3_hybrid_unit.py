@@ -15,6 +15,7 @@ from dipolesbi.pipelines.based_racs import (
 )
 from dipolesbi.pipelines.summary_stats import (
     _flux_temperature_edges,
+    _flux_temperature_histogram_quantile_features,
     _flux_temperature_quantile_features,
     _flux_temperature_quantile_ndim,
     _native_count_log_dispersion_feature,
@@ -174,6 +175,26 @@ def test_flux_temperature_quantile_features_by_temperature_bin():
 
     expected = np.asarray([1.0, 2.0, 3.0, 10.0, 20.0, 30.0], dtype=np.float32)
     np.testing.assert_allclose(features, expected)
+    assert features.dtype == np.float32
+
+
+def test_flux_temperature_histogram_quantile_features_return_raw_flux_quantiles():
+    temp_edges = np.asarray([0.0, 10.0, 20.0], dtype=np.float64)
+    flux = np.asarray([10.0, 100.0, 1000.0, 10000.0], dtype=np.float64)
+    temperature = np.asarray([1.0, 9.0, 10.0, 20.0], dtype=np.float64)
+
+    features = _flux_temperature_histogram_quantile_features(
+        flux,
+        temperature,
+        temp_edges=temp_edges,
+        quantiles=(0.0, 0.5, 1.0),
+        flux_min_mjy=10.0,
+        flux_max_mjy=10000.0,
+        n_flux_bins=3,
+    )
+
+    expected = np.asarray([10.0, 100.0, 1000.0, 1000.0, 3162.2777, 10000.0])
+    np.testing.assert_allclose(features, expected, rtol=1e-5)
     assert features.dtype == np.float32
 
 
