@@ -861,7 +861,7 @@ def build_scenario(
             flow_overrides={
                 "decoder_n_neurons": 128,
                 "decoder_n_layers": 4,
-                "architecture": ["MAF"] + ["surjective_MAF"] + 6 * ["MAF"],
+                "architecture": 11 * ["MAF"],
                 "data_reduction_factor": 0.5,
             },
             data_spec=DataTransformSpec.zscore(method="batchwise"),
