@@ -844,8 +844,9 @@ class MultiRoundInferer:
         )
         plt.savefig(
             self.mr_config.plot_save_dir
-          + f'/jax_samples_{self.current_round}.pdf',
-            bbox_inches='tight'
+          + f'/jax_samples_{self.current_round}.png',
+            bbox_inches='tight',
+            dpi=300
         )
 
         self.lnZ_per_round.append(self.current_nested_samples.logZ())
