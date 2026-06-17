@@ -29,6 +29,7 @@ from dipolesbi.tools.utils import batch_simulate
 SummaryFeature = Literal["log_dispersion", "flux_quantiles"]
 DEFAULT_FLUX_TEMPERATURE_N_BINS = 10
 DEFAULT_FLUX_TEMPERATURE_QUANTILES = (0.10, 0.25, 0.50, 0.75, 0.90)
+DEFAULT_PAF_TEMPERATURE_DATA_DIR = "/home/oliver/Documents/dipole-utils/data/paf_temps"
 
 
 def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
@@ -109,6 +110,12 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
         help="Use Open-Meteo ambient temperatures when PAF temperatures are unavailable.",
     )
     parser.add_argument(
+        "--paf_temperature_data_dir",
+        type=str,
+        default=DEFAULT_PAF_TEMPERATURE_DATA_DIR,
+        help="Directory containing PAF temperature data.",
+    )
+    parser.add_argument(
         "--nside",
         type=int,
         default=64,
@@ -168,6 +175,22 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
         default=None,
         help="Use a clustering model to represent extended sources.",
     )
+    parser.add_argument("--log10_n_initial_samples_min", type=float, default=5.6)
+    parser.add_argument("--log10_n_initial_samples_max", type=float, default=6.8)
+    parser.add_argument("--observer_speed_min", type=float, default=0.0)
+    parser.add_argument("--observer_speed_max", type=float, default=12.0)
+    parser.add_argument("--dipole_longitude_min", type=float, default=0.0)
+    parser.add_argument("--dipole_longitude_max", type=float, default=360.0)
+    parser.add_argument("--dipole_latitude_min", type=float, default=-90.0)
+    parser.add_argument("--dipole_latitude_max", type=float, default=90.0)
+    parser.add_argument("--temp_beta_min", type=float, default=0.0)
+    parser.add_argument("--temp_beta_max", type=float, default=0.05)
+    parser.add_argument("--p_clus_min", type=float, default=0.0)
+    parser.add_argument("--p_clus_max", type=float, default=1.0)
+    parser.add_argument("--clus_stop_prob_min", type=float, default=0.4)
+    parser.add_argument("--clus_stop_prob_max", type=float, default=1.0)
+    parser.add_argument("--lambda_clus_min", type=float, default=0.0)
+    parser.add_argument("--lambda_clus_max", type=float, default=3.0)
     parser.add_argument("--max_children", type=int, default=16)
     return parser.parse_args(), parser
 
@@ -187,6 +210,7 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         parser.error("--flux_temperature_quantiles values must lie in [0, 1].")
     if args.use_jax and "flux_quantiles" in args.summary_features:
         parser.error("--summary_features flux_quantiles is only supported without --use_jax.")
+    _validate_prior_bounds(args, parser)
 
     modes = _parse_modes(args.mode, parser)
     if args.summary_features and any(mode != "NLE" for mode in modes):
@@ -196,6 +220,28 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         args.simulate_clustering = "geometric"
     args.flux_temperature_quantiles = tuple(args.flux_temperature_quantiles)
     return modes
+
+
+def _validate_prior_bounds(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> None:
+    prior_bounds = {
+        "log10_n_initial_samples": (
+            args.log10_n_initial_samples_min,
+            args.log10_n_initial_samples_max,
+        ),
+        "observer_speed": (args.observer_speed_min, args.observer_speed_max),
+        "dipole_longitude": (args.dipole_longitude_min, args.dipole_longitude_max),
+        "dipole_latitude": (args.dipole_latitude_min, args.dipole_latitude_max),
+        "temp_beta": (args.temp_beta_min, args.temp_beta_max),
+        "p_clus": (args.p_clus_min, args.p_clus_max),
+        "clus_stop_prob": (args.clus_stop_prob_min, args.clus_stop_prob_max),
+        "lambda_clus": (args.lambda_clus_min, args.lambda_clus_max),
+    }
+    for name, (low, high) in prior_bounds.items():
+        if low >= high:
+            parser.error(f"--{name}_min must be less than --{name}_max.")
 
 
 def _parse_modes(raw_modes: list[str] | None, parser: argparse.ArgumentParser) -> list[str]:
@@ -221,6 +267,7 @@ def build_racs_config(
     fractional_error_flux_min_mjy: float,
     mask_map: np.ndarray | None = None,
     max_cluster_children_per_parent: int = 16,
+    paf_temperature_data_dir: str = DEFAULT_PAF_TEMPERATURE_DATA_DIR,
     openmeteo_fallback: bool = False,
 ) -> RacsConfig:
     return RacsConfig(
@@ -235,7 +282,7 @@ def build_racs_config(
         alpha_mean=alpha_mean,
         alpha_sigma=alpha_sigma,
         fractional_error_flux_min_mjy=fractional_error_flux_min_mjy,
-        paf_temperature_data_dir="/home/oliver/Documents/dipole-utils/data/paf_temps",
+        paf_temperature_data_dir=paf_temperature_data_dir,
         temperature_fallback="open_meteo" if openmeteo_fallback else "none",
         mask_map=mask_map,
         max_cluster_children_per_parent=max_cluster_children_per_parent,
@@ -449,10 +496,21 @@ def build_real_sample(
 
 def build_prior_and_reference_theta(
     simulate_clustering: None | Literal["geometric", "poisson"] = None,
+    *,
+    log10_n_initial_samples_range: tuple[float, float] = (5.6, 6.8),
+    observer_speed_range: tuple[float, float] = (0.0, 12.0),
+    dipole_longitude_range: tuple[float, float] = (0.0, 360.0),
+    dipole_latitude_range: tuple[float, float] = (-90.0, 90.0),
+    temp_beta_range: tuple[float, float] = (0.0, 0.05),
+    p_clus_range: tuple[float, float] = (0.0, 1.0),
+    clus_stop_prob_range: tuple[float, float] = (0.4, 1.0),
+    lambda_clus_range: tuple[float, float] = (0.0, 3.0),
 ) -> tuple[DipolePriorNP, dict[str, float]]:
     prior = DipolePriorNP(
-        mean_count_range=[5.6, 6.8],
-        speed_range=[0, 12],
+        mean_count_range=list(log10_n_initial_samples_range),
+        speed_range=list(observer_speed_range),
+        longitude_range=list(dipole_longitude_range),
+        latitude_range=list(dipole_latitude_range),
     )
     prior.change_kwarg(
         param_short_name="N",
@@ -461,31 +519,31 @@ def build_prior_and_reference_theta(
     prior.add_prior(
         short_name="beta",
         simulator_kwarg="temp_beta",
-        low=0.0,
-        high=0.05,
+        low=temp_beta_range[0],
+        high=temp_beta_range[1],
         dist_type="Uniform",
     )
     if simulate_clustering == "geometric":
         prior.add_prior(
             "pclus",
             simulator_kwarg="p_clus",
-            low=0,
-            high=1,
+            low=p_clus_range[0],
+            high=p_clus_range[1],
             dist_type="Uniform",
         )
         prior.add_prior(
             "pstop",
             simulator_kwarg="clus_stop_prob",
-            low=0.4,
-            high=1,
+            low=clus_stop_prob_range[0],
+            high=clus_stop_prob_range[1],
             dist_type="Uniform",
         )
     elif simulate_clustering == "poisson":
         prior.add_prior(
             "lclus",
             simulator_kwarg="lambda_clus",
-            low=0,
-            high=3,
+            low=lambda_clus_range[0],
+            high=lambda_clus_range[1],
             dist_type="Uniform",
         )
     elif simulate_clustering is not None:
@@ -760,6 +818,7 @@ def main() -> None:
         openmeteo_fallback=args.openmeteo_fallback,
         mask_map=mask,
         max_cluster_children_per_parent=args.max_children,
+        paf_temperature_data_dir=args.paf_temperature_data_dir,
     )
 
     model = RacsJax(config) if args.use_jax else Racs(config)
@@ -796,6 +855,20 @@ def main() -> None:
 
     prior, theta_0 = build_prior_and_reference_theta(
         simulate_clustering=args.simulate_clustering,
+        log10_n_initial_samples_range=(
+            args.log10_n_initial_samples_min,
+            args.log10_n_initial_samples_max,
+        ),
+        observer_speed_range=(args.observer_speed_min, args.observer_speed_max),
+        dipole_longitude_range=(
+            args.dipole_longitude_min,
+            args.dipole_longitude_max,
+        ),
+        dipole_latitude_range=(args.dipole_latitude_min, args.dipole_latitude_max),
+        temp_beta_range=(args.temp_beta_min, args.temp_beta_max),
+        p_clus_range=(args.p_clus_min, args.p_clus_max),
+        clus_stop_prob_range=(args.clus_stop_prob_min, args.clus_stop_prob_max),
+        lambda_clus_range=(args.lambda_clus_min, args.lambda_clus_max),
     )
 
     if args.use_jax:

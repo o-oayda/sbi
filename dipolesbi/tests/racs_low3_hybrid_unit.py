@@ -9,6 +9,7 @@ import pytest
 from dipolesbi.pipelines.based_racs import (
     DEFAULT_FLUX_TEMPERATURE_QUANTILES,
     build_hybrid_sample_from_native,
+    build_prior_and_reference_theta,
     build_racs_config,
     make_simulator_wrapper,
 )
@@ -45,6 +46,7 @@ def _minimal_racs_config_kwargs(**overrides):
         "mask_map": np.ones(hp.nside2npix(1), dtype=bool),
         "max_cluster_children_per_parent": 16,
         "openmeteo_fallback": False,
+        "paf_temperature_data_dir": "/home/oliver/Documents/dipole-utils/data/paf_temps",
     }
     kwargs.update(overrides)
     return kwargs
@@ -71,6 +73,44 @@ def test_build_racs_config_enables_openmeteo_fallback():
     config = build_racs_config(**_minimal_racs_config_kwargs(openmeteo_fallback=True))
 
     assert config.temperature_fallback == "open_meteo"
+
+
+def test_build_racs_config_accepts_paf_temperature_data_dir():
+    config = build_racs_config(
+        **_minimal_racs_config_kwargs(paf_temperature_data_dir="/tmp/paf_temps")
+    )
+
+    assert config.paf_temperature_data_dir == "/tmp/paf_temps"
+
+
+def test_build_prior_and_reference_theta_accepts_custom_bounds():
+    prior, theta_0 = build_prior_and_reference_theta(
+        simulate_clustering="geometric",
+        log10_n_initial_samples_range=(6.0, 7.0),
+        observer_speed_range=(1.0, 9.0),
+        dipole_longitude_range=(10.0, 250.0),
+        dipole_latitude_range=(-30.0, 45.0),
+        temp_beta_range=(0.01, 0.03),
+        p_clus_range=(0.2, 0.8),
+        clus_stop_prob_range=(0.5, 0.9),
+    )
+
+    assert prior.prior_dict["N"]["simulator_kwarg"] == "log10_n_initial_samples"
+    assert prior.prior_dict["N"]["low_range"] == 6.0
+    assert prior.prior_dict["N"]["high_range"] == 7.0
+    assert prior.prior_dict["D"]["low_range"] == 1.0
+    assert prior.prior_dict["D"]["high_range"] == 9.0
+    assert prior.prior_dict["phi"]["low_range"] == 10.0
+    assert prior.prior_dict["phi"]["high_range"] == 250.0
+    assert prior.prior_dict["theta"]["low_range"] == -30.0
+    assert prior.prior_dict["theta"]["high_range"] == 45.0
+    assert prior.prior_dict["beta"]["low_range"] == 0.01
+    assert prior.prior_dict["beta"]["high_range"] == 0.03
+    assert prior.prior_dict["pclus"]["low_range"] == 0.2
+    assert prior.prior_dict["pclus"]["high_range"] == 0.8
+    assert prior.prior_dict["pstop"]["low_range"] == 0.5
+    assert prior.prior_dict["pstop"]["high_range"] == 0.9
+    assert theta_0["temp_beta"] == 0.02
 
 
 def test_native_count_log_dispersion_feature():
