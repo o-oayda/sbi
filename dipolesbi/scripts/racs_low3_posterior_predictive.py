@@ -16,10 +16,8 @@ import numpy as np
 import healpy as hp
 from catsim import RacsLow3, RacsLow3Config, smooth_map
 
-from dipolesbi.scripts.based_racs_low3 import (
-    FREE_TEMP_PIVOT_MODEL,
-    MODEL_CHOICES,
-    _build_real_sample,
+from dipolesbi.pipelines.based_racs import (
+    build_real_sample,
     build_prior_and_reference_theta,
     build_scenario,
     make_model_sim_wrapper,
@@ -104,12 +102,6 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Optional round index override. Defaults to parsing from checkpoint name.",
-    )
-    parser.add_argument(
-        "--model",
-        choices=MODEL_CHOICES,
-        default=FREE_TEMP_PIVOT_MODEL,
-        help="Simulator model to use when reconstructing the posterior predictive.",
     )
     parser.add_argument(
         "--n_workers",
@@ -202,17 +194,11 @@ def main() -> None:
     model = RacsLow3(config)
     model.initialise_data()
 
-    x0, mask = _build_real_sample(model, flux_min=args.flux_min)
+    x0, mask = build_real_sample(model, flux_min=args.flux_min)
     effective_nside = int(np.sqrt(x0.size / 12))
 
-    prior, theta_0, temp_pivot = build_prior_and_reference_theta(
-        model,
-        chosen_model=args.model,
-    )
-    simulator_wrapper = make_simulator_wrapper(
-        model,
-        chosen_model=args.model,
-    )
+    prior, theta_0 = build_prior_and_reference_theta(model)
+    simulator_wrapper = make_simulator_wrapper(model)
     model_sim_wrapper = make_model_sim_wrapper(
         simulator_wrapper=simulator_wrapper,
         n_workers=args.n_workers,
@@ -261,7 +247,6 @@ def main() -> None:
         predictive_simulator = make_model_sim_wrapper(
             simulator_wrapper=make_simulator_wrapper(
                 model,
-                chosen_model=args.model,
                 native_output=True,
             ),
             n_workers=args.n_workers,

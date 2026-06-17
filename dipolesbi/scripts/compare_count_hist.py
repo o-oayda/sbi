@@ -3,7 +3,7 @@ from dipolesbi.tools import sample_posterior_csv, format_posterior_samples
 from dipolesbi.tools.plotting import smooth_map
 from dipolesbi.tools.posterior_samples import sample_posterior_npz
 from dipolesbi.tools.utils import batch_simulate
-from dipolesbi.scripts.based_racs_low3 import _build_mask, _build_real_sample
+from dipolesbi.pipelines.based_racs import build_mask, build_real_sample
 import healpy as hp
 import matplotlib; matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
@@ -52,11 +52,11 @@ config = RacsLow3Config(
     alpha_sigma=0.2,
     fractional_error_flux_min_mjy=10,
     paf_temperature_data_dir='/home/oliver/Documents/dipole-utils/data/paf_temps',
-    mask_map=_build_mask(64)
+    mask_map=build_mask(64)
 )
 model = RacsLow3(config)
 model.initialise_data()
-x0, mask0 = _build_real_sample(model, 15)
+x0, mask0 = build_real_sample(model, 15)
 x, mask = batch_simulate(samples_fmt, model.generate_dipole, n_workers=N_CPUS)
 x_av = np.nanmean(x, axis=0)
 x_single, mask = model.generate_dipole(**single_sample)
