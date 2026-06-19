@@ -187,6 +187,15 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
     parser.add_argument("--dipole_latitude_max", type=float, default=90.0)
     parser.add_argument("--temp_beta_min", type=float, default=0.0)
     parser.add_argument("--temp_beta_max", type=float, default=0.05)
+    parser.add_argument(
+        "--add_elevation_model",
+        action="store_true",
+        help="Infer the RACS elevation sensitivity model parameters.",
+    )
+    parser.add_argument("--elevation_trough_min", type=float, default=0.0)
+    parser.add_argument("--elevation_trough_max", type=float, default=90.0)
+    parser.add_argument("--elevation_amp_min", type=float, default=0.0)
+    parser.add_argument("--elevation_amp_max", type=float, default=0.2)
     parser.add_argument("--p_clus_min", type=float, default=0.0)
     parser.add_argument("--p_clus_max", type=float, default=1.0)
     parser.add_argument("--clus_stop_prob_min", type=float, default=0.4)
@@ -235,6 +244,11 @@ def _validate_prior_bounds(
         "dipole_longitude": (args.dipole_longitude_min, args.dipole_longitude_max),
         "dipole_latitude": (args.dipole_latitude_min, args.dipole_latitude_max),
         "temp_beta": (args.temp_beta_min, args.temp_beta_max),
+        "elevation_trough": (
+            args.elevation_trough_min,
+            args.elevation_trough_max,
+        ),
+        "elevation_amp": (args.elevation_amp_min, args.elevation_amp_max),
         "p_clus": (args.p_clus_min, args.p_clus_max),
         "clus_stop_prob": (args.clus_stop_prob_min, args.clus_stop_prob_max),
         "lambda_clus": (args.lambda_clus_min, args.lambda_clus_max),
@@ -527,6 +541,9 @@ def build_prior_and_reference_theta(
     dipole_longitude_range: tuple[float, float] = (0.0, 360.0),
     dipole_latitude_range: tuple[float, float] = (-90.0, 90.0),
     temp_beta_range: tuple[float, float] = (0.0, 0.05),
+    add_elevation_model: bool = False,
+    elevation_trough_range: tuple[float, float] = (0.0, 90.0),
+    elevation_amp_range: tuple[float, float] = (0.0, 0.2),
     p_clus_range: tuple[float, float] = (0.0, 1.0),
     clus_stop_prob_range: tuple[float, float] = (0.4, 1.0),
     lambda_clus_range: tuple[float, float] = (0.0, 3.0),
@@ -548,6 +565,21 @@ def build_prior_and_reference_theta(
         high=temp_beta_range[1],
         dist_type="Uniform",
     )
+    if add_elevation_model:
+        prior.add_prior(
+            short_name="hlow",
+            simulator_kwarg="elevation_trough",
+            low=elevation_trough_range[0],
+            high=elevation_trough_range[1],
+            dist_type="Uniform",
+        )
+        prior.add_prior(
+            short_name="hamp",
+            simulator_kwarg="elevation_amp",
+            low=elevation_amp_range[0],
+            high=elevation_amp_range[1],
+            dist_type="Uniform",
+        )
     if simulate_clustering == "geometric":
         prior.add_prior(
             "pclus",
@@ -583,6 +615,9 @@ def build_prior_and_reference_theta(
         "p_clus": 0.0,
         "clus_stop_prob": 1.0,
     }
+    if add_elevation_model:
+        theta_0["elevation_trough"] = 0.0
+        theta_0["elevation_amp"] = 0.0
     if simulate_clustering == "poisson":
         theta_0["lambda_clus"] = 0.4
 
@@ -938,6 +973,12 @@ def main() -> None:
         ),
         dipole_latitude_range=(args.dipole_latitude_min, args.dipole_latitude_max),
         temp_beta_range=(args.temp_beta_min, args.temp_beta_max),
+        add_elevation_model=args.add_elevation_model,
+        elevation_trough_range=(
+            args.elevation_trough_min,
+            args.elevation_trough_max,
+        ),
+        elevation_amp_range=(args.elevation_amp_min, args.elevation_amp_max),
         p_clus_range=(args.p_clus_min, args.p_clus_max),
         clus_stop_prob_range=(args.clus_stop_prob_min, args.clus_stop_prob_max),
         lambda_clus_range=(args.lambda_clus_min, args.lambda_clus_max),
