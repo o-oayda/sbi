@@ -13,11 +13,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from dipolesbi.pipelines.summary_stats import (
+    _flux_elevation_edges,
+    _flux_elevation_histogram_quantile_features,
+    _flux_elevation_quantile_features,
+    _flux_elevation_quantile_ndim,
     _flux_temperature_edges,
     _flux_temperature_histogram_quantile_features,
     _flux_temperature_quantile_features,
     _flux_temperature_quantile_ndim,
     _native_count_log_dispersion_feature,
+    _real_catalogue_flux_elevation_samples,
     _real_catalogue_flux_temperature_samples,
 )
 from dipolesbi.tools.configs import DataTransformSpec, Scenario
@@ -27,9 +32,15 @@ from dipolesbi.tools.priors_np import DipolePriorNP
 from dipolesbi.tools.ui import MultiRoundInfererUI
 from dipolesbi.tools.utils import batch_simulate
 
-SummaryFeature = Literal["log_dispersion", "flux_quantiles"]
+SummaryFeature = Literal[
+    "log_dispersion",
+    "flux_quantiles",
+    "flux_elevation_quantiles",
+]
 DEFAULT_FLUX_TEMPERATURE_N_BINS = 10
 DEFAULT_FLUX_TEMPERATURE_QUANTILES = (0.10, 0.25, 0.50, 0.75, 0.90)
+DEFAULT_FLUX_ELEVATION_N_BINS = 10
+DEFAULT_FLUX_ELEVATION_QUANTILES = (0.10, 0.25, 0.50, 0.75, 0.90)
 DEFAULT_FLUX_TEMPERATURE_JAX_FLUX_BINS = 128
 DEFAULT_PAF_TEMPERATURE_DATA_DIR = "/home/oliver/Documents/dipole-utils/data/paf_temps"
 
@@ -153,7 +164,7 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
     parser.add_argument(
         "--summary_features",
         nargs="*",
-        choices=["log_dispersion", "flux_quantiles"],
+        choices=["log_dispersion", "flux_quantiles", "flux_elevation_quantiles"],
         default=[],
         help="Summary features to append after the map for NLE.",
     )
@@ -169,6 +180,19 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
         nargs="+",
         default=DEFAULT_FLUX_TEMPERATURE_QUANTILES,
         help="Flux quantiles to compute within each temperature bin.",
+    )
+    parser.add_argument(
+        "--flux_elevation_n_bins",
+        type=int,
+        default=DEFAULT_FLUX_ELEVATION_N_BINS,
+        help="Number of elevation bins used by the elevation flux-quantile summary.",
+    )
+    parser.add_argument(
+        "--flux_elevation_quantiles",
+        type=float,
+        nargs="+",
+        default=DEFAULT_FLUX_ELEVATION_QUANTILES,
+        help="Flux quantiles to compute within each elevation bin.",
     )
     parser.add_argument(
         "--simulate_clustering",
@@ -219,6 +243,15 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         parser.error("--flux_temperature_quantiles must contain at least one value.")
     if any(q < 0.0 or q > 1.0 for q in args.flux_temperature_quantiles):
         parser.error("--flux_temperature_quantiles values must lie in [0, 1].")
+    if args.flux_elevation_n_bins < 1:
+        parser.error("--flux_elevation_n_bins must be at least 1.")
+    if not args.flux_elevation_quantiles:
+        parser.error("--flux_elevation_quantiles must contain at least one value.")
+    if any(q < 0.0 or q > 1.0 for q in args.flux_elevation_quantiles):
+        parser.error("--flux_elevation_quantiles values must lie in [0, 1].")
+    if "flux_elevation_quantiles" in args.summary_features:
+        if args.racs_epoch != "mid1":
+            parser.error("Flux-elevation summaries require --racs_epoch mid1.")
     _validate_prior_bounds(args, parser)
 
     modes = _parse_modes(args.mode, parser)
@@ -228,6 +261,7 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     if not args.simulate_clustering:
         args.simulate_clustering = "geometric"
     args.flux_temperature_quantiles = tuple(args.flux_temperature_quantiles)
+    args.flux_elevation_quantiles = tuple(args.flux_elevation_quantiles)
     return modes
 
 
@@ -360,6 +394,8 @@ def _summary_ndim(
     summary_features: list[SummaryFeature],
     flux_temperature_n_bins: int,
     flux_temperature_quantiles: tuple[float, ...],
+    flux_elevation_n_bins: int,
+    flux_elevation_quantiles: tuple[float, ...],
 ) -> int | None:
     if not summary_features:
         return None
@@ -370,6 +406,11 @@ def _summary_ndim(
         ndim += _flux_temperature_quantile_ndim(
             flux_temperature_n_bins,
             flux_temperature_quantiles,
+        )
+    if "flux_elevation_quantiles" in summary_features:
+        ndim += _flux_elevation_quantile_ndim(
+            flux_elevation_n_bins,
+            flux_elevation_quantiles,
         )
     return ndim
 
@@ -389,6 +430,21 @@ def _flux_temperature_summary(
     )
 
 
+def _flux_elevation_summary(
+    model: Racs,
+    flux: np.ndarray,
+    elevation: np.ndarray,
+    flux_elevation_n_bins: int,
+    flux_elevation_quantiles: tuple[float, ...],
+) -> np.ndarray:
+    return _flux_elevation_quantile_features(
+        flux,
+        elevation,
+        elevation_edges=_flux_elevation_edges(model, flux_elevation_n_bins),
+        quantiles=flux_elevation_quantiles,
+    )
+
+
 def _build_summary_features(
     native_map: np.ndarray,
     native_mask: np.ndarray,
@@ -397,8 +453,12 @@ def _build_summary_features(
     model: Racs | None = None,
     flux: np.ndarray | None = None,
     temperature: np.ndarray | None = None,
+    elevation_flux: np.ndarray | None = None,
+    elevation: np.ndarray | None = None,
     flux_temperature_n_bins: int = DEFAULT_FLUX_TEMPERATURE_N_BINS,
     flux_temperature_quantiles: tuple[float, ...] = DEFAULT_FLUX_TEMPERATURE_QUANTILES,
+    flux_elevation_n_bins: int = DEFAULT_FLUX_ELEVATION_N_BINS,
+    flux_elevation_quantiles: tuple[float, ...] = DEFAULT_FLUX_ELEVATION_QUANTILES,
 ) -> np.ndarray:
     stats: list[np.ndarray] = []
     for summary in summary_features:
@@ -414,6 +474,20 @@ def _build_summary_features(
                     temperature,
                     flux_temperature_n_bins,
                     flux_temperature_quantiles,
+                )
+            )
+        elif summary == "flux_elevation_quantiles":
+            if model is None or elevation_flux is None or elevation is None:
+                raise ValueError(
+                    "Elevation flux quantiles require model, flux, and elevation."
+                )
+            stats.append(
+                _flux_elevation_summary(
+                    model,
+                    elevation_flux,
+                    elevation,
+                    flux_elevation_n_bins,
+                    flux_elevation_quantiles,
                 )
             )
         else:
@@ -454,6 +528,8 @@ def build_real_sample(
     *,
     flux_temperature_n_bins: int = DEFAULT_FLUX_TEMPERATURE_N_BINS,
     flux_temperature_quantiles: tuple[float, ...] = DEFAULT_FLUX_TEMPERATURE_QUANTILES,
+    flux_elevation_n_bins: int = DEFAULT_FLUX_ELEVATION_N_BINS,
+    flux_elevation_quantiles: tuple[float, ...] = DEFAULT_FLUX_ELEVATION_QUANTILES,
     save_map_plot: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     summary_features = list(summary_features or [])
@@ -483,36 +559,56 @@ def build_real_sample(
         plt.savefig(f"racs_{product.key}.png")
         plt.close()
 
-    flux = temperature = None
+    flux = temperature = elevation_flux = elevation = None
     summary_values: np.ndarray | None = None
     if "flux_quantiles" in summary_features:
         flux, temperature = _real_catalogue_flux_temperature_samples(model, c2map)
-        if isinstance(model, RacsJax):
-            stats: list[np.ndarray] = []
-            for summary in summary_features:
-                if summary == "log_dispersion":
-                    stats.append(_native_count_log_dispersion_feature(native_map, native_mask))
-                elif summary == "flux_quantiles":
-                    flux_max = model.flux_temperature_summary_flux_max_mjy
-                    if flux_max is None:
-                        raise ValueError("JAX flux-temperature summary requires flux_max.")
-                    stats.append(
-                        _flux_temperature_histogram_quantile_features(
-                            flux,
-                            temperature,
-                            temp_edges=_flux_temperature_edges(
-                                model,
-                                flux_temperature_n_bins,
-                            ),
-                            quantiles=flux_temperature_quantiles,
-                            flux_min_mjy=flux_min,
-                            flux_max_mjy=flux_max,
-                            n_flux_bins=DEFAULT_FLUX_TEMPERATURE_JAX_FLUX_BINS,
-                        )
+    if "flux_elevation_quantiles" in summary_features:
+        elevation_flux, elevation = _real_catalogue_flux_elevation_samples(model, c2map)
+    if isinstance(model, RacsJax) and (
+        "flux_quantiles" in summary_features
+        or "flux_elevation_quantiles" in summary_features
+    ):
+        flux_max = model.flux_summary_flux_max_mjy
+        if flux_max is None:
+            raise ValueError("JAX flux summary requires flux_max.")
+        stats: list[np.ndarray] = []
+        for summary in summary_features:
+            if summary == "log_dispersion":
+                stats.append(_native_count_log_dispersion_feature(native_map, native_mask))
+            elif summary == "flux_quantiles":
+                stats.append(
+                    _flux_temperature_histogram_quantile_features(
+                        flux,
+                        temperature,
+                        temp_edges=_flux_temperature_edges(
+                            model,
+                            flux_temperature_n_bins,
+                        ),
+                        quantiles=flux_temperature_quantiles,
+                        flux_min_mjy=flux_min,
+                        flux_max_mjy=flux_max,
+                        n_flux_bins=DEFAULT_FLUX_TEMPERATURE_JAX_FLUX_BINS,
                     )
-                else:
-                    raise ValueError(f"Unknown summary feature: {summary}")
-            summary_values = np.concatenate(stats, axis=0).astype(np.float32, copy=False)
+                )
+            elif summary == "flux_elevation_quantiles":
+                stats.append(
+                    _flux_elevation_histogram_quantile_features(
+                        elevation_flux,
+                        elevation,
+                        elevation_edges=_flux_elevation_edges(
+                            model,
+                            flux_elevation_n_bins,
+                        ),
+                        quantiles=flux_elevation_quantiles,
+                        flux_min_mjy=flux_min,
+                        flux_max_mjy=flux_max,
+                        n_flux_bins=DEFAULT_FLUX_TEMPERATURE_JAX_FLUX_BINS,
+                    )
+                )
+            else:
+                raise ValueError(f"Unknown summary feature: {summary}")
+        summary_values = np.concatenate(stats, axis=0).astype(np.float32, copy=False)
     if summary_values is None:
         summary_values = _build_summary_features(
             native_map,
@@ -521,8 +617,12 @@ def build_real_sample(
             model=model if isinstance(model, Racs) else None,
             flux=flux,
             temperature=temperature,
+            elevation_flux=elevation_flux,
+            elevation=elevation,
             flux_temperature_n_bins=flux_temperature_n_bins,
             flux_temperature_quantiles=flux_temperature_quantiles,
+            flux_elevation_n_bins=flux_elevation_n_bins,
+            flux_elevation_quantiles=flux_elevation_quantiles,
         )
     return build_hybrid_sample_from_native(
         native_map,
@@ -644,6 +744,8 @@ def make_simulator_wrapper(
     summary_features: list[SummaryFeature] | None = None,
     flux_temperature_n_bins: int = DEFAULT_FLUX_TEMPERATURE_N_BINS,
     flux_temperature_quantiles: tuple[float, ...] = DEFAULT_FLUX_TEMPERATURE_QUANTILES,
+    flux_elevation_n_bins: int = DEFAULT_FLUX_ELEVATION_N_BINS,
+    flux_elevation_quantiles: tuple[float, ...] = DEFAULT_FLUX_ELEVATION_QUANTILES,
 ):
     summary_features = list(summary_features or [])
 
@@ -662,7 +764,7 @@ def make_simulator_wrapper(
             rng_key=rng_key,
             **kwargs,
         )
-        flux = temperature = None
+        flux = temperature = elevation_flux = elevation = None
         if "flux_quantiles" in summary_features:
             if getattr(model, "final_observed_flux_samples", None) is None:
                 raise ValueError(
@@ -674,6 +776,17 @@ def make_simulator_wrapper(
                 )
             flux = model.final_observed_flux_samples
             temperature = model.final_temperature_samples
+        if "flux_elevation_quantiles" in summary_features:
+            if getattr(model, "final_observed_flux_samples", None) is None:
+                raise ValueError(
+                    "Flux-elevation summary requires stored final flux samples."
+                )
+            if getattr(model, "final_elevation_samples", None) is None:
+                raise ValueError(
+                    "Flux-elevation summary requires stored final elevation samples."
+                )
+            elevation_flux = model.final_observed_flux_samples
+            elevation = model.final_elevation_samples
 
         summary_values = _build_summary_features(
             native_map,
@@ -682,8 +795,12 @@ def make_simulator_wrapper(
             model=model,
             flux=flux,
             temperature=temperature,
+            elevation_flux=elevation_flux,
+            elevation=elevation,
             flux_temperature_n_bins=flux_temperature_n_bins,
             flux_temperature_quantiles=flux_temperature_quantiles,
+            flux_elevation_n_bins=flux_elevation_n_bins,
+            flux_elevation_quantiles=flux_elevation_quantiles,
         )
         return build_hybrid_sample_from_native(
             native_map,
@@ -752,6 +869,8 @@ def make_jax_model_sim_wrapper(
     flux_temperature_n_bins: int = DEFAULT_FLUX_TEMPERATURE_N_BINS,
     flux_temperature_quantiles: tuple[float, ...] = DEFAULT_FLUX_TEMPERATURE_QUANTILES,
     flux_temperature_jax_flux_bins: int = DEFAULT_FLUX_TEMPERATURE_JAX_FLUX_BINS,
+    flux_elevation_n_bins: int = DEFAULT_FLUX_ELEVATION_N_BINS,
+    flux_elevation_quantiles: tuple[float, ...] = DEFAULT_FLUX_ELEVATION_QUANTILES,
 ):
     summary_features = list(summary_features or [])
 
@@ -772,22 +891,37 @@ def make_jax_model_sim_wrapper(
                 show_progress=True,
             )
 
-        if "flux_quantiles" in summary_features:
+        has_temperature_summary = "flux_quantiles" in summary_features
+        has_elevation_summary = "flux_elevation_quantiles" in summary_features
+        if has_temperature_summary or has_elevation_summary:
+            summary_kwargs = {}
+            if has_temperature_summary:
+                summary_kwargs.update(
+                    temperature_edges=_flux_temperature_edges(
+                        model,
+                        flux_temperature_n_bins,
+                    ),
+                    temperature_quantiles=flux_temperature_quantiles,
+                )
+            if has_elevation_summary:
+                summary_kwargs.update(
+                    elevation_edges=_flux_elevation_edges(
+                        model,
+                        flux_elevation_n_bins,
+                    ),
+                    elevation_quantiles=flux_elevation_quantiles,
+                )
             original_downscale_nside = model.downscale_nside
             try:
                 model.downscale_nside = None
                 native_maps, native_masks, flux_summaries = (
-                    model.batch_generate_dipole_with_flux_temperature_summary(
+                    model.batch_generate_dipole_with_flux_summaries(
                         theta,
                         jax_key,
                         batch_size=batch_size,
-                        temperature_edges=_flux_temperature_edges(
-                            model,
-                            flux_temperature_n_bins,
-                        ),
-                        quantiles=flux_temperature_quantiles,
                         n_flux_bins=flux_temperature_jax_flux_bins,
                         show_progress=True,
+                        **summary_kwargs,
                     )
                 )
             finally:
@@ -799,13 +933,9 @@ def make_jax_model_sim_wrapper(
                 jax_key,
                 batch_size=batch_size,
             )
-            flux_summaries = [None] * native_maps.shape[0]
+            flux_summaries = {}
         outputs = []
-        for native_map, native_mask, flux_summary in zip(
-            native_maps,
-            native_masks,
-            flux_summaries,
-        ):
+        for index, (native_map, native_mask) in enumerate(zip(native_maps, native_masks)):
             summary_parts: list[np.ndarray] = []
             for summary in summary_features:
                 if summary == "log_dispersion":
@@ -813,9 +943,19 @@ def make_jax_model_sim_wrapper(
                         _native_count_log_dispersion_feature(native_map, native_mask)
                     )
                 elif summary == "flux_quantiles":
-                    if flux_summary is None:
+                    if "temperature" not in flux_summaries:
                         raise ValueError("JAX flux quantile summary was not computed.")
-                    summary_parts.append(np.asarray(flux_summary, dtype=np.float32))
+                    summary_parts.append(
+                        np.asarray(flux_summaries["temperature"][index], dtype=np.float32)
+                    )
+                elif summary == "flux_elevation_quantiles":
+                    if "elevation" not in flux_summaries:
+                        raise ValueError(
+                            "JAX elevation flux quantile summary was not computed."
+                        )
+                    summary_parts.append(
+                        np.asarray(flux_summaries["elevation"][index], dtype=np.float32)
+                    )
                 else:
                     raise ValueError(f"Unknown summary feature: {summary}")
             summary_values = (
@@ -937,6 +1077,8 @@ def main() -> None:
         summary_features,
         flux_temperature_n_bins=args.flux_temperature_n_bins,
         flux_temperature_quantiles=args.flux_temperature_quantiles,
+        flux_elevation_n_bins=args.flux_elevation_n_bins,
+        flux_elevation_quantiles=args.flux_elevation_quantiles,
     )
 
     if summary_features:
@@ -946,6 +1088,8 @@ def main() -> None:
             summary_features,
             args.flux_temperature_n_bins,
             args.flux_temperature_quantiles,
+            args.flux_elevation_n_bins,
+            args.flux_elevation_quantiles,
         )
     else:
         effective_nside = hp.npix2nside(x0.size)
@@ -991,6 +1135,8 @@ def main() -> None:
             summary_features=summary_features,
             flux_temperature_n_bins=args.flux_temperature_n_bins,
             flux_temperature_quantiles=args.flux_temperature_quantiles,
+            flux_elevation_n_bins=args.flux_elevation_n_bins,
+            flux_elevation_quantiles=args.flux_elevation_quantiles,
         )
     else:
         simulator_wrapper = make_simulator_wrapper(
@@ -998,6 +1144,8 @@ def main() -> None:
             summary_features=summary_features,
             flux_temperature_n_bins=args.flux_temperature_n_bins,
             flux_temperature_quantiles=args.flux_temperature_quantiles,
+            flux_elevation_n_bins=args.flux_elevation_n_bins,
+            flux_elevation_quantiles=args.flux_elevation_quantiles,
         )
         model_sim_wrapper = make_model_sim_wrapper(
             simulator_wrapper=simulator_wrapper,

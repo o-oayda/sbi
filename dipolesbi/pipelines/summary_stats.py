@@ -71,6 +71,28 @@ def _flux_temperature_edges(
     return np.linspace(temp_min, temp_max, n_bins + 1, dtype=np.float64)
 
 
+def _flux_elevation_edges(
+    model: Racs,
+    n_bins: int,
+) -> np.ndarray:
+    if n_bins < 1:
+        raise ValueError("flux-elevation summary requires at least one bin.")
+    elevations = getattr(model, "elevation_lookup_values", None)
+    if elevations is None:
+        raise ValueError(
+            "Flux-elevation summary requires model.elevation_lookup_values."
+        )
+    finite = np.asarray(elevations, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        raise ValueError("Flux-elevation summary found no finite elevations.")
+    elevation_min = float(np.min(finite))
+    elevation_max = float(np.max(finite))
+    if not elevation_min < elevation_max:
+        raise ValueError("Flux-elevation summary requires a non-zero elevation range.")
+    return np.linspace(elevation_min, elevation_max, n_bins + 1, dtype=np.float64)
+
+
 def _real_catalogue_flux_temperature_samples(
     model: Racs,
     c2map: CatalogueToMap,
@@ -110,6 +132,39 @@ def _real_catalogue_flux_temperature_samples(
             "Flux-temperature real summary has no finite retained flux/temperature pairs."
         )
     return flux[keep], temperatures[keep]
+
+
+def _real_catalogue_flux_elevation_samples(
+    model: Racs,
+    c2map: CatalogueToMap,
+) -> tuple[np.ndarray, np.ndarray]:
+    product = _model_product(model)
+    elevation_column = product.columns.elevation
+    if elevation_column is None:
+        raise ValueError(
+            f"{product.label} does not define an elevation column; "
+            "flux-elevation summary requires catalogue ALT data."
+        )
+
+    cut_catalogue = c2map.get_catalogue()
+    if elevation_column not in cut_catalogue.colnames:
+        raise ValueError(
+            f"{product.label} catalogue is missing elevation column "
+            f"{elevation_column!r}."
+        )
+    ra = np.asarray(cut_catalogue[product.columns.ra], dtype=np.float64)
+    dec = np.asarray(cut_catalogue[product.columns.dec], dtype=np.float64)
+    flux = np.asarray(cut_catalogue[product.columns.total_flux], dtype=np.float64)
+    elevation = np.asarray(cut_catalogue[elevation_column], dtype=np.float64)
+
+    pixel_indices = hp.ang2pix(model.nside, ra, dec, lonlat=True, nest=True)
+    in_mask = model.mask_map[pixel_indices].astype(bool, copy=False)
+    keep = in_mask & np.isfinite(flux) & np.isfinite(elevation)
+    if not np.any(keep):
+        raise ValueError(
+            "Flux-elevation real summary has no finite retained flux/elevation pairs."
+        )
+    return flux[keep], elevation[keep]
 
 
 def _flux_temperature_quantile_features(
@@ -156,11 +211,55 @@ def _flux_temperature_quantile_features(
     return np.asarray(features, dtype=np.float32)
 
 
-def _flux_temperature_histogram_quantile_features(
+def _flux_elevation_quantile_features(
     observed_flux: np.ndarray,
-    temperature: np.ndarray,
+    elevation: np.ndarray,
+    elevation_edges: np.ndarray,
+    quantiles: tuple[float, ...],
+) -> np.ndarray:
+    observed_flux = np.asarray(observed_flux, dtype=np.float64)
+    elevation = np.asarray(elevation, dtype=np.float64)
+    elevation_edges = np.asarray(elevation_edges, dtype=np.float64)
+    quantile_array = np.asarray(quantiles, dtype=np.float64)
+
+    if observed_flux.shape != elevation.shape:
+        raise ValueError("observed_flux and elevation must have matching shapes.")
+    if elevation_edges.ndim != 1 or elevation_edges.size < 2:
+        raise ValueError("elevation_edges must be a one-dimensional array of bin edges.")
+    if np.any(~np.isfinite(elevation_edges)) or np.any(np.diff(elevation_edges) <= 0):
+        raise ValueError("elevation_edges must be finite and strictly increasing.")
+    if quantile_array.ndim != 1 or quantile_array.size == 0:
+        raise ValueError("At least one flux quantile is required.")
+    if np.any((quantile_array < 0.0) | (quantile_array > 1.0)):
+        raise ValueError("Flux quantiles must lie in [0, 1].")
+
+    valid = np.isfinite(observed_flux) & np.isfinite(elevation)
+    flux = observed_flux[valid]
+    elevations = elevation[valid]
+    if flux.size == 0:
+        raise ValueError("Flux-elevation summary has no finite flux/elevation pairs.")
+
+    features: list[float] = []
+    for bin_idx, (lo, hi) in enumerate(zip(elevation_edges[:-1], elevation_edges[1:])):
+        if bin_idx == elevation_edges.size - 2:
+            in_bin = (elevations >= lo) & (elevations <= hi)
+        else:
+            in_bin = (elevations >= lo) & (elevations < hi)
+        if not np.any(in_bin):
+            raise ValueError(
+                "Flux-elevation summary has an empty elevation bin "
+                f"[{lo:.6g}, {hi:.6g}{']' if bin_idx == elevation_edges.size - 2 else ')'}."
+            )
+        features.extend(np.quantile(flux[in_bin], quantile_array))
+
+    return np.asarray(features, dtype=np.float32)
+
+
+def _flux_binned_histogram_quantile_features(
+    observed_flux: np.ndarray,
+    bin_values: np.ndarray,
     *,
-    temp_edges: np.ndarray,
+    bin_edges: np.ndarray,
     quantiles: tuple[float, ...],
     flux_min_mjy: float,
     flux_max_mjy: float,
@@ -168,16 +267,16 @@ def _flux_temperature_histogram_quantile_features(
     empty_value: float = 0.0,
 ) -> np.ndarray:
     observed_flux = np.asarray(observed_flux, dtype=np.float64)
-    temperature = np.asarray(temperature, dtype=np.float64)
-    temp_edges = np.asarray(temp_edges, dtype=np.float64)
+    bin_values = np.asarray(bin_values, dtype=np.float64)
+    bin_edges = np.asarray(bin_edges, dtype=np.float64)
     quantile_array = np.asarray(quantiles, dtype=np.float64)
 
-    if observed_flux.shape != temperature.shape:
-        raise ValueError("observed_flux and temperature must have matching shapes.")
-    if temp_edges.ndim != 1 or temp_edges.size < 2:
-        raise ValueError("temp_edges must be a one-dimensional array of bin edges.")
-    if np.any(~np.isfinite(temp_edges)) or np.any(np.diff(temp_edges) <= 0):
-        raise ValueError("temp_edges must be finite and strictly increasing.")
+    if observed_flux.shape != bin_values.shape:
+        raise ValueError("observed_flux and bin_values must have matching shapes.")
+    if bin_edges.ndim != 1 or bin_edges.size < 2:
+        raise ValueError("bin_edges must be a one-dimensional array of bin edges.")
+    if np.any(~np.isfinite(bin_edges)) or np.any(np.diff(bin_edges) <= 0):
+        raise ValueError("bin_edges must be finite and strictly increasing.")
     if quantile_array.ndim != 1 or quantile_array.size == 0:
         raise ValueError("At least one flux quantile is required.")
     if np.any((quantile_array < 0.0) | (quantile_array > 1.0)):
@@ -191,29 +290,29 @@ def _flux_temperature_histogram_quantile_features(
 
     valid = (
         np.isfinite(observed_flux)
-        & np.isfinite(temperature)
+        & np.isfinite(bin_values)
         & (observed_flux >= flux_min_mjy)
     )
     flux = observed_flux[valid]
-    temp = temperature[valid]
+    retained_bin_values = bin_values[valid]
     if flux.size == 0:
-        raise ValueError("Flux-temperature summary has no finite flux/temperature pairs.")
+        raise ValueError("Flux summary has no finite flux/bin-value pairs.")
 
     z_max = np.log10(flux_max_mjy / flux_min_mjy)
     z = np.log10(np.maximum(flux, flux_min_mjy) / flux_min_mjy)
     z = np.clip(z, 0.0, np.nextafter(z_max, 0.0))
     z_edges = np.linspace(0.0, z_max, n_flux_bins + 1, dtype=np.float64)
 
-    n_temp_bins = temp_edges.size - 1
-    hist = np.zeros((n_temp_bins, n_flux_bins), dtype=np.float64)
-    for bin_idx, (lo, hi) in enumerate(zip(temp_edges[:-1], temp_edges[1:])):
-        if bin_idx == n_temp_bins - 1:
-            in_temp_bin = (temp >= lo) & (temp <= hi)
+    n_value_bins = bin_edges.size - 1
+    hist = np.zeros((n_value_bins, n_flux_bins), dtype=np.float64)
+    for bin_idx, (lo, hi) in enumerate(zip(bin_edges[:-1], bin_edges[1:])):
+        if bin_idx == n_value_bins - 1:
+            in_value_bin = (retained_bin_values >= lo) & (retained_bin_values <= hi)
         else:
-            in_temp_bin = (temp >= lo) & (temp < hi)
-        if not np.any(in_temp_bin):
+            in_value_bin = (retained_bin_values >= lo) & (retained_bin_values < hi)
+        if not np.any(in_value_bin):
             continue
-        flux_bins = np.searchsorted(z_edges, z[in_temp_bin], side="right") - 1
+        flux_bins = np.searchsorted(z_edges, z[in_value_bin], side="right") - 1
         flux_bins = np.clip(flux_bins, 0, n_flux_bins - 1)
         hist[bin_idx] = np.bincount(flux_bins, minlength=n_flux_bins)
 
@@ -240,8 +339,61 @@ def _flux_temperature_histogram_quantile_features(
     return np.asarray(features, dtype=np.float32)
 
 
+def _flux_temperature_histogram_quantile_features(
+    observed_flux: np.ndarray,
+    temperature: np.ndarray,
+    *,
+    temp_edges: np.ndarray,
+    quantiles: tuple[float, ...],
+    flux_min_mjy: float,
+    flux_max_mjy: float,
+    n_flux_bins: int = 128,
+    empty_value: float = 0.0,
+) -> np.ndarray:
+    return _flux_binned_histogram_quantile_features(
+        observed_flux,
+        temperature,
+        bin_edges=temp_edges,
+        quantiles=quantiles,
+        flux_min_mjy=flux_min_mjy,
+        flux_max_mjy=flux_max_mjy,
+        n_flux_bins=n_flux_bins,
+        empty_value=empty_value,
+    )
+
+
+def _flux_elevation_histogram_quantile_features(
+    observed_flux: np.ndarray,
+    elevation: np.ndarray,
+    *,
+    elevation_edges: np.ndarray,
+    quantiles: tuple[float, ...],
+    flux_min_mjy: float,
+    flux_max_mjy: float,
+    n_flux_bins: int = 128,
+    empty_value: float = 0.0,
+) -> np.ndarray:
+    return _flux_binned_histogram_quantile_features(
+        observed_flux,
+        elevation,
+        bin_edges=elevation_edges,
+        quantiles=quantiles,
+        flux_min_mjy=flux_min_mjy,
+        flux_max_mjy=flux_max_mjy,
+        n_flux_bins=n_flux_bins,
+        empty_value=empty_value,
+    )
+
+
 def _flux_temperature_quantile_ndim(
     n_temp_bins: int,
     quantiles: tuple[float, ...],
 ) -> int:
     return n_temp_bins * len(quantiles)
+
+
+def _flux_elevation_quantile_ndim(
+    n_elevation_bins: int,
+    quantiles: tuple[float, ...],
+) -> int:
+    return n_elevation_bins * len(quantiles)

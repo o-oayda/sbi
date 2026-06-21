@@ -1,12 +1,15 @@
 import os
+from types import SimpleNamespace
 
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 import healpy as hp
 import numpy as np
 import pytest
+from astropy.table import Table
 
 from dipolesbi.pipelines.based_racs import (
+    DEFAULT_FLUX_ELEVATION_QUANTILES,
     DEFAULT_FLUX_TEMPERATURE_QUANTILES,
     build_hybrid_sample_from_native,
     build_prior_and_reference_theta,
@@ -14,11 +17,15 @@ from dipolesbi.pipelines.based_racs import (
     make_simulator_wrapper,
 )
 from dipolesbi.pipelines.summary_stats import (
+    _flux_elevation_edges,
+    _flux_elevation_quantile_features,
+    _flux_elevation_quantile_ndim,
     _flux_temperature_edges,
     _flux_temperature_histogram_quantile_features,
     _flux_temperature_quantile_features,
     _flux_temperature_quantile_ndim,
     _native_count_log_dispersion_feature,
+    _real_catalogue_flux_elevation_samples,
 )
 from dipolesbi.tools.configs import (
     DataTransformConfig,
@@ -229,6 +236,81 @@ def test_flux_temperature_summary_dimension_uses_custom_args():
     assert _flux_temperature_quantile_ndim(3, (0.25, 0.75)) == 6
 
 
+def test_flux_elevation_edges_use_finite_lookup_range():
+    class Model:
+        elevation_lookup_values = np.asarray([np.nan, 20.0, 35.0, 50.0])
+
+    edges = _flux_elevation_edges(Model(), n_bins=3)
+
+    np.testing.assert_allclose(edges, np.asarray([20.0, 30.0, 40.0, 50.0]))
+
+
+def test_flux_elevation_quantile_features_by_elevation_bin():
+    features = _flux_elevation_quantile_features(
+        observed_flux=np.asarray([1.0, 3.0, 10.0, 30.0]),
+        elevation=np.asarray([1.0, 9.0, 10.0, 20.0]),
+        elevation_edges=np.asarray([0.0, 10.0, 20.0]),
+        quantiles=(0.0, 0.5, 1.0),
+    )
+
+    expected = np.asarray([1.0, 2.0, 3.0, 10.0, 20.0, 30.0], dtype=np.float32)
+    np.testing.assert_allclose(features, expected)
+
+
+def test_flux_elevation_quantile_features_rejects_empty_bins():
+    with pytest.raises(ValueError, match="empty elevation bin"):
+        _flux_elevation_quantile_features(
+            observed_flux=np.asarray([1.0, 2.0]),
+            elevation=np.asarray([1.0, 2.0]),
+            elevation_edges=np.asarray([0.0, 5.0, 10.0]),
+            quantiles=(0.5,),
+        )
+
+
+def test_flux_elevation_summary_dimension_defaults_to_fifty():
+    assert _flux_elevation_quantile_ndim(
+        10,
+        DEFAULT_FLUX_ELEVATION_QUANTILES,
+    ) == 50
+
+
+def test_real_catalogue_flux_elevation_samples_use_alt_and_sky_mask():
+    catalogue = Table(
+        {
+            "RA": [0.0, 90.0, 180.0],
+            "DEC": [0.0, 0.0, 0.0],
+            "Total_flux": [10.0, 20.0, 30.0],
+            "ALT": [40.0, 50.0, np.nan],
+        }
+    )
+    pixels = hp.ang2pix(1, catalogue["RA"], catalogue["DEC"], lonlat=True, nest=True)
+    mask = np.zeros(hp.nside2npix(1), dtype=bool)
+    mask[pixels[0]] = True
+
+    class Catalogue:
+        def get_catalogue(self):
+            return catalogue
+
+    model = SimpleNamespace(
+        nside=1,
+        mask_map=mask,
+        product=SimpleNamespace(
+            label="RACS MID1",
+            columns=SimpleNamespace(
+                ra="RA",
+                dec="DEC",
+                total_flux="Total_flux",
+                elevation="ALT",
+            ),
+        ),
+    )
+
+    flux, elevation = _real_catalogue_flux_elevation_samples(model, Catalogue())
+
+    np.testing.assert_array_equal(flux, np.asarray([10.0]))
+    np.testing.assert_array_equal(elevation, np.asarray([40.0]))
+
+
 def test_simulator_wrapper_appends_flux_temperature_summary():
     class Model:
         downscale_nside = 1
@@ -287,6 +369,35 @@ def test_simulator_wrapper_appends_log_dispersion_and_flux_quantiles():
     np.testing.assert_array_equal(mask[map_ndim + 1 :], np.ones(50, dtype=bool))
     expected_flux_temperature = np.repeat(np.arange(10, dtype=np.float32) + 1.0, 5)
     np.testing.assert_allclose(data[map_ndim + 1 :], expected_flux_temperature)
+
+
+def test_simulator_wrapper_appends_flux_elevation_summary():
+    class Model:
+        downscale_nside = 1
+        elevation_lookup_values = np.linspace(0.0, 10.0, 11)
+        final_observed_flux_samples = None
+        final_elevation_samples = None
+
+        def generate_dipole(self, *args, **kwargs):
+            self.final_elevation_samples = np.arange(10, dtype=np.float32) + 0.5
+            self.final_observed_flux_samples = np.arange(10, dtype=np.float32) + 1.0
+            return (
+                np.zeros(hp.nside2npix(1), dtype=np.float32),
+                np.ones(hp.nside2npix(1), dtype=bool),
+            )
+
+    wrapper = make_simulator_wrapper(
+        Model(),
+        summary_features=["flux_elevation_quantiles"],
+    )
+
+    data, mask = wrapper()
+
+    map_ndim = hp.nside2npix(1)
+    assert data.shape == (map_ndim + 50,)
+    np.testing.assert_array_equal(mask[map_ndim:], np.ones(50, dtype=bool))
+    expected_summary = np.repeat(np.arange(10, dtype=np.float32) + 1.0, 5)
+    np.testing.assert_allclose(data[map_ndim:], expected_summary)
 
 
 def test_build_hybrid_sample_without_summaries_returns_map_only():
