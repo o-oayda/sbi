@@ -5,7 +5,7 @@ import warnings
 from pathlib import Path
 from typing import Literal
 
-from catsim import RACS_PRODUCTS, Racs, RacsConfig
+from catsim import RACS_PRODUCTS, TEMPERATURE_MODELS, Racs, RacsConfig
 from catsim.racs_jax import RacsJax
 from catsim.utils.healsphere import downgrade_ignore_nan
 from dipoleutils.utils.data_loader import DataLoader
@@ -150,6 +150,12 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
         type=str,
         default=DEFAULT_PAF_TEMPERATURE_DATA_DIR,
         help="Directory containing PAF temperature data.",
+    )
+    parser.add_argument(
+        "--temperature_model",
+        choices=sorted(TEMPERATURE_MODELS),
+        default="hot_linear",
+        help="Functional form of the hot-temperature flux response.",
     )
     parser.add_argument(
         "--nside",
@@ -360,6 +366,7 @@ def build_racs_config(
     alpha_sigma: float,
     fractional_error_flux_min_mjy: float,
     flux_temperature_min_mjy: float | None = None,
+    temperature_model: str = "hot_linear",
     mask_map: np.ndarray | None = None,
     max_cluster_children_per_parent: int = 16,
     paf_temperature_data_dir: str = DEFAULT_PAF_TEMPERATURE_DATA_DIR,
@@ -378,6 +385,7 @@ def build_racs_config(
         alpha_sigma=alpha_sigma,
         fractional_error_flux_min_mjy=fractional_error_flux_min_mjy,
         flux_temperature_min_mjy=flux_temperature_min_mjy,
+        temperature_model=temperature_model,
         paf_temperature_data_dir=paf_temperature_data_dir,
         temperature_fallback="open_meteo" if openmeteo_fallback else "none",
         mask_map=mask_map,
@@ -1151,6 +1159,7 @@ def main() -> None:
         alpha_sigma=args.alpha_sigma,
         fractional_error_flux_min_mjy=args.fractional_error_flux_min_mjy,
         flux_temperature_min_mjy=args.flux_temperature_min_mjy,
+        temperature_model=args.temperature_model,
         openmeteo_fallback=args.openmeteo_fallback,
         mask_map=mask,
         max_cluster_children_per_parent=args.max_children,

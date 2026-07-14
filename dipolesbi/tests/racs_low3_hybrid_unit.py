@@ -66,6 +66,7 @@ def test_build_racs_config_defaults_to_low3_product():
 
     assert config.product.key == "low3"
     assert config.temperature_fallback == "none"
+    assert config.temperature_model == "hot_linear"
     assert config.store_final_samples is True
 
 
@@ -102,6 +103,14 @@ def test_build_racs_config_accepts_independent_temperature_flux_cut():
 
     assert config.flux_min == 15.0
     assert config.flux_temperature_min_mjy == 2.0
+
+
+def test_build_racs_config_accepts_hot_quadratic_temperature_model():
+    config = build_racs_config(
+        **_minimal_racs_config_kwargs(temperature_model="hot_quadratic")
+    )
+
+    assert config.temperature_model == "hot_quadratic"
 
 
 def test_write_run_command_records_shell_safe_python_invocation(tmp_path, monkeypatch):
