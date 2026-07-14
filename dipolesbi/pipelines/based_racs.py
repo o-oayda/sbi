@@ -1,4 +1,8 @@
 import argparse
+import shlex
+import sys
+import warnings
+from pathlib import Path
 from typing import Literal
 
 from catsim import RACS_PRODUCTS, Racs, RacsConfig
@@ -43,6 +47,16 @@ DEFAULT_FLUX_ELEVATION_N_BINS = 10
 DEFAULT_FLUX_ELEVATION_QUANTILES = (0.10, 0.25, 0.50, 0.75, 0.90)
 DEFAULT_FLUX_TEMPERATURE_JAX_FLUX_BINS = 128
 DEFAULT_PAF_TEMPERATURE_DATA_DIR = "/home/oliver/Documents/dipole-utils/data/paf_temps"
+
+
+def _write_run_command(out_dir: str) -> Path:
+    """Write a shell-safe reconstruction of the Python invocation."""
+    output_dir = Path(out_dir).expanduser()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    command_path = output_dir / "run_command.txt"
+    argv = getattr(sys, "orig_argv", None) or [sys.executable, *sys.argv]
+    command_path.write_text(f"{shlex.join(argv)}\n", encoding="utf-8")
+    return command_path
 
 
 def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
@@ -110,6 +124,15 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
         type=float,
         default=2.0,
         help="RACS flux threshold in mJy.",
+    )
+    parser.add_argument(
+        "--flux_temperature_min_mjy",
+        type=float,
+        default=None,
+        help=(
+            "Independent minimum flux for temperature-binned flux quantiles. "
+            "Defaults to --flux_min."
+        ),
     )
     parser.add_argument(
         "--racs_epoch",
@@ -237,6 +260,13 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         parser.error("--n_workers is only used by the NumPy simulator.")
     if args.use_jax and args.jax_batch_size <= 0:
         parser.error("--jax_batch_size must be positive.")
+    if not np.isfinite(args.flux_min) or args.flux_min <= 0.0:
+        parser.error("--flux_min must be positive and finite.")
+    if args.flux_temperature_min_mjy is not None and (
+        not np.isfinite(args.flux_temperature_min_mjy)
+        or args.flux_temperature_min_mjy <= 0.0
+    ):
+        parser.error("--flux_temperature_min_mjy must be positive and finite.")
     if args.flux_temperature_n_bins < 1:
         parser.error("--flux_temperature_n_bins must be at least 1.")
     if not args.flux_temperature_quantiles:
@@ -252,6 +282,22 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     if "flux_elevation_quantiles" in args.summary_features:
         if args.racs_epoch != "mid1":
             parser.error("Flux-elevation summaries require --racs_epoch mid1.")
+    resolved_temperature_min = (
+        args.flux_min
+        if args.flux_temperature_min_mjy is None
+        else args.flux_temperature_min_mjy
+    )
+    if (
+        "flux_quantiles" in args.summary_features
+        and resolved_temperature_min < args.fractional_error_flux_min_mjy
+    ):
+        warnings.warn(
+            "The temperature-summary flux cut is below "
+            "--fractional_error_flux_min_mjy; the empirical fractional-error model "
+            "is being extrapolated below its calibration floor.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     _validate_prior_bounds(args, parser)
 
     modes = _parse_modes(args.mode, parser)
@@ -313,6 +359,7 @@ def build_racs_config(
     alpha_mean: float,
     alpha_sigma: float,
     fractional_error_flux_min_mjy: float,
+    flux_temperature_min_mjy: float | None = None,
     mask_map: np.ndarray | None = None,
     max_cluster_children_per_parent: int = 16,
     paf_temperature_data_dir: str = DEFAULT_PAF_TEMPERATURE_DATA_DIR,
@@ -330,6 +377,7 @@ def build_racs_config(
         alpha_mean=alpha_mean,
         alpha_sigma=alpha_sigma,
         fractional_error_flux_min_mjy=fractional_error_flux_min_mjy,
+        flux_temperature_min_mjy=flux_temperature_min_mjy,
         paf_temperature_data_dir=paf_temperature_data_dir,
         temperature_fallback="open_meteo" if openmeteo_fallback else "none",
         mask_map=mask_map,
@@ -526,6 +574,7 @@ def build_real_sample(
     flux_min: float,
     summary_features: list[SummaryFeature] | None = None,
     *,
+    flux_temperature_min_mjy: float | None = None,
     flux_temperature_n_bins: int = DEFAULT_FLUX_TEMPERATURE_N_BINS,
     flux_temperature_quantiles: tuple[float, ...] = DEFAULT_FLUX_TEMPERATURE_QUANTILES,
     flux_elevation_n_bins: int = DEFAULT_FLUX_ELEVATION_N_BINS,
@@ -533,18 +582,30 @@ def build_real_sample(
     save_map_plot: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     summary_features = list(summary_features or [])
+    resolved_temperature_min = (
+        flux_min if flux_temperature_min_mjy is None else flux_temperature_min_mjy
+    )
 
     product = _model_product(model)
     cat = DataLoader(*product.data_loader_args).load()
-    c2map = CatalogueToMap(cat)
-    c2map.make_cut(product.columns.total_flux, minimum=flux_min, maximum=None)
-    if product.columns.source_name in cat.colnames:
-        c2map.crossmatch_local_sources(
-            "equatorial",
-            radius=5,
-            source_name_A_column=product.columns.source_name,
+
+    def catalogue_view(minimum_flux: float) -> CatalogueToMap:
+        view = CatalogueToMap(cat.copy())
+        view.make_cut(
+            product.columns.total_flux,
+            minimum=minimum_flux,
+            maximum=None,
         )
-    density_map = c2map.make_density_map(
+        if product.columns.source_name in cat.colnames:
+            view.crossmatch_local_sources(
+                "equatorial",
+                radius=5,
+                source_name_A_column=product.columns.source_name,
+            )
+        return view
+
+    map_catalogue = catalogue_view(flux_min)
+    density_map = map_catalogue.make_density_map(
         coordinate_system="equatorial",
         nside=model.nside,
         nest=True,
@@ -562,9 +623,16 @@ def build_real_sample(
     flux = temperature = elevation_flux = elevation = None
     summary_values: np.ndarray | None = None
     if "flux_quantiles" in summary_features:
-        flux, temperature = _real_catalogue_flux_temperature_samples(model, c2map)
+        temperature_catalogue = catalogue_view(resolved_temperature_min)
+        flux, temperature = _real_catalogue_flux_temperature_samples(
+            model,
+            temperature_catalogue,
+        )
     if "flux_elevation_quantiles" in summary_features:
-        elevation_flux, elevation = _real_catalogue_flux_elevation_samples(model, c2map)
+        elevation_flux, elevation = _real_catalogue_flux_elevation_samples(
+            model,
+            map_catalogue,
+        )
     if isinstance(model, RacsJax) and (
         "flux_quantiles" in summary_features
         or "flux_elevation_quantiles" in summary_features
@@ -586,7 +654,7 @@ def build_real_sample(
                             flux_temperature_n_bins,
                         ),
                         quantiles=flux_temperature_quantiles,
-                        flux_min_mjy=flux_min,
+                        flux_min_mjy=resolved_temperature_min,
                         flux_max_mjy=flux_max,
                         n_flux_bins=DEFAULT_FLUX_TEMPERATURE_JAX_FLUX_BINS,
                     )
@@ -737,6 +805,19 @@ def _generate_dipole_native(
         model.downscale_nside = original_downscale_nside
 
 
+def _generate_dipole_with_flux_summaries_native(
+    model: Racs,
+    *args,
+    **kwargs,
+) -> tuple[np.ndarray, np.ndarray, dict[str, np.ndarray]]:
+    original_downscale_nside = model.downscale_nside
+    try:
+        model.downscale_nside = None
+        return model.generate_dipole_with_flux_summaries(*args, **kwargs)
+    finally:
+        model.downscale_nside = original_downscale_nside
+
+
 def make_simulator_wrapper(
     model: Racs,
     *,
@@ -759,49 +840,56 @@ def make_simulator_wrapper(
         if not summary_features:
             return model.generate_dipole(rng_key=rng_key, **kwargs)
 
-        native_map, native_mask = _generate_dipole_native(
-            model,
-            rng_key=rng_key,
-            **kwargs,
-        )
-        flux = temperature = elevation_flux = elevation = None
-        if "flux_quantiles" in summary_features:
-            if getattr(model, "final_observed_flux_samples", None) is None:
-                raise ValueError(
-                    "Flux-temperature summary requires stored final flux samples."
-                )
-            if getattr(model, "final_temperature_samples", None) is None:
-                raise ValueError(
-                    "Flux-temperature summary requires stored final temperature samples."
-                )
-            flux = model.final_observed_flux_samples
-            temperature = model.final_temperature_samples
-        if "flux_elevation_quantiles" in summary_features:
-            if getattr(model, "final_observed_flux_samples", None) is None:
-                raise ValueError(
-                    "Flux-elevation summary requires stored final flux samples."
-                )
-            if getattr(model, "final_elevation_samples", None) is None:
-                raise ValueError(
-                    "Flux-elevation summary requires stored final elevation samples."
-                )
-            elevation_flux = model.final_observed_flux_samples
-            elevation = model.final_elevation_samples
+        has_temperature_summary = "flux_quantiles" in summary_features
+        has_elevation_summary = "flux_elevation_quantiles" in summary_features
+        summary_kwargs = {}
+        if has_temperature_summary:
+            summary_kwargs.update(
+                temperature_edges=_flux_temperature_edges(
+                    model,
+                    flux_temperature_n_bins,
+                ),
+                temperature_quantiles=flux_temperature_quantiles,
+            )
+        if has_elevation_summary:
+            summary_kwargs.update(
+                elevation_edges=_flux_elevation_edges(
+                    model,
+                    flux_elevation_n_bins,
+                ),
+                elevation_quantiles=flux_elevation_quantiles,
+            )
 
-        summary_values = _build_summary_features(
-            native_map,
-            native_mask,
-            summary_features,
-            model=model,
-            flux=flux,
-            temperature=temperature,
-            elevation_flux=elevation_flux,
-            elevation=elevation,
-            flux_temperature_n_bins=flux_temperature_n_bins,
-            flux_temperature_quantiles=flux_temperature_quantiles,
-            flux_elevation_n_bins=flux_elevation_n_bins,
-            flux_elevation_quantiles=flux_elevation_quantiles,
-        )
+        if summary_kwargs:
+            native_map, native_mask, source_summaries = (
+                _generate_dipole_with_flux_summaries_native(
+                    model,
+                    rng_key=rng_key,
+                    **summary_kwargs,
+                    **kwargs,
+                )
+            )
+        else:
+            native_map, native_mask = _generate_dipole_native(
+                model,
+                rng_key=rng_key,
+                **kwargs,
+            )
+            source_summaries = {}
+
+        summary_parts: list[np.ndarray] = []
+        for summary in summary_features:
+            if summary == "log_dispersion":
+                summary_parts.append(
+                    _native_count_log_dispersion_feature(native_map, native_mask)
+                )
+            elif summary == "flux_quantiles":
+                summary_parts.append(source_summaries["temperature"])
+            elif summary == "flux_elevation_quantiles":
+                summary_parts.append(source_summaries["elevation"])
+            else:
+                raise ValueError(f"Unknown summary feature: {summary}")
+        summary_values = np.concatenate(summary_parts).astype(np.float32, copy=False)
         return build_hybrid_sample_from_native(
             native_map,
             native_mask,
@@ -1049,6 +1137,7 @@ def main() -> None:
     args, parser = construct_argparser()
     modes = validate_args(args, parser)
     summary_features = list(args.summary_features)
+    _write_run_command(args.out_dir)
 
     mask = build_mask(args.nside)
     config = build_racs_config(
@@ -1062,6 +1151,7 @@ def main() -> None:
         alpha_mean=args.alpha_mean,
         alpha_sigma=args.alpha_sigma,
         fractional_error_flux_min_mjy=args.fractional_error_flux_min_mjy,
+        flux_temperature_min_mjy=args.flux_temperature_min_mjy,
         openmeteo_fallback=args.openmeteo_fallback,
         mask_map=mask,
         max_cluster_children_per_parent=args.max_children,
@@ -1075,6 +1165,7 @@ def main() -> None:
         model,
         args.flux_min,
         summary_features,
+        flux_temperature_min_mjy=args.flux_temperature_min_mjy,
         flux_temperature_n_bins=args.flux_temperature_n_bins,
         flux_temperature_quantiles=args.flux_temperature_quantiles,
         flux_elevation_n_bins=args.flux_elevation_n_bins,

@@ -15,6 +15,7 @@ from dipolesbi.pipelines.based_racs import (
     build_prior_and_reference_theta,
     build_racs_config,
     make_simulator_wrapper,
+    _write_run_command,
 )
 from dipolesbi.pipelines.summary_stats import (
     _flux_elevation_edges,
@@ -89,6 +90,32 @@ def test_build_racs_config_accepts_paf_temperature_data_dir():
     )
 
     assert config.paf_temperature_data_dir == "/tmp/paf_temps"
+
+
+def test_build_racs_config_accepts_independent_temperature_flux_cut():
+    config = build_racs_config(
+        **_minimal_racs_config_kwargs(
+            flux_min=15.0,
+            flux_temperature_min_mjy=2.0,
+        )
+    )
+
+    assert config.flux_min == 15.0
+    assert config.flux_temperature_min_mjy == 2.0
+
+
+def test_write_run_command_records_shell_safe_python_invocation(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "dipolesbi.pipelines.based_racs.sys.orig_argv",
+        ["python", "dipolesbi/pipelines/based_racs.py", "--out_dir", "run dir"],
+    )
+
+    command_path = _write_run_command(str(tmp_path / "run dir"))
+
+    assert command_path.name == "run_command.txt"
+    assert command_path.read_text(encoding="utf-8") == (
+        "python dipolesbi/pipelines/based_racs.py --out_dir 'run dir'\n"
+    )
 
 
 def test_build_prior_and_reference_theta_accepts_custom_bounds():
@@ -315,15 +342,16 @@ def test_simulator_wrapper_appends_flux_temperature_summary():
     class Model:
         downscale_nside = 1
         tile_temperature_by_index = np.linspace(0.0, 10.0, 11)
-        final_observed_flux_samples = None
-        final_temperature_samples = None
-
-        def generate_dipole(self, *args, **kwargs):
-            self.final_temperature_samples = np.arange(10, dtype=np.float32) + 0.5
-            self.final_observed_flux_samples = np.arange(10, dtype=np.float32) + 1.0
+        def generate_dipole_with_flux_summaries(self, *args, **kwargs):
             return (
                 np.zeros(hp.nside2npix(1), dtype=np.float32),
                 np.ones(hp.nside2npix(1), dtype=bool),
+                {
+                    "temperature": np.repeat(
+                        np.arange(10, dtype=np.float32) + 1.0,
+                        5,
+                    )
+                },
             )
 
     wrapper = make_simulator_wrapper(
@@ -345,15 +373,19 @@ def test_simulator_wrapper_appends_log_dispersion_and_flux_quantiles():
     class Model:
         downscale_nside = 1
         tile_temperature_by_index = np.linspace(0.0, 10.0, 11)
-        final_observed_flux_samples = None
-        final_temperature_samples = None
-
-        def generate_dipole(self, *args, **kwargs):
-            self.final_temperature_samples = np.arange(10, dtype=np.float32) + 0.5
-            self.final_observed_flux_samples = np.arange(10, dtype=np.float32) + 1.0
+        def generate_dipole_with_flux_summaries(self, *args, **kwargs):
             native_map = np.arange(hp.nside2npix(2), dtype=np.float32)
             native_mask = np.ones(hp.nside2npix(2), dtype=bool)
-            return native_map, native_mask
+            return (
+                native_map,
+                native_mask,
+                {
+                    "temperature": np.repeat(
+                        np.arange(10, dtype=np.float32) + 1.0,
+                        5,
+                    )
+                },
+            )
 
     wrapper = make_simulator_wrapper(
         Model(),
@@ -375,15 +407,16 @@ def test_simulator_wrapper_appends_flux_elevation_summary():
     class Model:
         downscale_nside = 1
         elevation_lookup_values = np.linspace(0.0, 10.0, 11)
-        final_observed_flux_samples = None
-        final_elevation_samples = None
-
-        def generate_dipole(self, *args, **kwargs):
-            self.final_elevation_samples = np.arange(10, dtype=np.float32) + 0.5
-            self.final_observed_flux_samples = np.arange(10, dtype=np.float32) + 1.0
+        def generate_dipole_with_flux_summaries(self, *args, **kwargs):
             return (
                 np.zeros(hp.nside2npix(1), dtype=np.float32),
                 np.ones(hp.nside2npix(1), dtype=bool),
+                {
+                    "elevation": np.repeat(
+                        np.arange(10, dtype=np.float32) + 1.0,
+                        5,
+                    )
+                },
             )
 
     wrapper = make_simulator_wrapper(
