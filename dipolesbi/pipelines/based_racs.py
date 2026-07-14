@@ -1137,7 +1137,6 @@ def main() -> None:
     args, parser = construct_argparser()
     modes = validate_args(args, parser)
     summary_features = list(args.summary_features)
-    _write_run_command(args.out_dir)
 
     mask = build_mask(args.nside)
     config = build_racs_config(
@@ -1269,6 +1268,7 @@ def main() -> None:
             use_ui=not args.no_ui,
             model_config=config,
         )
+        _write_run_command(inferer.mr_config.plot_save_dir)
         inferer.run()
 
 
