@@ -33,6 +33,10 @@ from dipolesbi.tools.configs import DataTransformSpec, Scenario
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
 from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.priors_np import DipolePriorNP
+from dipolesbi.tools.summary_diagnostics import (
+    QuantileSummaryDiagnosticSpec,
+    make_round_quantile_diagnostic,
+)
 from dipolesbi.tools.ui import MultiRoundInfererUI
 from dipolesbi.tools.utils import batch_simulate
 
@@ -469,6 +473,61 @@ def _summary_ndim(
             flux_elevation_quantiles,
         )
     return ndim
+
+
+def _round_quantile_diagnostic_specs(
+    model: Racs | RacsJax,
+    summary_features: list[SummaryFeature],
+    flux_temperature_n_bins: int,
+    flux_temperature_quantiles: tuple[float, ...],
+    flux_elevation_n_bins: int,
+    flux_elevation_quantiles: tuple[float, ...],
+) -> tuple[QuantileSummaryDiagnosticSpec, ...]:
+    """Describe quantile blocks in the flattened hybrid data vector."""
+    offset = 0
+    specs: list[QuantileSummaryDiagnosticSpec] = []
+    for summary in summary_features:
+        if summary == "log_dispersion":
+            offset += 1
+        elif summary == "flux_quantiles":
+            temperature_edges = _flux_temperature_edges(
+                model,
+                flux_temperature_n_bins,
+            )
+            specs.append(
+                QuantileSummaryDiagnosticSpec(
+                    name="flux_temperature_quantiles",
+                    start=offset,
+                    bin_edges=tuple(float(value) for value in temperature_edges),
+                    quantiles=tuple(flux_temperature_quantiles),
+                    x_label="PAF temperature [C]",
+                )
+            )
+            offset += _flux_temperature_quantile_ndim(
+                flux_temperature_n_bins,
+                flux_temperature_quantiles,
+            )
+        elif summary == "flux_elevation_quantiles":
+            elevation_edges = _flux_elevation_edges(
+                model,
+                flux_elevation_n_bins,
+            )
+            specs.append(
+                QuantileSummaryDiagnosticSpec(
+                    name="flux_elevation_quantiles",
+                    start=offset,
+                    bin_edges=tuple(float(value) for value in elevation_edges),
+                    quantiles=tuple(flux_elevation_quantiles),
+                    x_label="Elevation [deg]",
+                )
+            )
+            offset += _flux_elevation_quantile_ndim(
+                flux_elevation_n_bins,
+                flux_elevation_quantiles,
+            )
+        else:
+            raise ValueError(f"Unknown summary feature: {summary}")
+    return tuple(specs)
 
 
 def _flux_temperature_summary(
@@ -1195,6 +1254,19 @@ def main() -> None:
         map_ndim = None
         summary_ndim = None
 
+    round_quantile_specs = (
+        _round_quantile_diagnostic_specs(
+            model,
+            summary_features,
+            args.flux_temperature_n_bins,
+            args.flux_temperature_quantiles,
+            args.flux_elevation_n_bins,
+            args.flux_elevation_quantiles,
+        )
+        if map_ndim is not None and summary_features
+        else ()
+    )
+
     observed_map = x0[:map_ndim] if map_ndim is not None else x0
     observed_count = float(np.nansum(observed_map))
     if observed_count <= 0:
@@ -1276,6 +1348,11 @@ def main() -> None:
             train_config=scenario.training,
             use_ui=not args.no_ui,
             model_config=config,
+            round_simulation_diagnostic=(
+                make_round_quantile_diagnostic(round_quantile_specs)
+                if mode == "NLE" and round_quantile_specs
+                else None
+            ),
         )
         _write_run_command(inferer.mr_config.plot_save_dir)
         inferer.run()

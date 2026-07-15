@@ -69,7 +69,8 @@ class MultiRoundInferer:
             train_config: TrainingConfig = TrainingConfig(),
             model_config: Optional[Any] = None,
             true_logl: Optional[Callable[[dict[str, jnp.ndarray]], jnp.ndarray]] = None,
-            use_ui: bool = True
+            use_ui: bool = True,
+            round_simulation_diagnostic: Optional[Callable[..., None]] = None,
     ) -> None:
         self.mode = mode
         self.mr_config = multi_round_config
@@ -84,6 +85,7 @@ class MultiRoundInferer:
         self.reference_data = reference_observation[0]
         self.reference_mask = reference_observation[1]
         self.true_logl = true_logl
+        self.round_simulation_diagnostic = round_simulation_diagnostic
         self.data_ndim = self.reference_data.shape[-1]
         self.theta_ndim = initial_proposal.ndim
         self.map_ndim = self.mr_config.map_ndim
@@ -268,6 +270,7 @@ class MultiRoundInferer:
                 self.ui.start_step(1, subtitle='simulating')
                 data = self._generate_simulations(sim_key, theta)
                 self._maybe_save_round_simulations(round_idx, data, theta)
+                round_diagnostic_data = self._prepare_round_simulation_diagnostic(data)
                 self._add_to_simulation_pool(sim_key, data, theta)
                 self.trn_set, self.val_set = self._make_train_val_set(split_key)
                 del data; del theta
@@ -291,6 +294,10 @@ class MultiRoundInferer:
                 self._compute_posterior(posterior_key)
                 self.ui.update_last_stats_row({'Evidence': self.jax_ns.evidence_str})
                 self._write_results_to_disk()
+                self._maybe_run_round_simulation_diagnostic(
+                    round_idx,
+                    round_diagnostic_data,
+                )
                 self.ui.finish_step('computed')
 
                 plt.close('all')
@@ -596,7 +603,7 @@ class MultiRoundInferer:
         )
         plt.savefig(
             self.mr_config.plot_save_dir
-          + f'/likelihood_{self.current_round}.pdf',
+          + f'/likelihood_{self.current_round}.png',
             bbox_inches='tight'
         )
 
@@ -1068,6 +1075,40 @@ class MultiRoundInferer:
             theta: dict[str, NDArray]
     ) -> tuple[NDArray[np.float32], NDArray[np.bool_]]:
         return self.simulator_function(key, theta, True)
+
+    def _prepare_round_simulation_diagnostic(
+            self,
+            data: tuple[NDArray[np.float32], NDArray[np.bool_]],
+    ) -> tuple[NDArray[np.float32], NDArray[np.bool_]] | None:
+        if self.round_simulation_diagnostic is None:
+            return None
+        if self.summary_start is None or self.summary_ndim is None:
+            raise ValueError(
+                "A round simulation diagnostic requires configured summary dimensions."
+            )
+        summary_slice = slice(self.summary_start, self.summary_start + self.summary_ndim)
+        return (
+            np.asarray(data[0][:, summary_slice], dtype=np.float32).copy(),
+            np.asarray(data[1][:, summary_slice], dtype=np.bool_).copy(),
+        )
+
+    def _maybe_run_round_simulation_diagnostic(
+            self,
+            round_idx: int,
+            data: tuple[NDArray[np.float32], NDArray[np.bool_]] | None,
+    ) -> None:
+        if self.round_simulation_diagnostic is None or data is None:
+            return
+        assert self.summary_start is not None
+        assert self.summary_ndim is not None
+        summary_slice = slice(self.summary_start, self.summary_start + self.summary_ndim)
+        self.round_simulation_diagnostic(
+            round_idx,
+            data,
+            self.reference_data[summary_slice],
+            self.reference_mask[summary_slice],
+            self.mr_config.plot_save_dir,
+        )
 
     def _maybe_save_round_simulations(
             self,
