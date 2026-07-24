@@ -512,6 +512,9 @@ def smooth_map(
     if only_return_data:
         return smoothed_map_to_plot
 
+    if smoothed_map_to_plot.ndim != 1:
+        raise ValueError("Batched maps can only be used with only_return_data=True.")
+
     hp.projview(
         smoothed_map_to_plot,
         nest=True,
