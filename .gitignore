@@ -34,3 +34,4 @@ fiducial_*
 *.png
 
 .DS_Store
+.codex
