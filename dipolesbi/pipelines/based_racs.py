@@ -234,6 +234,11 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
         default=None,
         help="Use a clustering model to represent extended sources.",
     )
+    parser.add_argument(
+        "--add_extra_error",
+        action='store_true',
+        help="Add parameter for extra error on flux."
+    )
     parser.add_argument("--log10_n_initial_samples_min", type=float, default=5.6)
     parser.add_argument("--log10_n_initial_samples_max", type=float, default=6.8)
     parser.add_argument("--observer_speed_min", type=float, default=0.0)
@@ -259,6 +264,8 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
     parser.add_argument("--clus_stop_prob_max", type=float, default=1.0)
     parser.add_argument("--lambda_clus_min", type=float, default=0.0)
     parser.add_argument("--lambda_clus_max", type=float, default=3.0)
+    parser.add_argument("--eta_min", type=float, default=0.0)
+    parser.add_argument("--eta_max", type=float, default=8.0)
     parser.add_argument("--max_children", type=int, default=16)
     return parser.parse_args(), parser
 
@@ -770,6 +777,7 @@ def build_real_sample(
 
 def build_prior_and_reference_theta(
     simulate_clustering: None | Literal["geometric", "poisson"] = None,
+    add_extra_error: bool = False,
     *,
     log10_n_initial_samples_range: tuple[float, float] = (5.6, 6.8),
     observer_speed_range: tuple[float, float] = (0.0, 12.0),
@@ -782,6 +790,7 @@ def build_prior_and_reference_theta(
     p_clus_range: tuple[float, float] = (0.0, 1.0),
     clus_stop_prob_range: tuple[float, float] = (0.4, 1.0),
     lambda_clus_range: tuple[float, float] = (0.0, 3.0),
+    eta_range: tuple[float, float] = (0., 8.)
 ) -> tuple[DipolePriorNP, dict[str, float]]:
     prior = DipolePriorNP(
         mean_count_range=list(log10_n_initial_samples_range),
@@ -841,6 +850,15 @@ def build_prior_and_reference_theta(
     elif simulate_clustering is not None:
         raise ValueError(f"{simulate_clustering} not recognised.")
 
+    if add_extra_error:
+        prior.add_prior(
+            'eta',
+            simulator_kwarg='fractional_error_eta',
+            low=eta_range[0],
+            high=eta_range[1],
+            dist_type='Uniform'
+        )
+
     theta_0 = {
         "log10_n_initial_samples": 6.65,
         "observer_speed": 1.0,
@@ -849,6 +867,7 @@ def build_prior_and_reference_theta(
         "temp_beta": 0.02,
         "p_clus": 0.0,
         "clus_stop_prob": 1.0,
+        "fractional_error_eta": 0.
     }
     if add_elevation_model:
         theta_0["elevation_trough"] = 0.0
@@ -1277,6 +1296,7 @@ def main() -> None:
 
     prior, theta_0 = build_prior_and_reference_theta(
         simulate_clustering=args.simulate_clustering,
+        add_extra_error=args.add_extra_error,
         log10_n_initial_samples_range=(
             args.log10_n_initial_samples_min,
             args.log10_n_initial_samples_max,
@@ -1297,6 +1317,7 @@ def main() -> None:
         p_clus_range=(args.p_clus_min, args.p_clus_max),
         clus_stop_prob_range=(args.clus_stop_prob_min, args.clus_stop_prob_max),
         lambda_clus_range=(args.lambda_clus_min, args.lambda_clus_max),
+        eta_range=(args.eta_min, args.eta_max)
     )
 
     if args.use_jax:
