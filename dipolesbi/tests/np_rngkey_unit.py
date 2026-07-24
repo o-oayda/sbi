@@ -39,6 +39,19 @@ class TestNPKey(unittest.TestCase):
         x0b = fold_in(base, 0).integers(0, 100, shape=(10,))
         self.assertTrue(np.all(x0 == x0b))
 
+    def test_fold_in_accepts_sequence_entropy(self):
+        base = prng_key([1, 2])
+
+        folded = fold_in(base, 3)
+
+        expected = NPKey.from_seed([1, 2, 3])
+        self.assertTrue(
+            np.array_equal(
+                folded.integers(0, 100, shape=(10,)),
+                expected.integers(0, 100, shape=(10,)),
+            )
+        )
+
     def test_reproducibility_normal(self):
         k = prng_key(999)
         x1 = normal(k, (5,))

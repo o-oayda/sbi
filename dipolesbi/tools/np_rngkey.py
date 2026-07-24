@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Iterable, Tuple, Sequence
+from typing import Iterable, Sequence
 from haiku import PRNGSequence
 import numpy as np
 from numpy.typing import DTypeLike
@@ -44,10 +44,13 @@ class NPKey:
     def fold_in(self, data: int) -> "NPKey":
         """
         Mix an integer into the key (similar to jax.random.fold_in).
-        We create a new SeedSequence with a nested entropy tuple to keep it deterministic.
+        Preserve the base entropy and append the folded value as another entropy word.
         """
-        # SeedSequence accepts any hashable sequence for entropy; nesting is fine.
-        entropy: Tuple = (self._ss.entropy, int(data))
+        base_entropy = self._ss.entropy
+        if isinstance(base_entropy, (int, np.integer)):
+            entropy = (int(base_entropy), int(data))
+        else:
+            entropy = tuple(int(value) for value in base_entropy) + (int(data),)
         return NPKey(np.random.SeedSequence(entropy))
 
     def split(self, n: int = 2) -> list["NPKey"]:
