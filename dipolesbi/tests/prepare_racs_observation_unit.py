@@ -68,10 +68,10 @@ def test_prepare_reference_observation_wires_config(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         preparation,
-        "build_mask",
-        lambda nside, **kwargs: calls.setdefault(
-            "mask", (nside, kwargs)
-        ) and np.ones(12 * nside**2, dtype=bool),
+        "build_mask_from_observation_config",
+        lambda observation_config: calls.setdefault(
+            "mask_config", observation_config
+        ) and np.ones(12 * observation_config["args"]["nside"] ** 2, dtype=bool),
     )
 
     class FakeModelConfig:
@@ -111,6 +111,7 @@ def test_prepare_reference_observation_wires_config(tmp_path, monkeypatch):
     np.testing.assert_array_equal(x0, expected_x0)
     np.testing.assert_array_equal(mask, expected_mask)
     assert calls["initialised"] is True
+    assert calls["mask_config"] is config
     assert calls["model_config"]["catalogue_path"] == str(catalogue_path.resolve())
     assert calls["real_sample"][1] is catalogue
     assert calls["real_sample"][4]["local_source_crossmatch_radius_arcsec"] == 5.0

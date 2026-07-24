@@ -21,8 +21,10 @@ from dipolesbi.pipelines.racs_observation_helpers import (
     _model_product,
     build_hybrid_sample_from_native,
     build_mask,
+    build_mask_from_observation_config,
     build_real_sample,
     load_catalogue,
+    load_observation_config,
     load_reference_observation,
 )
 from dipolesbi.pipelines.summary_stats import (
@@ -145,6 +147,15 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
         type=Path,
         required=True,
         help="Path to the exact raw RACS catalogue used by the simulator and observation.",
+    )
+    parser.add_argument(
+        "--observation_config",
+        type=Path,
+        required=True,
+        help=(
+            "Observation YAML used to prepare --reference_observation and to "
+            "define the simulator's native-resolution mask."
+        ),
     )
     parser.add_argument(
         "--reference_observation",
@@ -963,8 +974,12 @@ def main() -> None:
     reference_observation_path = (
         args.reference_observation.expanduser().resolve(strict=True)
     )
+    observation_config_path = (
+        args.observation_config.expanduser().resolve(strict=True)
+    )
+    observation_config = load_observation_config(observation_config_path)
     x0, mask0 = load_reference_observation(reference_observation_path)
-    mask = build_mask(args.nside)
+    mask = build_mask_from_observation_config(observation_config)
     config = build_racs_config(
         catalogue_path=catalogue_path,
         racs_epoch=args.racs_epoch,

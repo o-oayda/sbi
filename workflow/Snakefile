@@ -1,16 +1,17 @@
 import shlex
 from pathlib import Path
 
+from snakemake.exceptions import WorkflowError
 from snakemake.utils import validate
 import yaml
 
 
 CONFIG_PATH = "workflow/configs/racs_mid1_example.yaml"
-SCHEMA_PATH = "schemas/racs.schema.yaml"
+EXPERIMENT_SCHEMA_PATH = "schemas/racs-experiment.schema.yaml"
 OBSERVATION_SCHEMA_PATH = "schemas/racs-observation.schema.yaml"
 
 configfile: CONFIG_PATH
-validate(config, SCHEMA_PATH)
+validate(config, EXPERIMENT_SCHEMA_PATH)
 
 
 OBSERVATION_CONFIG_PATH = config["observation_config"]
@@ -27,8 +28,19 @@ OBSERVATION_PATH = f"{OBSERVATION_DIR}/reference_observation.npz"
 
 EXPERIMENT_ID = config["experiment_id"]
 EXECUTION = config["execution"]
-ARGS = config["args"]
-FINAL_ROUND = ARGS["n_rounds"] - 1
+EXPERIMENT_ARGS = config["args"]
+OBSERVATION_ARGS = OBSERVATION["args"]
+
+DUPLICATED_ARGS = set(EXPERIMENT_ARGS) & set(OBSERVATION_ARGS)
+if DUPLICATED_ARGS:
+    duplicated = ", ".join(sorted(DUPLICATED_ARGS))
+    raise WorkflowError(
+        "Observation-owned arguments must only be declared in the observation "
+        f"config; duplicated argument(s): {duplicated}"
+    )
+
+ARGS = {**OBSERVATION_ARGS, **EXPERIMENT_ARGS}
+FINAL_ROUND = EXPERIMENT_ARGS["n_rounds"] - 1
 RESULT_DIR = f"results/{EXPERIMENT_ID}"
 
 
@@ -93,6 +105,7 @@ rule prepare_racs_observation:
 rule infer_racs:
     input:
         experiment_config=CONFIG_PATH,
+        observation_config=OBSERVATION_CONFIG_PATH,
         catalogue=OBSERVATION["catalogue_path"],
         prepared_observation=( # associated reference_observation.npz
             rules.prepare_racs_observation.output.observation
@@ -119,6 +132,7 @@ rule infer_racs:
             python dipolesbi/pipelines/based_racs.py \
             {params.cli_args} \
             --catalogue_path {input.catalogue:q} \
+            --observation_config {input.observation_config:q} \
             --reference_observation {input.prepared_observation:q} \
             --out_dir {params.output_dir:q} \
             > {log:q} 2>&1

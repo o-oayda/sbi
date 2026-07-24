@@ -7,23 +7,13 @@ from typing import Any
 from catsim import Racs, RacsConfig
 from catsim.racs_jax import RacsJax
 import numpy as np
-import yaml
 
 from dipolesbi.pipelines.racs_observation_helpers import (
-    build_mask,
+    build_mask_from_observation_config,
     build_real_sample,
     load_catalogue,
+    load_observation_config,
 )
-
-
-def load_observation_config(config_path: str | Path) -> dict[str, Any]:
-    """Load an observation YAML mapping from disk."""
-    path = Path(config_path).expanduser()
-    with path.open(encoding="utf-8") as stream:
-        config = yaml.safe_load(stream)
-    if not isinstance(config, dict):
-        raise ValueError(f"Observation config must contain a YAML mapping: {path}")
-    return config
 
 
 def prepare_reference_observation(
@@ -31,22 +21,13 @@ def prepare_reference_observation(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Construct the configured RACS reference data vector and mask."""
     args = observation_config["args"]
-    mask_args = observation_config["mask"]
     catalogue_path = (
         Path(observation_config["catalogue_path"])
         .expanduser()
         .resolve(strict=True)
     )
 
-    mask = build_mask(
-        args["nside"],
-        galactic_plane_width_deg=mask_args["galactic_plane_width_deg"],
-        north_equatorial_pole_radius_deg=(
-            mask_args["north_equatorial_pole_radius_deg"]
-        ),
-        default_a_team_radius_deg=mask_args["default_a_team_radius_deg"],
-        source_radii_deg=dict(mask_args["source_radii_deg"]),
-    )
+    mask = build_mask_from_observation_config(observation_config)
 
     use_jax = bool(args["use_jax"])
     model_config = RacsConfig(

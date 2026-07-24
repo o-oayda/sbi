@@ -34,9 +34,25 @@ properties:
       - n_simulations
       - n_rounds
       - ssnle_seed
-      - racs_epoch
-      - flux_min
-      - nside
+    not:
+      anyOf:
+        - required: [racs_epoch]
+        - required: [flux_min]
+        - required: [flux_temperature_min_mjy]
+        - required: [fractional_error_flux_min_mjy]
+        - required: [local_source_crossmatch_radius_arcsec]
+        - required: [nside]
+        - required: [downscale_nside]
+        - required: [use_jax]
+        - required: [chunk_size]
+        - required: [temperature_model]
+        - required: [paf_temperature_data_dir]
+        - required: [openmeteo_fallback]
+        - required: [summary_features]
+        - required: [flux_temperature_n_bins]
+        - required: [flux_temperature_quantiles]
+        - required: [flux_elevation_n_bins]
+        - required: [flux_elevation_quantiles]
     properties:
       mode:
         const: NLE
@@ -49,35 +65,8 @@ properties:
       ssnle_seed:
         type: integer
         minimum: 0
-      racs_epoch:
-        enum: [low3, mid1]
-      flux_min:
-        type: number
-        exclusiveMinimum: 0
-      local_source_crossmatch_radius_arcsec:
-        type: [number, "null"]
-        exclusiveMinimum: 0
-      flux_temperature_min_mjy:
-        type: [number, "null"]
-        exclusiveMinimum: 0
-      nside:
-        type: integer
-        minimum: 1
-      downscale_nside:
-        type: [integer, "null"]
-        minimum: 1
-      use_jax:
-        type: boolean
       no_ui:
         type: boolean
-      summary_features:
-        type: array
-        uniqueItems: true
-        items:
-          enum:
-            - log_dispersion
-            - flux_quantiles
-            - flux_elevation_quantiles
 
     # This initial schema checks the most consequential fields while allowing
     # the remaining based_racs.py arguments. Extend the property list and set

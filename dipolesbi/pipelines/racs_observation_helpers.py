@@ -1,5 +1,6 @@
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from astropy.table import Table
 from catsim import Racs, RacsProductSpec
@@ -10,6 +11,7 @@ from dipoleutils.utils.samples import CatalogueToMap
 import healpy as hp
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 
 from dipolesbi.pipelines.summary_stats import (
     _flux_elevation_edges,
@@ -40,6 +42,16 @@ DEFAULT_SOURCE_RADII_DEG: dict[str, float] = {
     "LMC": 13,
     "SMC": 8,
 }
+
+
+def load_observation_config(config_path: str | Path) -> dict[str, Any]:
+    """Load an observation YAML mapping from disk."""
+    path = Path(config_path).expanduser()
+    with path.open(encoding="utf-8") as stream:
+        config = yaml.safe_load(stream)
+    if not isinstance(config, dict):
+        raise ValueError(f"Observation config must contain a YAML mapping: {path}")
+    return config
 
 
 def load_catalogue(catalogue_path: str | Path) -> Table:
@@ -115,6 +127,23 @@ def build_mask(
         )
 
     return hp.reorder(masker.get_mask_map(), r2n=True)
+
+
+def build_mask_from_observation_config(
+    observation_config: Mapping[str, Any],
+) -> np.ndarray:
+    """Build the native mask declared by an observation configuration."""
+    args = observation_config["args"]
+    mask_args = observation_config["mask"]
+    return build_mask(
+        args["nside"],
+        galactic_plane_width_deg=mask_args["galactic_plane_width_deg"],
+        north_equatorial_pole_radius_deg=(
+            mask_args["north_equatorial_pole_radius_deg"]
+        ),
+        default_a_team_radius_deg=mask_args["default_a_team_radius_deg"],
+        source_radii_deg=dict(mask_args["source_radii_deg"]),
+    )
 
 
 def _model_product(model: Racs | RacsJax):
