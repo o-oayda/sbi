@@ -36,27 +36,39 @@ properties:
     required:
       - n_simulations
       - n_rounds
+      - n_workers
+      - jax_batch_size
       - ssnle_seed
-    not:
-      anyOf:
-        - required: [mode]
-        - required: [racs_epoch]
-        - required: [flux_min]
-        - required: [flux_temperature_min_mjy]
-        - required: [fractional_error_flux_min_mjy]
-        - required: [local_source_crossmatch_radius_arcsec]
-        - required: [nside]
-        - required: [downscale_nside]
-        - required: [use_jax]
-        - required: [chunk_size]
-        - required: [temperature_model]
-        - required: [paf_temperature_data_dir]
-        - required: [openmeteo_fallback]
-        - required: [summary_features]
-        - required: [flux_temperature_n_bins]
-        - required: [flux_temperature_quantiles]
-        - required: [flux_elevation_n_bins]
-        - required: [flux_elevation_quantiles]
+      - no_ui
+      - alpha_mean
+      - alpha_sigma
+      - simulate_clustering
+      - add_extra_error
+      - log10_n_initial_samples_min
+      - log10_n_initial_samples_max
+      - observer_speed_min
+      - observer_speed_max
+      - dipole_longitude_min
+      - dipole_longitude_max
+      - dipole_latitude_min
+      - dipole_latitude_max
+      - temp_beta_min
+      - temp_beta_max
+      - add_elevation_model
+      - elevation_trough_min
+      - elevation_trough_max
+      - elevation_amp_min
+      - elevation_amp_max
+      - p_clus_min
+      - p_clus_max
+      - clus_stop_prob_min
+      - clus_stop_prob_max
+      - lambda_clus_min
+      - lambda_clus_max
+      - eta_min
+      - eta_max
+      - max_children
+    additionalProperties: false
     properties:
       n_simulations:
         type: integer
@@ -64,13 +76,102 @@ properties:
       n_rounds:
         type: integer
         minimum: 1
+      n_workers:
+        type: [integer, "null"]
+        minimum: 1
+      jax_batch_size:
+        type: integer
+        minimum: 1
       ssnle_seed:
         type: integer
         minimum: 0
       no_ui:
         type: boolean
-
-    # This initial schema checks the most consequential fields while allowing
-    # the remaining based_racs.py arguments. Extend the property list and set
-    # this to false as the workflow matures.
-    additionalProperties: true
+      alpha_mean:
+        type: number
+      alpha_sigma:
+        type: number
+        exclusiveMinimum: 0
+      simulate_clustering:
+        enum: [geometric, poisson]
+      add_extra_error:
+        type: boolean
+      log10_n_initial_samples_min:
+        type: number
+      log10_n_initial_samples_max:
+        type: number
+      observer_speed_min:
+        type: number
+        minimum: 0
+      observer_speed_max:
+        type: number
+        minimum: 0
+      dipole_longitude_min:
+        type: number
+        minimum: 0
+        maximum: 360
+      dipole_longitude_max:
+        type: number
+        minimum: 0
+        maximum: 360
+      dipole_latitude_min:
+        type: number
+        minimum: -90
+        maximum: 90
+      dipole_latitude_max:
+        type: number
+        minimum: -90
+        maximum: 90
+      temp_beta_min:
+        type: number
+        minimum: 0
+      temp_beta_max:
+        type: number
+        minimum: 0
+      add_elevation_model:
+        type: boolean
+      elevation_trough_min:
+        type: number
+        minimum: 0
+        maximum: 90
+      elevation_trough_max:
+        type: number
+        minimum: 0
+        maximum: 90
+      elevation_amp_min:
+        type: number
+        minimum: 0
+      elevation_amp_max:
+        type: number
+        minimum: 0
+      p_clus_min:
+        type: number
+        minimum: 0
+        maximum: 1
+      p_clus_max:
+        type: number
+        minimum: 0
+        maximum: 1
+      clus_stop_prob_min:
+        type: number
+        minimum: 0
+        maximum: 1
+      clus_stop_prob_max:
+        type: number
+        minimum: 0
+        maximum: 1
+      lambda_clus_min:
+        type: number
+        minimum: 0
+      lambda_clus_max:
+        type: number
+        minimum: 0
+      eta_min:
+        type: number
+        minimum: 0
+      eta_max:
+        type: number
+        minimum: 0
+      max_children:
+        type: integer
+        minimum: 1
