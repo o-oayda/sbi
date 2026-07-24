@@ -1,5 +1,6 @@
 .venv*
 sbi-logs*
+.snakemake/*
 __pycache__*
 launch.json
 *.pt

@@ -1,0 +1,51 @@
+experiment_id: racs_mid1_example
+
+observation_config: workflow/configs/observations/racs_mid1_flux15_ds4.yaml
+
+execution:
+  jax_platforms: cuda
+  threads: 1
+  mem_mb: 64000
+
+args:
+  mode: NLE
+  n_simulations: 100_000
+  n_rounds: 20
+  ssnle_seed: 0
+  no_ui: true
+
+  racs_epoch: mid1
+  flux_min: 15.0
+  flux_temperature_min_mjy: 5.0
+  fractional_error_flux_min_mjy: 10.0
+  local_source_crossmatch_radius_arcsec: 5.0
+  nside: 64
+  downscale_nside: 4
+  use_jax: true
+  jax_batch_size: 5
+  chunk_size: 140_000
+  temperature_model: hot_linear
+  paf_temperature_data_dir: /home/oliver/Documents/dipole-utils/data/paf_temps
+  openmeteo_fallback: false
+
+  summary_features:
+    - log_dispersion
+    - flux_quantiles
+  flux_temperature_n_bins: 10
+  flux_temperature_quantiles: [0.10, 0.25, 0.50, 0.75, 0.90]
+
+  simulate_clustering: poisson
+  max_children: 5
+
+  log10_n_initial_samples_min: 5.6
+  log10_n_initial_samples_max: 6.8
+  observer_speed_min: 0.0
+  observer_speed_max: 12.0
+  dipole_longitude_min: 0.0
+  dipole_longitude_max: 360.0
+  dipole_latitude_min: -90.0
+  dipole_latitude_max: 90.0
+  temp_beta_min: 0.0
+  temp_beta_max: 0.05
+  lambda_clus_min: 0.0
+  lambda_clus_max: 3.0

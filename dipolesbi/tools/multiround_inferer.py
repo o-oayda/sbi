@@ -30,7 +30,6 @@ from dipolesbi.tools.priors_np import DipolePriorNP
 from dipolesbi.tools.ui import MultiRoundInfererUI, NullMultiRoundInfererUI
 from dipolesbi.tools.utils import HidePrints, load_dict_npz, save_dict_npz
 from jax import lax
-import datetime
 from corner import corner
 
 
@@ -124,7 +123,7 @@ class MultiRoundInferer:
         else:
             self.reference_theta_jax: dict[str, jnp.ndarray] = {}
 
-        self.mr_config.plot_save_dir = self._get_output_dir()
+        os.makedirs(self.mr_config.plot_save_dir, exist_ok=True)
         if self.mr_config.save_round_simulations:
             self._round_sim_save_dir = os.path.join(
                 self.mr_config.plot_save_dir,
@@ -212,20 +211,6 @@ class MultiRoundInferer:
         self.embedding_net_config = (
             self.transform_config.data_transform_config.embedding_net_config
         )
-
-    def _get_output_dir(self) -> str:
-        if not os.path.exists(self.mr_config.plot_save_dir):
-            os.makedirs(self.mr_config.plot_save_dir)
-
-        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        timestamp_and_seed = (
-            f'{timestamp}_SEED{self.mr_config.prng_integer_seed}_{self.mode}'
-        )
-        new_plot_dir = os.path.join(self.mr_config.plot_save_dir, timestamp_and_seed)
-
-        os.makedirs(new_plot_dir, exist_ok=True)
-
-        return new_plot_dir
 
     def _nle_pipeline(self):
         current_key = self.rng_key

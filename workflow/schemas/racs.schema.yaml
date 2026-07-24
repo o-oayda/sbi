@@ -1,0 +1,85 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+
+type: object
+required: [experiment_id, observation_config, execution, args]
+additionalProperties: false
+
+properties:
+  experiment_id:
+    type: string
+    pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+
+  observation_config:
+    type: string
+    minLength: 1
+
+  execution:
+    type: object
+    required: [jax_platforms, threads, mem_mb]
+    additionalProperties: false
+    properties:
+      jax_platforms:
+        enum: [cpu, cuda]
+      threads:
+        type: integer
+        minimum: 1
+      mem_mb:
+        type: integer
+        minimum: 32_000
+
+  args:
+    type: object
+    required:
+      - mode
+      - n_simulations
+      - n_rounds
+      - ssnle_seed
+      - racs_epoch
+      - flux_min
+      - nside
+    properties:
+      mode:
+        const: NLE
+      n_simulations:
+        type: integer
+        minimum: 1
+      n_rounds:
+        type: integer
+        minimum: 1
+      ssnle_seed:
+        type: integer
+        minimum: 0
+      racs_epoch:
+        enum: [low3, mid1]
+      flux_min:
+        type: number
+        exclusiveMinimum: 0
+      local_source_crossmatch_radius_arcsec:
+        type: [number, "null"]
+        exclusiveMinimum: 0
+      flux_temperature_min_mjy:
+        type: [number, "null"]
+        exclusiveMinimum: 0
+      nside:
+        type: integer
+        minimum: 1
+      downscale_nside:
+        type: [integer, "null"]
+        minimum: 1
+      use_jax:
+        type: boolean
+      no_ui:
+        type: boolean
+      summary_features:
+        type: array
+        uniqueItems: true
+        items:
+          enum:
+            - log_dispersion
+            - flux_quantiles
+            - flux_elevation_quantiles
+
+    # This initial schema checks the most consequential fields while allowing
+    # the remaining based_racs.py arguments. Extend the property list and set
+    # this to false as the workflow matures.
+    additionalProperties: true

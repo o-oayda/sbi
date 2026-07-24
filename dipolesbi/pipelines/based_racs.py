@@ -7,27 +7,30 @@ from typing import Literal
 
 from catsim import RACS_PRODUCTS, TEMPERATURE_MODELS, Racs, RacsConfig
 from catsim.racs_jax import RacsJax
-from catsim.utils.healsphere import downgrade_ignore_nan
-from dipoleutils.utils.data_loader import DataLoader
-from dipoleutils.utils.mask import Masker
-from dipoleutils.utils.samples import CatalogueToMap
 import healpy as hp
 import jax
-import matplotlib.pyplot as plt
 import numpy as np
 
+from dipolesbi.pipelines.racs_observation_helpers import (
+    DEFAULT_FLUX_ELEVATION_N_BINS,
+    DEFAULT_FLUX_ELEVATION_QUANTILES,
+    DEFAULT_FLUX_TEMPERATURE_JAX_FLUX_BINS,
+    DEFAULT_FLUX_TEMPERATURE_N_BINS,
+    DEFAULT_FLUX_TEMPERATURE_QUANTILES,
+    SummaryFeature,
+    _model_product,
+    build_hybrid_sample_from_native,
+    build_mask,
+    build_real_sample,
+    load_catalogue,
+    load_reference_observation,
+)
 from dipolesbi.pipelines.summary_stats import (
     _flux_elevation_edges,
-    _flux_elevation_histogram_quantile_features,
-    _flux_elevation_quantile_features,
     _flux_elevation_quantile_ndim,
     _flux_temperature_edges,
-    _flux_temperature_histogram_quantile_features,
-    _flux_temperature_quantile_features,
     _flux_temperature_quantile_ndim,
     _native_count_log_dispersion_feature,
-    _real_catalogue_flux_elevation_samples,
-    _real_catalogue_flux_temperature_samples,
 )
 from dipolesbi.tools.configs import DataTransformSpec, Scenario
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
@@ -40,16 +43,6 @@ from dipolesbi.tools.summary_diagnostics import (
 from dipolesbi.tools.ui import MultiRoundInfererUI
 from dipolesbi.tools.utils import batch_simulate
 
-SummaryFeature = Literal[
-    "log_dispersion",
-    "flux_quantiles",
-    "flux_elevation_quantiles",
-]
-DEFAULT_FLUX_TEMPERATURE_N_BINS = 10
-DEFAULT_FLUX_TEMPERATURE_QUANTILES = (0.10, 0.25, 0.50, 0.75, 0.90)
-DEFAULT_FLUX_ELEVATION_N_BINS = 10
-DEFAULT_FLUX_ELEVATION_QUANTILES = (0.10, 0.25, 0.50, 0.75, 0.90)
-DEFAULT_FLUX_TEMPERATURE_JAX_FLUX_BINS = 128
 DEFAULT_PAF_TEMPERATURE_DATA_DIR = "/home/oliver/Documents/dipole-utils/data/paf_temps"
 
 
@@ -104,7 +97,10 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
         "--out_dir",
         type=str,
         required=True,
-        help="Directory to save outputs into.",
+        help=(
+            "Exact directory in which to save outputs. When multiple modes are "
+            "requested, each mode uses a deterministic child directory."
+        ),
     )
     parser.add_argument(
         "--ssnle_seed",
@@ -143,6 +139,27 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
         choices=sorted(RACS_PRODUCTS),
         default="low3",
         help="RACS product/epoch to simulate.",
+    )
+    parser.add_argument(
+        "--catalogue_path",
+        type=Path,
+        required=True,
+        help="Path to the exact raw RACS catalogue used by the simulator and observation.",
+    )
+    parser.add_argument(
+        "--reference_observation",
+        type=Path,
+        required=True,
+        help="Prepared NPZ containing the final x0 data vector and mask.",
+    )
+    parser.add_argument(
+        "--local_source_crossmatch_radius_arcsec",
+        type=float,
+        default=None,
+        help=(
+            "Remove sources matched to the local-source catalogue within this "
+            "radius in arcseconds. Omit to disable local-source cross-matching."
+        ),
     )
     parser.add_argument(
         "--openmeteo_fallback",
@@ -279,6 +296,13 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         parser.error("--jax_batch_size must be positive.")
     if not np.isfinite(args.flux_min) or args.flux_min <= 0.0:
         parser.error("--flux_min must be positive and finite.")
+    if args.local_source_crossmatch_radius_arcsec is not None and (
+        not np.isfinite(args.local_source_crossmatch_radius_arcsec)
+        or args.local_source_crossmatch_radius_arcsec <= 0.0
+    ):
+        parser.error(
+            "--local_source_crossmatch_radius_arcsec must be positive and finite."
+        )
     if args.flux_temperature_min_mjy is not None and (
         not np.isfinite(args.flux_temperature_min_mjy)
         or args.flux_temperature_min_mjy <= 0.0
@@ -366,6 +390,7 @@ def _parse_modes(raw_modes: list[str] | None, parser: argparse.ArgumentParser) -
 
 def build_racs_config(
     *,
+    catalogue_path: str | Path,
     racs_epoch: str,
     flux_min: float,
     nside: int,
@@ -385,6 +410,7 @@ def build_racs_config(
 ) -> RacsConfig:
     return RacsConfig(
         product=racs_epoch,
+        catalogue_path=str(Path(catalogue_path).expanduser()),
         flux_min=flux_min,
         nside=nside,
         chunk_size=chunk_size,
@@ -402,59 +428,6 @@ def build_racs_config(
         mask_map=mask_map,
         max_cluster_children_per_parent=max_cluster_children_per_parent,
     )
-
-
-def build_mask(nside: int) -> np.ndarray:
-    masker = Masker(np.ones(hp.nside2npix(nside)), coordinate_system="equatorial")
-    masker.mask_galactic_plane(5)
-    masker.mask_a_team_sources(radius_deg=2)
-    masker.mask_equatorial_poles(north_radius=42)
-    masker.mask_a_team_sources(radius_deg=3, source_names=["Cygnus A"])
-    masker.mask_a_team_sources(radius_deg=13, source_names=["LMC"])
-    masker.mask_a_team_sources(radius_deg=8, source_names=["SMC"])
-    return hp.reorder(masker.get_mask_map(), r2n=True)
-
-
-def _model_product(model: Racs | RacsJax):
-    product = getattr(model, "product", None)
-    if product is not None:
-        return product
-    return model.cfg.product
-
-
-def _append_summary_features(
-    data: np.ndarray,
-    mask: np.ndarray,
-    summary_features: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    summary_features = np.asarray(summary_features, dtype=np.float32)
-    if summary_features.ndim != 1:
-        raise ValueError("summary_features must be one-dimensional.")
-    summary_mask = np.ones(summary_features.shape, dtype=np.bool_)
-    hybrid = np.concatenate([np.asarray(data, dtype=np.float32), summary_features])
-    hybrid_mask = np.concatenate([np.asarray(mask, dtype=np.bool_), summary_mask])
-    return hybrid.astype(np.float32, copy=False), hybrid_mask.astype(np.bool_, copy=False)
-
-
-def _prepare_output_map(
-    native_map: np.ndarray,
-    native_mask: np.ndarray,
-    downscale_nside: int | None,
-) -> tuple[np.ndarray, np.ndarray]:
-    if downscale_nside is None:
-        output_map = np.asarray(native_map, dtype=np.float32).copy()
-        output_mask = np.asarray(native_mask, dtype=np.bool_)
-    else:
-        output_map, output_mask = downgrade_ignore_nan(
-            native_map,
-            native_mask,
-            downscale_nside,
-        )
-        output_map = output_map.astype(np.float32, copy=False)
-        output_mask = output_mask.astype(np.bool_, copy=False)
-        output_map = output_map.copy()
-    output_map[~output_mask] = np.nan
-    return output_map, output_mask
 
 
 def _summary_ndim(
@@ -535,244 +508,6 @@ def _round_quantile_diagnostic_specs(
         else:
             raise ValueError(f"Unknown summary feature: {summary}")
     return tuple(specs)
-
-
-def _flux_temperature_summary(
-    model: Racs,
-    flux: np.ndarray,
-    temperature: np.ndarray,
-    flux_temperature_n_bins: int,
-    flux_temperature_quantiles: tuple[float, ...],
-) -> np.ndarray:
-    return _flux_temperature_quantile_features(
-        flux,
-        temperature,
-        temp_edges=_flux_temperature_edges(model, flux_temperature_n_bins),
-        quantiles=flux_temperature_quantiles,
-    )
-
-
-def _flux_elevation_summary(
-    model: Racs,
-    flux: np.ndarray,
-    elevation: np.ndarray,
-    flux_elevation_n_bins: int,
-    flux_elevation_quantiles: tuple[float, ...],
-) -> np.ndarray:
-    return _flux_elevation_quantile_features(
-        flux,
-        elevation,
-        elevation_edges=_flux_elevation_edges(model, flux_elevation_n_bins),
-        quantiles=flux_elevation_quantiles,
-    )
-
-
-def _build_summary_features(
-    native_map: np.ndarray,
-    native_mask: np.ndarray,
-    summary_features: list[SummaryFeature],
-    *,
-    model: Racs | None = None,
-    flux: np.ndarray | None = None,
-    temperature: np.ndarray | None = None,
-    elevation_flux: np.ndarray | None = None,
-    elevation: np.ndarray | None = None,
-    flux_temperature_n_bins: int = DEFAULT_FLUX_TEMPERATURE_N_BINS,
-    flux_temperature_quantiles: tuple[float, ...] = DEFAULT_FLUX_TEMPERATURE_QUANTILES,
-    flux_elevation_n_bins: int = DEFAULT_FLUX_ELEVATION_N_BINS,
-    flux_elevation_quantiles: tuple[float, ...] = DEFAULT_FLUX_ELEVATION_QUANTILES,
-) -> np.ndarray:
-    stats: list[np.ndarray] = []
-    for summary in summary_features:
-        if summary == "log_dispersion":
-            stats.append(_native_count_log_dispersion_feature(native_map, native_mask))
-        elif summary == "flux_quantiles":
-            if model is None or flux is None or temperature is None:
-                raise ValueError("Flux quantiles require model, flux, and temperature.")
-            stats.append(
-                _flux_temperature_summary(
-                    model,
-                    flux,
-                    temperature,
-                    flux_temperature_n_bins,
-                    flux_temperature_quantiles,
-                )
-            )
-        elif summary == "flux_elevation_quantiles":
-            if model is None or elevation_flux is None or elevation is None:
-                raise ValueError(
-                    "Elevation flux quantiles require model, flux, and elevation."
-                )
-            stats.append(
-                _flux_elevation_summary(
-                    model,
-                    elevation_flux,
-                    elevation,
-                    flux_elevation_n_bins,
-                    flux_elevation_quantiles,
-                )
-            )
-        else:
-            raise ValueError(f"Unknown summary feature: {summary}")
-    if not stats:
-        return np.empty(0, dtype=np.float32)
-    return np.concatenate(stats, axis=0).astype(np.float32, copy=False)
-
-
-def build_hybrid_sample_from_native(
-    native_map: np.ndarray,
-    native_mask: np.ndarray,
-    *,
-    downscale_nside: int | None,
-    summary_features: list[SummaryFeature],
-    summary_values: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    output_map, output_mask = _prepare_output_map(
-        native_map,
-        native_mask,
-        downscale_nside,
-    )
-    if not summary_features and summary_values is None:
-        return output_map, output_mask
-    if summary_values is None:
-        summary_values = _build_summary_features(
-            native_map,
-            native_mask,
-            summary_features,
-        )
-    return _append_summary_features(output_map, output_mask, summary_values)
-
-
-def build_real_sample(
-    model: Racs | RacsJax,
-    flux_min: float,
-    summary_features: list[SummaryFeature] | None = None,
-    *,
-    flux_temperature_min_mjy: float | None = None,
-    flux_temperature_n_bins: int = DEFAULT_FLUX_TEMPERATURE_N_BINS,
-    flux_temperature_quantiles: tuple[float, ...] = DEFAULT_FLUX_TEMPERATURE_QUANTILES,
-    flux_elevation_n_bins: int = DEFAULT_FLUX_ELEVATION_N_BINS,
-    flux_elevation_quantiles: tuple[float, ...] = DEFAULT_FLUX_ELEVATION_QUANTILES,
-    save_map_plot: bool = True,
-) -> tuple[np.ndarray, np.ndarray]:
-    summary_features = list(summary_features or [])
-    resolved_temperature_min = (
-        flux_min if flux_temperature_min_mjy is None else flux_temperature_min_mjy
-    )
-
-    product = _model_product(model)
-    cat = DataLoader(*product.data_loader_args).load()
-
-    def catalogue_view(minimum_flux: float) -> CatalogueToMap:
-        view = CatalogueToMap(cat.copy())
-        view.make_cut(
-            product.columns.total_flux,
-            minimum=minimum_flux,
-            maximum=None,
-        )
-        if product.columns.source_name in cat.colnames:
-            view.crossmatch_local_sources(
-                "equatorial",
-                radius=5,
-                source_name_A_column=product.columns.source_name,
-            )
-        return view
-
-    map_catalogue = catalogue_view(flux_min)
-    density_map = map_catalogue.make_density_map(
-        coordinate_system="equatorial",
-        nside=model.nside,
-        nest=True,
-    ).astype("float32")
-
-    native_mask = model.mask_map.astype(np.bool_, copy=False)
-    native_map = density_map.copy()
-    native_map[~native_mask] = np.nan
-
-    if save_map_plot:
-        hp.projview(native_map, nest=True)
-        plt.savefig(f"racs_{product.key}.png")
-        plt.close()
-
-    flux = temperature = elevation_flux = elevation = None
-    summary_values: np.ndarray | None = None
-    if "flux_quantiles" in summary_features:
-        temperature_catalogue = catalogue_view(resolved_temperature_min)
-        flux, temperature = _real_catalogue_flux_temperature_samples(
-            model,
-            temperature_catalogue,
-        )
-    if "flux_elevation_quantiles" in summary_features:
-        elevation_flux, elevation = _real_catalogue_flux_elevation_samples(
-            model,
-            map_catalogue,
-        )
-    if isinstance(model, RacsJax) and (
-        "flux_quantiles" in summary_features
-        or "flux_elevation_quantiles" in summary_features
-    ):
-        flux_max = model.flux_summary_flux_max_mjy
-        if flux_max is None:
-            raise ValueError("JAX flux summary requires flux_max.")
-        stats: list[np.ndarray] = []
-        for summary in summary_features:
-            if summary == "log_dispersion":
-                stats.append(_native_count_log_dispersion_feature(native_map, native_mask))
-            elif summary == "flux_quantiles":
-                stats.append(
-                    _flux_temperature_histogram_quantile_features(
-                        flux,
-                        temperature,
-                        temp_edges=_flux_temperature_edges(
-                            model,
-                            flux_temperature_n_bins,
-                        ),
-                        quantiles=flux_temperature_quantiles,
-                        flux_min_mjy=resolved_temperature_min,
-                        flux_max_mjy=flux_max,
-                        n_flux_bins=DEFAULT_FLUX_TEMPERATURE_JAX_FLUX_BINS,
-                    )
-                )
-            elif summary == "flux_elevation_quantiles":
-                stats.append(
-                    _flux_elevation_histogram_quantile_features(
-                        elevation_flux,
-                        elevation,
-                        elevation_edges=_flux_elevation_edges(
-                            model,
-                            flux_elevation_n_bins,
-                        ),
-                        quantiles=flux_elevation_quantiles,
-                        flux_min_mjy=flux_min,
-                        flux_max_mjy=flux_max,
-                        n_flux_bins=DEFAULT_FLUX_TEMPERATURE_JAX_FLUX_BINS,
-                    )
-                )
-            else:
-                raise ValueError(f"Unknown summary feature: {summary}")
-        summary_values = np.concatenate(stats, axis=0).astype(np.float32, copy=False)
-    if summary_values is None:
-        summary_values = _build_summary_features(
-            native_map,
-            native_mask,
-            summary_features,
-            model=model if isinstance(model, Racs) else None,
-            flux=flux,
-            temperature=temperature,
-            elevation_flux=elevation_flux,
-            elevation=elevation,
-            flux_temperature_n_bins=flux_temperature_n_bins,
-            flux_temperature_quantiles=flux_temperature_quantiles,
-            flux_elevation_n_bins=flux_elevation_n_bins,
-            flux_elevation_quantiles=flux_elevation_quantiles,
-        )
-    return build_hybrid_sample_from_native(
-        native_map,
-        native_mask,
-        downscale_nside=model.downscale_nside,
-        summary_features=summary_features,
-        summary_values=summary_values,
-    )
 
 
 def build_prior_and_reference_theta(
@@ -1224,8 +959,14 @@ def main() -> None:
     modes = validate_args(args, parser)
     summary_features = list(args.summary_features)
 
+    catalogue_path = args.catalogue_path.expanduser().resolve(strict=True)
+    reference_observation_path = (
+        args.reference_observation.expanduser().resolve(strict=True)
+    )
+    x0, mask0 = load_reference_observation(reference_observation_path)
     mask = build_mask(args.nside)
     config = build_racs_config(
+        catalogue_path=catalogue_path,
         racs_epoch=args.racs_epoch,
         flux_min=args.flux_min,
         nside=args.nside,
@@ -1247,17 +988,6 @@ def main() -> None:
     model = RacsJax(config) if args.use_jax else Racs(config)
     model.initialise_data()
 
-    x0, mask0 = build_real_sample(
-        model,
-        args.flux_min,
-        summary_features,
-        flux_temperature_min_mjy=args.flux_temperature_min_mjy,
-        flux_temperature_n_bins=args.flux_temperature_n_bins,
-        flux_temperature_quantiles=args.flux_temperature_quantiles,
-        flux_elevation_n_bins=args.flux_elevation_n_bins,
-        flux_elevation_quantiles=args.flux_elevation_quantiles,
-    )
-
     if summary_features:
         effective_nside = args.downscale_nside or args.nside
         map_ndim = hp.nside2npix(effective_nside)
@@ -1268,6 +998,14 @@ def main() -> None:
             args.flux_elevation_n_bins,
             args.flux_elevation_quantiles,
         )
+        expected_data_ndim = map_ndim + summary_ndim
+        if x0.size != expected_data_ndim:
+            raise ValueError(
+                "Prepared reference observation is incompatible with the configured "
+                "map and summary dimensions: "
+                f"expected {expected_data_ndim} values, found {x0.size} in "
+                f"{reference_observation_path}."
+            )
     else:
         effective_nside = hp.npix2nside(x0.size)
         map_ndim = None
@@ -1345,12 +1083,17 @@ def main() -> None:
         )
 
     for mode in modes:
+        mode_out_dir = (
+            args.out_dir
+            if len(modes) == 1
+            else str(Path(args.out_dir) / mode)
+        )
         scenario = build_scenario(
             mode=mode,
             effective_nside=effective_nside,
             prior=prior,
             theta_0=theta_0,
-            out_dir=args.out_dir,
+            out_dir=mode_out_dir,
             ssnle_seed=args.ssnle_seed,
             n_rounds=args.n_rounds,
             n_simulations=args.n_simulations,

@@ -1,0 +1,126 @@
+import shlex
+from pathlib import Path
+
+from snakemake.utils import validate
+import yaml
+
+
+CONFIG_PATH = "workflow/configs/racs_mid1_example.yaml"
+SCHEMA_PATH = "schemas/racs.schema.yaml"
+OBSERVATION_SCHEMA_PATH = "schemas/racs-observation.schema.yaml"
+
+configfile: CONFIG_PATH
+validate(config, SCHEMA_PATH)
+
+
+OBSERVATION_CONFIG_PATH = config["observation_config"]
+
+with Path(OBSERVATION_CONFIG_PATH).open(encoding="utf-8") as stream:
+  OBSERVATION = yaml.safe_load(stream)
+
+validate(OBSERVATION, OBSERVATION_SCHEMA_PATH)
+
+OBSERVATION_ID = OBSERVATION["observation_id"]
+OBSERVATION_DIR = f"derived/observations/{OBSERVATION_ID}"
+OBSERVATION_PATH = f"{OBSERVATION_DIR}/reference_observation.npz"
+
+
+EXPERIMENT_ID = config["experiment_id"]
+EXECUTION = config["execution"]
+ARGS = config["args"]
+FINAL_ROUND = ARGS["n_rounds"] - 1
+RESULT_DIR = f"results/{EXPERIMENT_ID}"
+
+
+def command_line_arguments(arguments):
+    """Translate the YAML args mapping into shell-safe argparse tokens."""
+    tokens = []
+
+    for name, value in arguments.items():
+        flag = f"--{name}"
+
+        if isinstance(value, bool):
+            if value:
+                tokens.append(flag)
+        elif value is None:
+            continue
+        elif isinstance(value, list):
+            tokens.append(flag)
+            tokens.extend(str(item) for item in value)
+        else:
+            tokens.extend([flag, str(value)])
+
+    return " ".join(shlex.quote(token) for token in tokens)
+
+
+rule all:
+    input:
+        f"{RESULT_DIR}/samples_rnd-{FINAL_ROUND}.csv",
+        f"{RESULT_DIR}/nflow_checkpoint_r{FINAL_ROUND}.npz",
+        f"{RESULT_DIR}/reference_observation.npz",
+        f"{RESULT_DIR}/experiment.yaml",
+
+
+rule prepare_racs_observation:
+    input:
+        config=OBSERVATION_CONFIG_PATH,
+        catalogue=OBSERVATION["catalogue_path"],
+        program="dipolesbi/pipelines/prepare_racs_observation.py",
+        helpers="dipolesbi/pipelines/racs_observation_helpers.py",
+        summaries="dipolesbi/pipelines/summary_stats.py",
+    output:
+        observation=OBSERVATION_PATH,
+    params:
+        output_dir=OBSERVATION_DIR,
+        jax_platforms=EXECUTION["jax_platforms"],
+    threads:
+        EXECUTION["threads"]
+    resources:
+        mem_mb=EXECUTION["mem_mb"]
+    log:
+        f"{OBSERVATION_DIR}/preparation.log"
+    shell:
+        """
+        mkdir -p {params.output_dir:q}
+        JAX_PLATFORMS={params.jax_platforms:q} \
+            python -m dipolesbi.pipelines.prepare_racs_observation \
+            --config {input.config:q} \
+            --output {output.observation:q} \
+            > {log:q} 2>&1
+        """
+
+
+rule infer_racs:
+    input:
+        experiment_config=CONFIG_PATH,
+        catalogue=OBSERVATION["catalogue_path"],
+        prepared_observation=( # associated reference_observation.npz
+            rules.prepare_racs_observation.output.observation
+    ),
+    output:
+        samples=f"{RESULT_DIR}/samples_rnd-{FINAL_ROUND}.csv",
+        checkpoint=f"{RESULT_DIR}/nflow_checkpoint_r{FINAL_ROUND}.npz",
+        observation=f"{RESULT_DIR}/reference_observation.npz", # the mr_inferer-made output
+        experiment_config=f"{RESULT_DIR}/experiment.yaml",
+    params:
+        output_dir=RESULT_DIR,
+        cli_args=command_line_arguments(ARGS),
+        jax_platforms=EXECUTION["jax_platforms"],
+    threads:
+        EXECUTION["threads"]
+    resources:
+        mem_mb=EXECUTION["mem_mb"]
+    log:
+        f"{RESULT_DIR}/inference.log"
+    shell:
+        """
+        mkdir -p {params.output_dir:q}
+        JAX_PLATFORMS={params.jax_platforms:q} \
+            python dipolesbi/pipelines/based_racs.py \
+            {params.cli_args} \
+            --catalogue_path {input.catalogue:q} \
+            --reference_observation {input.prepared_observation:q} \
+            --out_dir {params.output_dir:q} \
+            > {log:q} 2>&1
+        cp {input.experiment_config:q} {output.experiment_config:q}
+        """
