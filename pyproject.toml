@@ -27,6 +27,7 @@ dependencies = [
     "blackjax @ git+https://github.com/handley-lab/blackjax@95e93ed93e726b95143b2f4a9582888621625f52",
     "anesthetic (<= 2.10.3)",
     "pytest (>=9.0.1,<10.0.0)",
+    "pyyaml (>=6.0.3,<7.0.0)",
     "catsim",
     "dipole-utils @ git+https://github.com/o-oayda/dipole-utils.git@main",
     "importlib-resources (==6.5.2)",
