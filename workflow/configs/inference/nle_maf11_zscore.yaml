@@ -1,0 +1,76 @@
+inference_id: nle_maf11_zscore
+mode: NLE
+scenario: anynside_nle
+
+training:
+  learning_rate: 0.0001
+  max_n_iter: 1000
+  min_n_iter: 2
+  batch_size: 100
+  patience: 20
+  restore_from_previous: false
+  warmup_epochs: 0.3
+  min_lr_ratio: 1.0
+  clip_norm: 1.0
+  weight_decay: 0.00001
+  shuffle_train: true
+  shuffle_val: false
+  validation_fraction: 0.1
+  weight_by_round: false
+  alpha_weight: 1.0
+
+flow:
+  architecture:
+    - MAF
+    - MAF
+    - MAF
+    - MAF
+    - MAF
+    - MAF
+    - MAF
+    - MAF
+    - MAF
+    - MAF
+    - MAF
+  surjective_layer_type: affine_MAF
+  conditioner: made
+  decoder_distribution: gaussian
+  decoder_n_neurons: 128
+  decoder_n_layers: 4
+  conditioner_n_neurons: 256
+  conditioner_n_layers: 4
+  funnel_one_and_done: false
+  funnel_maf_extension: 2
+  data_reduction_factor: 0.5
+  conditioner_kwargs: {}
+  embed_target_transform_in_flow: false
+
+data_transform:
+  kind: zscore
+  embed_in_flow: false
+  zscore_method: batchwise
+  embedding_config: null
+
+theta_transform:
+  kind: dipole_cartesian
+  embed_in_flow: false
+  wrap_longitude: true
+  reflect_latitude: true
+
+multiround:
+  load_simulations: null
+  dequantise_data: false
+  n_requantisations: null
+  initial_fraction: 0.0
+  n_likelihood_samples: 10_000
+  n_posterior_samples: 10_000
+  check_proposal_probs: true
+  write_results_to_disk: true
+  likelihood_chunk_size_gb: 0.5
+  save_round_simulations: true
+  round_simulation_subdir: round_simulations
+  jax_ns_n_live: 5_000
+  jax_ns_n_delete: 2_000
+  native_count_hist_max_count: null
+  native_count_hist_eps: null
+  native_count_hist_transform: null

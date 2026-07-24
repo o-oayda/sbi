@@ -1,7 +1,7 @@
 $schema: https://json-schema.org/draft/2020-12/schema
 
 type: object
-required: [experiment_id, observation_config, execution, args]
+required: [experiment_id, observation_config, inference_config, execution, args]
 additionalProperties: false
 
 properties:
@@ -10,6 +10,10 @@ properties:
     pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
 
   observation_config:
+    type: string
+    minLength: 1
+
+  inference_config:
     type: string
     minLength: 1
 
@@ -30,12 +34,12 @@ properties:
   args:
     type: object
     required:
-      - mode
       - n_simulations
       - n_rounds
       - ssnle_seed
     not:
       anyOf:
+        - required: [mode]
         - required: [racs_epoch]
         - required: [flux_min]
         - required: [flux_temperature_min_mjy]
@@ -54,8 +58,6 @@ properties:
         - required: [flux_elevation_n_bins]
         - required: [flux_elevation_quantiles]
     properties:
-      mode:
-        const: NLE
       n_simulations:
         type: integer
         minimum: 1

@@ -39,6 +39,7 @@ rule infer_racs:
     input:
         experiment_config=EXPERIMENT_CONFIG_PATH,
         observation_config=OBSERVATION_CONFIG_PATH,
+        inference_config=INFERENCE_CONFIG_PATH,
         catalogue=OBSERVATION["catalogue_path"],
         prepared_observation=rules.prepare_racs_observation.output.observation,
     output:
@@ -46,6 +47,7 @@ rule infer_racs:
         checkpoint=CHECKPOINT_PATH,
         observation=RESULT_OBSERVATION_PATH,
         experiment_config=EXPERIMENT_SNAPSHOT_PATH,
+        inference_config=INFERENCE_SNAPSHOT_PATH,
     params:
         output_dir=RESULT_DIR,
         cli_args=command_line_arguments(INFERENCE_ARGS),
@@ -64,8 +66,10 @@ rule infer_racs:
             {params.cli_args} \
             --catalogue_path {input.catalogue:q} \
             --observation_config {input.observation_config:q} \
+            --inference_config {input.inference_config:q} \
             --reference_observation {input.prepared_observation:q} \
             --out_dir {params.output_dir:q} \
             > {log:q} 2>&1
         cp {input.experiment_config:q} {output.experiment_config:q}
+        cp {input.inference_config:q} {output.inference_config:q}
         """

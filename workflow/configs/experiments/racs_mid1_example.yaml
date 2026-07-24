@@ -1,6 +1,7 @@
 experiment_id: racs_mid1_example
 
 observation_config: workflow/configs/observations/racs_mid1_flux15_ds4.yaml
+inference_config: workflow/configs/inference/nle_maf11_zscore.yaml
 
 execution:
   jax_platforms: cuda
@@ -8,7 +9,6 @@ execution:
   mem_mb: 64000
 
 args:
-  mode: NLE
   n_simulations: 100_000
   n_rounds: 20
   ssnle_seed: 0

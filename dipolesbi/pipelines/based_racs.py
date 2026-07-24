@@ -2,14 +2,16 @@ import argparse
 import shlex
 import sys
 import warnings
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from catsim import RACS_PRODUCTS, TEMPERATURE_MODELS, Racs, RacsConfig
 from catsim.racs_jax import RacsJax
 import healpy as hp
 import jax
 import numpy as np
+import yaml
 
 from dipolesbi.pipelines.racs_observation_helpers import (
     DEFAULT_FLUX_ELEVATION_N_BINS,
@@ -34,7 +36,12 @@ from dipolesbi.pipelines.summary_stats import (
     _flux_temperature_quantile_ndim,
     _native_count_log_dispersion_feature,
 )
-from dipolesbi.tools.configs import DataTransformSpec, Scenario
+from dipolesbi.tools.configs import (
+    DataTransformSpec,
+    EmbeddingNetConfig,
+    Scenario,
+    ThetaTransformSpec,
+)
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
 from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.priors_np import DipolePriorNP
@@ -58,13 +65,26 @@ def _write_run_command(out_dir: str) -> Path:
     return command_path
 
 
+def load_inference_config(config_path: str | Path) -> dict[str, Any]:
+    """Load a structured inference configuration from YAML."""
+    path = Path(config_path).expanduser()
+    with path.open(encoding="utf-8") as stream:
+        config = yaml.safe_load(stream)
+    if not isinstance(config, dict):
+        raise ValueError(f"Inference config must contain a YAML mapping: {path}")
+    return config
+
+
 def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",
         type=str,
         nargs="+",
-        help='One or more modes to run, separated by spaces (e.g. "--mode NLE NPE").',
+        help=(
+            "Optional compatibility check; when supplied, it must match the "
+            "single mode declared by --inference_config."
+        ),
     )
     parser.add_argument(
         "--n_simulations",
@@ -99,10 +119,7 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
         "--out_dir",
         type=str,
         required=True,
-        help=(
-            "Exact directory in which to save outputs. When multiple modes are "
-            "requested, each mode uses a deterministic child directory."
-        ),
+        help="Exact directory in which to save outputs.",
     )
     parser.add_argument(
         "--ssnle_seed",
@@ -156,6 +173,12 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
             "Observation YAML used to prepare --reference_observation and to "
             "define the simulator's native-resolution mask."
         ),
+    )
+    parser.add_argument(
+        "--inference_config",
+        type=Path,
+        required=True,
+        help="YAML defining the NLE or NPE scenario, flow, and training setup.",
     )
     parser.add_argument(
         "--reference_observation",
@@ -899,7 +922,7 @@ def make_jax_model_sim_wrapper(
 
 
 def build_scenario(
-    mode: str,
+    inference_config: Mapping[str, Any],
     effective_nside: int,
     prior: DipolePriorNP,
     theta_0: dict[str, float],
@@ -914,59 +937,81 @@ def build_scenario(
     prior_jax = prior.to_jax()
     summary_features = list(summary_features or [])
 
-    if mode == "NPE":
-        return Scenario.anynside_npe(
-            nside=effective_nside,
-            theta_prior=prior_jax,
-            reference_theta=theta_0,
-            theta_spec_overrides={"embed_transform_in_flow": True},
-            multiround_overrides={
-                "prng_integer_seed": ssnle_seed,
-                "plot_save_dir": out_dir,
-                "n_rounds": n_rounds,
-                "simulation_budget": n_simulations,
-                "likelihood_chunk_size_gb": 0.5,
-                "n_likelihood_samples": 10_000,
-            },
-            training_overrides={"learning_rate": 0.001},
+    mode = inference_config["mode"]
+    scenario_name = inference_config["scenario"]
+    scenario_factories = {
+        "anynside_nle": Scenario.anynside_nle,
+        "anynside_npe": Scenario.anynside_npe,
+    }
+    scenario_modes = {
+        "anynside_nle": "NLE",
+        "anynside_npe": "NPE",
+    }
+    try:
+        scenario_factory = scenario_factories[scenario_name]
+    except KeyError as error:
+        raise ValueError(f"Unknown inference scenario: {scenario_name}") from error
+    if scenario_modes[scenario_name] != mode:
+        raise ValueError(
+            f"Inference mode {mode} is incompatible with scenario {scenario_name}."
         )
 
+    data_spec_values = dict(inference_config["data_transform"])
+    embedding_values = data_spec_values.pop("embedding_config", None)
+    if embedding_values is not None:
+        data_spec_values["embedding_config"] = EmbeddingNetConfig(
+            **embedding_values
+        )
+    data_spec = DataTransformSpec(**data_spec_values)
+    theta_spec = ThetaTransformSpec(**inference_config["theta_transform"])
+
+    multiround_overrides = dict(inference_config["multiround"])
+    multiround_overrides.update(
+        {
+            "prng_integer_seed": ssnle_seed,
+            "plot_save_dir": out_dir,
+            "simulation_budget": n_simulations,
+            "n_rounds": n_rounds,
+        }
+    )
     if mode == "NLE":
-        return Scenario.anynside_nle(
-            nside=effective_nside,
-            theta_prior=prior_jax,
-            training_overrides={
-                "learning_rate": 1e-4,
-                "min_lr_ratio": 1.0,
-            },
-            reference_theta=theta_0,
-            multiround_overrides={
-                "prng_integer_seed": ssnle_seed,
-                "plot_save_dir": out_dir,
-                "simulation_budget": n_simulations,
-                "n_rounds": n_rounds,
-                "likelihood_chunk_size_gb": 0.5,
-                "n_likelihood_samples": 10_000,
+        multiround_overrides.update(
+            {
                 "map_ndim": map_ndim,
                 "summary_ndim": summary_ndim,
                 "native_count_summary": (
-                    "log_dispersion" if "log_dispersion" in summary_features else None
+                    "log_dispersion"
+                    if "log_dispersion" in summary_features
+                    else None
                 ),
-            },
-            flow_overrides={
-                "decoder_n_neurons": 128,
-                "decoder_n_layers": 4,
-                "architecture": 11 * ["MAF"],
-                "data_reduction_factor": 0.5,
-            },
-            data_spec=DataTransformSpec.zscore(method="batchwise"),
+            }
         )
 
-    raise KeyError(f"Mode {mode} not recognised.")
+    return scenario_factory(
+        nside=effective_nside,
+        theta_prior=prior_jax,
+        reference_theta=theta_0,
+        training_overrides=dict(inference_config["training"]),
+        multiround_overrides=multiround_overrides,
+        flow_overrides=dict(inference_config["flow"]),
+        data_spec=data_spec,
+        theta_spec=theta_spec,
+    )
 
 
 def main() -> None:
     args, parser = construct_argparser()
+    inference_config_path = args.inference_config.expanduser().resolve(strict=True)
+    inference_config = load_inference_config(inference_config_path)
+    configured_mode = str(inference_config["mode"]).upper()
+    if args.mode is not None:
+        requested_modes = _parse_modes(args.mode, parser)
+        if requested_modes != [configured_mode]:
+            parser.error(
+                "--mode must match the single mode declared by "
+                f"--inference_config ({configured_mode})."
+            )
+    args.mode = [configured_mode]
     modes = validate_args(args, parser)
     summary_features = list(args.summary_features)
 
@@ -1104,7 +1149,7 @@ def main() -> None:
             else str(Path(args.out_dir) / mode)
         )
         scenario = build_scenario(
-            mode=mode,
+            inference_config=inference_config,
             effective_nside=effective_nside,
             prior=prior,
             theta_0=theta_0,

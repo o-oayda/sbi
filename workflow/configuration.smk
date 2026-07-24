@@ -11,6 +11,7 @@ import yaml
 
 EXPERIMENT_SCHEMA_PATH = "schemas/racs-experiment.schema.yaml"
 OBSERVATION_SCHEMA_PATH = "schemas/racs-observation.schema.yaml"
+INFERENCE_SCHEMA_PATH = "schemas/racs-inference.schema.yaml"
 EXPERIMENT_CONFIG_DIR = Path("workflow/configs/experiments")
 
 
@@ -77,7 +78,7 @@ def command_line_arguments(arguments):
     return " ".join(shlex.quote(token) for token in tokens)
 
 
-# Resolve and validate the two configuration layers.
+# Resolve and validate the experiment, observation, and inference layers.
 EXPERIMENT_NAME, EXPERIMENT_CONFIG_PATH = selected_experiment_config_path(config)
 EXPERIMENT = load_and_validate_yaml(
     EXPERIMENT_CONFIG_PATH,
@@ -97,6 +98,18 @@ OBSERVATION = load_and_validate_yaml(
     "Observation",
 )
 
+INFERENCE_CONFIG_PATH = Path(EXPERIMENT["inference_config"])
+INFERENCE = load_and_validate_yaml(
+    INFERENCE_CONFIG_PATH,
+    INFERENCE_SCHEMA_PATH,
+    "Inference",
+)
+if INFERENCE["inference_id"] != INFERENCE_CONFIG_PATH.stem:
+    raise WorkflowError(
+        f"Inference config '{INFERENCE_CONFIG_PATH}' declares inference_id "
+        f"'{INFERENCE['inference_id']}'. The filename and ID must match."
+    )
+
 
 # Expose concise, derived values for the rules in the main Snakefile.
 EXPERIMENT_ID = EXPERIMENT["experiment_id"]
@@ -115,9 +128,11 @@ SAMPLES_PATH = f"{RESULT_DIR}/samples_rnd-{FINAL_ROUND}.csv"
 CHECKPOINT_PATH = f"{RESULT_DIR}/nflow_checkpoint_r{FINAL_ROUND}.npz"
 RESULT_OBSERVATION_PATH = f"{RESULT_DIR}/reference_observation.npz"
 EXPERIMENT_SNAPSHOT_PATH = f"{RESULT_DIR}/experiment.yaml"
+INFERENCE_SNAPSHOT_PATH = f"{RESULT_DIR}/inference.yaml"
 FINAL_OUTPUTS = (
     SAMPLES_PATH,
     CHECKPOINT_PATH,
     RESULT_OBSERVATION_PATH,
     EXPERIMENT_SNAPSHOT_PATH,
+    INFERENCE_SNAPSHOT_PATH,
 )

@@ -1,0 +1,245 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+
+type: object
+required:
+  - inference_id
+  - mode
+  - scenario
+  - training
+  - flow
+  - data_transform
+  - theta_transform
+  - multiround
+additionalProperties: false
+
+properties:
+  inference_id:
+    type: string
+    pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+
+  mode:
+    enum: [NLE, NPE]
+
+  scenario:
+    enum: [anynside_nle, anynside_npe]
+
+  training:
+    type: object
+    required:
+      - learning_rate
+      - max_n_iter
+      - min_n_iter
+      - batch_size
+      - patience
+      - restore_from_previous
+      - warmup_epochs
+      - min_lr_ratio
+      - clip_norm
+      - weight_decay
+      - shuffle_train
+      - shuffle_val
+      - validation_fraction
+      - weight_by_round
+      - alpha_weight
+    additionalProperties: false
+    properties:
+      learning_rate: {type: number, exclusiveMinimum: 0}
+      max_n_iter: {type: integer, minimum: 1}
+      min_n_iter: {type: integer, minimum: 0}
+      batch_size: {type: integer, minimum: 1}
+      patience: {type: integer, minimum: 0}
+      restore_from_previous: {type: boolean}
+      warmup_epochs: {type: number, minimum: 0}
+      min_lr_ratio: {type: number, minimum: 0, maximum: 1}
+      clip_norm: {type: number, exclusiveMinimum: 0}
+      weight_decay: {type: number, minimum: 0}
+      shuffle_train: {type: boolean}
+      shuffle_val: {type: boolean}
+      validation_fraction: {type: number, minimum: 0, exclusiveMaximum: 1}
+      weight_by_round: {type: boolean}
+      alpha_weight: {type: number, minimum: 0}
+
+  flow:
+    type: object
+    required:
+      - architecture
+      - surjective_layer_type
+      - conditioner
+      - decoder_distribution
+      - decoder_n_neurons
+      - decoder_n_layers
+      - conditioner_n_neurons
+      - conditioner_n_layers
+      - funnel_one_and_done
+      - funnel_maf_extension
+      - data_reduction_factor
+      - conditioner_kwargs
+      - embed_target_transform_in_flow
+    additionalProperties: false
+    properties:
+      architecture:
+        type: array
+        minItems: 1
+        items:
+          enum: [MAF, healpix_funnel, surjective_MAF]
+      surjective_layer_type:
+        enum: [affine_MAF, rational_quadratic_MAF]
+      conditioner:
+        enum: [made, mlp, transformer]
+      decoder_distribution:
+        enum: [gaussian, poisson, nb, students_t]
+      decoder_n_neurons:
+        type: [integer, "null"]
+        minimum: 1
+      decoder_n_layers:
+        type: [integer, "null"]
+        minimum: 1
+      conditioner_n_neurons:
+        type: integer
+        minimum: 1
+      conditioner_n_layers:
+        type: integer
+        minimum: 1
+      funnel_one_and_done:
+        type: [boolean, "null"]
+      funnel_maf_extension:
+        type: [integer, "null"]
+        minimum: 0
+      data_reduction_factor:
+        type: [number, "null"]
+        exclusiveMinimum: 0
+        maximum: 1
+      conditioner_kwargs:
+        type: object
+      embed_target_transform_in_flow:
+        type: boolean
+
+  data_transform:
+    type: object
+    required: [kind, embed_in_flow, embedding_config]
+    additionalProperties: false
+    properties:
+      kind:
+        enum: [blank, zscore, hadamard, hp_cnn]
+      embed_in_flow:
+        type: boolean
+      zscore_method:
+        enum: [batchwise, global]
+      hadamard_first_nside:
+        type: [integer, "null"]
+        minimum: 1
+      hadamard_last_nside:
+        type: [integer, "null"]
+        minimum: 1
+      hadamard_matrix_type:
+        type: [string, "null"]
+      hadamard_normalise_details:
+        type: [boolean, "null"]
+      hadamard_n_chunks:
+        type: [integer, "null"]
+        minimum: 1
+      embedding_config:
+        oneOf:
+          - type: "null"
+          - type: object
+            required:
+              - nside
+              - out_channels_per_layer
+              - n_blocks
+              - n_mlp_neurons
+              - n_mlp_layers
+              - output_dim
+              - dropout_rate
+            additionalProperties: false
+            properties:
+              nside: {type: integer, minimum: 1}
+              out_channels_per_layer:
+                type: array
+                minItems: 1
+                items: {type: integer, minimum: 1}
+              n_blocks: {type: integer, minimum: 1}
+              n_mlp_neurons: {type: integer, minimum: 1}
+              n_mlp_layers: {type: integer, minimum: 1}
+              output_dim: {type: integer, minimum: 1}
+              dropout_rate: {type: number, minimum: 0, maximum: 1}
+    allOf:
+      - if:
+          properties: {kind: {const: zscore}}
+        then:
+          required: [zscore_method]
+
+  theta_transform:
+    type: object
+    required: [kind, embed_in_flow]
+    additionalProperties: false
+    properties:
+      kind:
+        enum: [blank, dipole_cartesian, dipole_zscore, dipole_bijector]
+      embed_in_flow:
+        type: boolean
+      wrap_longitude:
+        type: boolean
+      reflect_latitude:
+        type: boolean
+    allOf:
+      - if:
+          properties:
+            kind:
+              enum: [dipole_cartesian, dipole_zscore]
+        then:
+          required: [wrap_longitude, reflect_latitude]
+
+  multiround:
+    type: object
+    required:
+      - load_simulations
+      - dequantise_data
+      - n_requantisations
+      - initial_fraction
+      - n_likelihood_samples
+      - n_posterior_samples
+      - check_proposal_probs
+      - write_results_to_disk
+      - likelihood_chunk_size_gb
+      - save_round_simulations
+      - round_simulation_subdir
+      - jax_ns_n_live
+      - jax_ns_n_delete
+      - native_count_hist_max_count
+      - native_count_hist_eps
+      - native_count_hist_transform
+    additionalProperties: false
+    properties:
+      load_simulations: {type: [string, "null"]}
+      dequantise_data: {type: boolean}
+      n_requantisations:
+        type: [integer, "null"]
+        minimum: 1
+      initial_fraction: {type: number, minimum: 0, maximum: 1}
+      n_likelihood_samples: {type: integer, minimum: 1}
+      n_posterior_samples: {type: integer, minimum: 1}
+      check_proposal_probs: {type: boolean}
+      write_results_to_disk: {type: boolean}
+      likelihood_chunk_size_gb: {type: number, exclusiveMinimum: 0}
+      save_round_simulations: {type: boolean}
+      round_simulation_subdir: {type: string, minLength: 1}
+      jax_ns_n_live: {type: integer, minimum: 2}
+      jax_ns_n_delete: {type: integer, minimum: 1}
+      native_count_hist_max_count:
+        type: [integer, "null"]
+        minimum: 1
+      native_count_hist_eps:
+        type: [number, "null"]
+        exclusiveMinimum: 0
+      native_count_hist_transform:
+        enum: [logprob, ilr, null]
+
+allOf:
+  - if:
+      properties: {mode: {const: NLE}}
+    then:
+      properties: {scenario: {const: anynside_nle}}
+  - if:
+      properties: {mode: {const: NPE}}
+    then:
+      properties: {scenario: {const: anynside_npe}}
