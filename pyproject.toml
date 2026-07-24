@@ -61,3 +61,8 @@ catsim = { path = "../catsim", editable = true }
 
 [tool.poetry.dependencies]
 catsim = {develop = true}
+
+[dependency-groups]
+dev = [
+    "snakemake>=9,<10",
+]
