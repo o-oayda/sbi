@@ -340,7 +340,7 @@ wheels = [
 [[package]]
 name = "catsim"
 version = "0.1.0"
-source = { editable = "../catsim" }
+source = { git = "https://github.com/o-oayda/catsim.git?rev=v0.1.0#89f81c05cbe2d897f8888f665296270cf20cbf68" }
 dependencies = [
     { name = "astropy" },
     { name = "dill" },
@@ -354,23 +354,6 @@ dependencies = [
     { name = "scipy" },
     { name = "tqdm" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "astropy", specifier = ">=7.1.1,<8.0.0" },
-    { name = "dill", specifier = ">=0.4.0,<0.5.0" },
-    { name = "dipole-utils", git = "https://github.com/o-oayda/dipole-utils.git?rev=main" },
-    { name = "healpy", specifier = ">=1.18.1,<2.0.0" },
-    { name = "ipython", specifier = ">=9.7.0,<10.0.0" },
-    { name = "jax", extras = ["cuda13"], marker = "extra == 'jax'", specifier = ">=0.10.1,<0.11.0" },
-    { name = "matplotlib", specifier = ">=3.10.7,<4.0.0" },
-    { name = "numpy", specifier = ">=2.3.5,<3.0.0" },
-    { name = "pytest", specifier = ">=9.0.2,<10.0.0" },
-    { name = "scikit-learn", specifier = ">=1.7.2,<2.0.0" },
-    { name = "scipy", specifier = ">=1.16.3,<2.0.0" },
-    { name = "tqdm", specifier = ">=4.67.1,<5.0.0" },
-]
-provides-extras = ["jax"]
 
 [[package]]
 name = "certifi"
@@ -718,7 +701,7 @@ requires-dist = [
     { name = "anesthetic", specifier = "<=2.10.3" },
     { name = "astropy", specifier = ">=7.0.2,<8.0.0" },
     { name = "blackjax", git = "https://github.com/handley-lab/blackjax?rev=95e93ed93e726b95143b2f4a9582888621625f52" },
-    { name = "catsim", editable = "../catsim" },
+    { name = "catsim", git = "https://github.com/o-oayda/catsim.git?rev=v0.1.0" },
     { name = "corner", specifier = ">=2.2.3,<3.0.0" },
     { name = "dill", specifier = ">=0.4.0,<0.5.0" },
     { name = "dipole-utils", git = "https://github.com/o-oayda/dipole-utils.git?rev=main" },

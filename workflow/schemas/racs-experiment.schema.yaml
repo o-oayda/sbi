@@ -94,7 +94,7 @@ properties:
         type: number
         exclusiveMinimum: 0
       temperature_model:
-        enum: [hot_linear, hot_quadratic]
+        enum: [hot_exponential, hot_linear, hot_quadratic]
       simulate_clustering:
         enum: [geometric, poisson]
       add_extra_error:

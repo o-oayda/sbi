@@ -28,7 +28,7 @@ rule prepare_racs_observation:
         """
         mkdir -p {params.output_dir:q}
         JAX_PLATFORMS={params.jax_platforms:q} \
-            python -m dipolesbi.pipelines.prepare_racs_observation \
+            dipolesbi-prepare-racs-observation \
             --config {input.config:q} \
             --output {output.observation:q} \
             > {log:q} 2>&1
@@ -62,7 +62,7 @@ rule infer_racs:
         """
         mkdir -p {params.output_dir:q}
         JAX_PLATFORMS={params.jax_platforms:q} \
-            python dipolesbi/pipelines/based_racs.py \
+            dipolesbi-infer-racs \
             {params.cli_args} \
             --catalogue_path {input.catalogue:q} \
             --observation_config {input.observation_config:q} \
