@@ -3,7 +3,7 @@ $schema: https://json-schema.org/draft/2020-12/schema
 type: object
 required:
   - observation_id
-  - catalogue_path
+  - datasets
   - args
   - mask
 additionalProperties: false
@@ -13,9 +13,17 @@ properties:
     type: string
     pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
 
-  catalogue_path:
-    type: string
-    minLength: 1
+  datasets:
+    type: object
+    required: [catalogue, paf_temperatures]
+    additionalProperties: false
+    properties:
+      catalogue:
+        type: string
+        pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+      paf_temperatures:
+        type: string
+        pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
 
   args:
     type: object
@@ -28,7 +36,6 @@ properties:
       - downscale_nside
       - use_jax
       - chunk_size
-      - paf_temperature_data_dir
       - openmeteo_fallback
       - summary_features
       - flux_temperature_n_bins
@@ -71,10 +78,6 @@ properties:
       chunk_size:
         type: integer
         minimum: 1
-
-      paf_temperature_data_dir:
-        type: string
-        minLength: 1
 
       openmeteo_fallback:
         type: boolean

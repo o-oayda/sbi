@@ -18,13 +18,14 @@ from dipolesbi.pipelines.racs_observation_helpers import (
 
 def prepare_reference_observation(
     observation_config: Mapping[str, Any],
+    catalogue_path: str | Path,
+    paf_temperature_data_dir: str | Path,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Construct the configured RACS reference data vector and mask."""
     args = observation_config["args"]
-    catalogue_path = (
-        Path(observation_config["catalogue_path"])
-        .expanduser()
-        .resolve(strict=True)
+    catalogue_path = Path(catalogue_path).expanduser().resolve(strict=True)
+    paf_temperature_data_dir = (
+        Path(paf_temperature_data_dir).expanduser().resolve(strict=True)
     )
 
     mask = build_mask_from_observation_config(observation_config)
@@ -41,7 +42,7 @@ def prepare_reference_observation(
         store_final_samples=not use_jax,
         fractional_error_flux_min_mjy=args["fractional_error_flux_min_mjy"],
         flux_temperature_min_mjy=args["flux_temperature_min_mjy"],
-        paf_temperature_data_dir=args["paf_temperature_data_dir"],
+        paf_temperature_data_dir=str(paf_temperature_data_dir),
         temperature_fallback=(
             "open_meteo" if args["openmeteo_fallback"] else "none"
         ),
@@ -115,6 +116,18 @@ def construct_argparser() -> argparse.ArgumentParser:
         help="Observation YAML configuration.",
     )
     parser.add_argument(
+        "--catalogue-path",
+        type=Path,
+        required=True,
+        help="Resolved path to the catalogue selected by the workflow site config.",
+    )
+    parser.add_argument(
+        "--paf-temperature-data-dir",
+        type=Path,
+        required=True,
+        help="Resolved root of the PAF temperature collection.",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         required=True,
@@ -126,7 +139,11 @@ def construct_argparser() -> argparse.ArgumentParser:
 def main() -> None:
     cli_args = construct_argparser().parse_args()
     observation_config = load_observation_config(cli_args.config)
-    x0, mask = prepare_reference_observation(observation_config)
+    x0, mask = prepare_reference_observation(
+        observation_config,
+        cli_args.catalogue_path,
+        cli_args.paf_temperature_data_dir,
+    )
     output = save_reference_observation(cli_args.output, x0, mask)
     print(f"Saved reference observation: {output}")
 

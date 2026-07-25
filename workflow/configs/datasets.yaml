@@ -1,0 +1,12 @@
+datasets:
+  racs_mid1_catalogue:
+    type: file
+    description: RACS mid1 source catalogue used for the reference observation.
+    sha256: b0a90cacd3c24e552c00c422f82a1e53f8d53824a50bdd04b03ce66b4ffa998e
+    source: Internal file
+
+  racs_mid1_paf_temperatures:
+    type: file_collection
+    description: Per-antenna ASKAP PAF temperatures used for RACS mid1.
+    manifest: workflow/data-manifests/racs_mid1_paf_temperatures.yaml
+    source: Internal file

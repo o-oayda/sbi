@@ -1,0 +1,6 @@
+# Copy this file to an ignored site-specific YAML and replace the path below.
+data_locations:
+  racs_mid1_catalogue:
+    path: /path/to/RACS-mid1_noscale_srl.fits
+  racs_mid1_paf_temperatures:
+    path: /path/to/paf_temps

@@ -6,16 +6,51 @@ rule all:
         FINAL_OUTPUTS
 
 
+rule validate_racs_data:
+    input:
+        dataset_registry=DATASET_REGISTRY_PATH,
+        catalogue=CATALOGUE_PATH,
+        paf_temperature_manifest=PAF_TEMPERATURE_MANIFEST_PATH,
+        paf_temperature_files=PAF_TEMPERATURE_VALIDATION_FILES,
+    output:
+        report=DATA_VALIDATION_PATH,
+    params:
+        output_dir=DATA_VALIDATION_DIR,
+        catalogue_id=CATALOGUE_DATASET_ID,
+        paf_temperature_id=PAF_TEMPERATURE_DATASET_ID,
+        paf_temperature_dir=PAF_TEMPERATURE_DIR,
+    log:
+        f"{DATA_VALIDATION_DIR}/validation.log"
+    shell:
+        """
+        mkdir -p {params.output_dir:q}
+        dipolesbi-validate-racs-data \
+            --registry {input.dataset_registry:q} \
+            --catalogue-id {params.catalogue_id:q} \
+            --catalogue-path {input.catalogue:q} \
+            --paf-id {params.paf_temperature_id:q} \
+            --paf-root {params.paf_temperature_dir:q} \
+            --paf-manifest {input.paf_temperature_manifest:q} \
+            --output {output.report:q} \
+            > {log:q} 2>&1
+        """
+
+
 rule prepare_racs_observation:
     input:
+        data_validation=rules.validate_racs_data.output.report,
         config=OBSERVATION_CONFIG_PATH,
-        catalogue=OBSERVATION["catalogue_path"],
+        dataset_registry=DATASET_REGISTRY_PATH,
+        catalogue=CATALOGUE_PATH,
+        paf_temperature_manifest=PAF_TEMPERATURE_MANIFEST_PATH,
+        paf_temperature_files=PAF_TEMPERATURE_FILES,
         project="pyproject.toml",
         software_lock="uv.lock",
     output:
         observation=OBSERVATION_PATH,
     params:
         output_dir=OBSERVATION_DIR,
+        paf_temperature_dir=PAF_TEMPERATURE_DIR,
         jax_platforms=EXECUTION["jax_platforms"],
     threads:
         EXECUTION["threads"]
@@ -29,6 +64,8 @@ rule prepare_racs_observation:
         JAX_PLATFORMS={params.jax_platforms:q} \
             dipolesbi-prepare-racs-observation \
             --config {input.config:q} \
+            --catalogue-path {input.catalogue:q} \
+            --paf-temperature-data-dir {params.paf_temperature_dir:q} \
             --output {output.observation:q} \
             > {log:q} 2>&1
         """
@@ -39,7 +76,10 @@ rule infer_racs:
         experiment_config=EXPERIMENT_CONFIG_PATH,
         observation_config=OBSERVATION_CONFIG_PATH,
         inference_config=INFERENCE_CONFIG_PATH,
-        catalogue=OBSERVATION["catalogue_path"],
+        dataset_registry=DATASET_REGISTRY_PATH,
+        catalogue=CATALOGUE_PATH,
+        paf_temperature_manifest=PAF_TEMPERATURE_MANIFEST_PATH,
+        paf_temperature_files=PAF_TEMPERATURE_FILES,
         prepared_observation=rules.prepare_racs_observation.output.observation,
         project="pyproject.toml",
         software_lock="uv.lock",
@@ -51,6 +91,7 @@ rule infer_racs:
         inference_config=INFERENCE_SNAPSHOT_PATH,
     params:
         output_dir=RESULT_DIR,
+        paf_temperature_dir=PAF_TEMPERATURE_DIR,
         cli_args=command_line_arguments(INFERENCE_ARGS),
         jax_platforms=EXECUTION["jax_platforms"],
     threads:
@@ -66,6 +107,7 @@ rule infer_racs:
             dipolesbi-infer-racs \
             {params.cli_args} \
             --catalogue_path {input.catalogue:q} \
+            --paf_temperature_data_dir {params.paf_temperature_dir:q} \
             --observation_config {input.observation_config:q} \
             --inference_config {input.inference_config:q} \
             --reference_observation {input.prepared_observation:q} \

@@ -13,9 +13,9 @@ from dipolesbi.pipelines import prepare_racs_observation as preparation
 from dipolesbi.pipelines.racs_observation_helpers import load_reference_observation
 
 
-def _observation_config(catalogue_path: Path, *, use_jax: bool = True):
+def _observation_config(*, use_jax: bool = True):
     return {
-        "catalogue_path": str(catalogue_path),
+        "datasets": {"catalogue": "test_catalogue"},
         "args": {
             "racs_epoch": "mid1",
             "flux_min": 15.0,
@@ -26,7 +26,6 @@ def _observation_config(catalogue_path: Path, *, use_jax: bool = True):
             "downscale_nside": 4,
             "use_jax": use_jax,
             "chunk_size": 128,
-            "paf_temperature_data_dir": "/tmp/paf",
             "openmeteo_fallback": False,
             "summary_features": ["log_dispersion", "flux_quantiles"],
             "flux_temperature_n_bins": 3,
@@ -62,7 +61,9 @@ def test_load_observation_config_reads_yaml_mapping(tmp_path):
 def test_prepare_reference_observation_wires_config(tmp_path, monkeypatch):
     catalogue_path = tmp_path / "catalogue.fits"
     catalogue_path.touch()
-    config = _observation_config(catalogue_path)
+    paf_temperature_data_dir = tmp_path / "paf_temps"
+    paf_temperature_data_dir.mkdir()
+    config = _observation_config()
     calls = {}
 
     monkeypatch.setattr(
@@ -105,13 +106,20 @@ def test_prepare_reference_observation_wires_config(tmp_path, monkeypatch):
 
     monkeypatch.setattr(preparation, "build_real_sample", fake_build_real_sample)
 
-    x0, mask = preparation.prepare_reference_observation(config)
+    x0, mask = preparation.prepare_reference_observation(
+        config,
+        catalogue_path,
+        paf_temperature_data_dir,
+    )
 
     np.testing.assert_array_equal(x0, expected_x0)
     np.testing.assert_array_equal(mask, expected_mask)
     assert calls["initialised"] is True
     assert calls["mask_config"] is config
     assert calls["model_config"]["catalogue_path"] == str(catalogue_path.resolve())
+    assert calls["model_config"]["paf_temperature_data_dir"] == str(
+        paf_temperature_data_dir.resolve()
+    )
     assert "temperature_model" not in calls["model_config"]
     assert calls["real_sample"][1] is catalogue
     assert calls["real_sample"][4]["local_source_crossmatch_radius_arcsec"] == 5.0

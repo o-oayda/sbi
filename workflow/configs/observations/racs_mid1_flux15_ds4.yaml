@@ -1,6 +1,8 @@
 observation_id: racs_mid1_flux15_ds4
 
-catalogue_path: /home/oliver/catalogue_data/racs/mid1/RACS-mid1_noscale_srl.fits
+datasets:
+  catalogue: racs_mid1_catalogue
+  paf_temperatures: racs_mid1_paf_temperatures
 
 args:
   racs_epoch: mid1
@@ -18,7 +20,6 @@ args:
   use_jax: true
   chunk_size: 140_000
 
-  paf_temperature_data_dir: /home/oliver/Documents/dipole-utils/data/paf_temps
   openmeteo_fallback: false
 
   summary_features:

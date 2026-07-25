@@ -12,7 +12,11 @@ import yaml
 EXPERIMENT_SCHEMA_PATH = "schemas/racs-experiment.schema.yaml"
 OBSERVATION_SCHEMA_PATH = "schemas/racs-observation.schema.yaml"
 INFERENCE_SCHEMA_PATH = "schemas/racs-inference.schema.yaml"
+DATASET_SCHEMA_PATH = "schemas/racs-datasets.schema.yaml"
+SITE_SCHEMA_PATH = "schemas/racs-site.schema.yaml"
+FILE_COLLECTION_SCHEMA_PATH = "schemas/racs-file-collection.schema.yaml"
 EXPERIMENT_CONFIG_DIR = Path("workflow/configs/experiments")
+DATASET_REGISTRY_PATH = Path("workflow/configs/datasets.yaml")
 
 
 def load_and_validate_yaml(path, schema_path, description):
@@ -78,7 +82,112 @@ def command_line_arguments(arguments):
     return " ".join(shlex.quote(token) for token in tokens)
 
 
+def dataset_definition(dataset_id, expected_type, dataset_registry):
+    """Return one registry entry needed to construct the DAG."""
+    dataset = dataset_registry["datasets"].get(dataset_id)
+    if dataset is None:
+        raise WorkflowError(f"Dataset is not declared in the registry: {dataset_id}")
+    if dataset["type"] != expected_type:
+        raise WorkflowError(
+            f"Dataset '{dataset_id}' has type '{dataset['type']}', expected "
+            f"'{expected_type}'."
+        )
+    return dataset
+
+
+def resolve_site_path(dataset_id, site_config):
+    """Resolve the machine-specific path for one logical dataset."""
+    location = site_config["data_locations"].get(dataset_id)
+    if location is None:
+        raise WorkflowError(
+            f"Site config does not define a path for dataset: {dataset_id}"
+        )
+
+    path = Path(location["path"]).expanduser()
+    try:
+        resolved = path.resolve(strict=True)
+    except FileNotFoundError as error:
+        raise WorkflowError(
+            f"Configured path for dataset '{dataset_id}' does not exist: {path}"
+        ) from error
+    return resolved
+
+
+def resolve_file_dataset(dataset_id, dataset_registry, site_config):
+    """Resolve one logical file dataset through the selected site mapping."""
+    dataset_definition(dataset_id, "file", dataset_registry)
+    resolved = resolve_site_path(dataset_id, site_config)
+    if not resolved.is_file():
+        raise WorkflowError(
+            f"Configured path for dataset '{dataset_id}' is not a file: {resolved}"
+        )
+    return resolved
+
+
+def resolve_file_collection_dataset(dataset_id, dataset_registry, site_config):
+    """Resolve the root, declared files, and matching files for the DAG."""
+    dataset = dataset_definition(dataset_id, "file_collection", dataset_registry)
+    resolved_root = resolve_site_path(dataset_id, site_config)
+    if not resolved_root.is_dir():
+        raise WorkflowError(
+            f"Configured path for dataset '{dataset_id}' is not a directory: "
+            f"{resolved_root}"
+        )
+
+    manifest_path = Path(dataset["manifest"])
+    manifest = load_and_validate_yaml(
+        manifest_path,
+        FILE_COLLECTION_SCHEMA_PATH,
+        f"Manifest for dataset '{dataset_id}'",
+    )
+
+    resolved_files = []
+    for entry in manifest["files"]:
+        candidate = resolved_root / entry["relative_path"]
+        try:
+            resolved_file = candidate.resolve(strict=True)
+        except FileNotFoundError as error:
+            raise WorkflowError(
+                f"Dataset '{dataset_id}' is missing manifest file: {candidate}"
+            ) from error
+        if not resolved_file.is_file():
+            raise WorkflowError(
+                f"Dataset '{dataset_id}' manifest entry is not a file: {candidate}"
+            )
+        resolved_files.append(resolved_file)
+
+    matched_files = tuple(
+        sorted(
+            path.resolve(strict=True)
+            for path in resolved_root.glob(manifest["file_glob"])
+            if path.is_file()
+        )
+    )
+    validation_files = tuple(
+        dict.fromkeys((*resolved_files, *matched_files))
+    )
+    return (
+        resolved_root,
+        tuple(resolved_files),
+        validation_files,
+        manifest_path,
+    )
+
+
 # Resolve and validate the experiment, observation, and inference layers.
+DATASET_REGISTRY = load_and_validate_yaml(
+    DATASET_REGISTRY_PATH,
+    DATASET_SCHEMA_PATH,
+    "Dataset registry",
+)
+if "data_locations" not in config:
+    raise WorkflowError(
+        "Select a machine-specific site config with "
+        "'--configfile workflow/configs/sites/<site>.yaml'."
+    )
+SITE_CONFIG = {"data_locations": config["data_locations"]}
+validate(SITE_CONFIG, SITE_SCHEMA_PATH)
+
 EXPERIMENT_NAME, EXPERIMENT_CONFIG_PATH = selected_experiment_config_path(config)
 EXPERIMENT = load_and_validate_yaml(
     EXPERIMENT_CONFIG_PATH,
@@ -96,6 +205,23 @@ OBSERVATION = load_and_validate_yaml(
     OBSERVATION_CONFIG_PATH,
     OBSERVATION_SCHEMA_PATH,
     "Observation",
+)
+CATALOGUE_DATASET_ID = OBSERVATION["datasets"]["catalogue"]
+CATALOGUE_PATH = resolve_file_dataset(
+    CATALOGUE_DATASET_ID,
+    DATASET_REGISTRY,
+    SITE_CONFIG,
+)
+PAF_TEMPERATURE_DATASET_ID = OBSERVATION["datasets"]["paf_temperatures"]
+(
+    PAF_TEMPERATURE_DIR,
+    PAF_TEMPERATURE_FILES,
+    PAF_TEMPERATURE_VALIDATION_FILES,
+    PAF_TEMPERATURE_MANIFEST_PATH,
+) = resolve_file_collection_dataset(
+    PAF_TEMPERATURE_DATASET_ID,
+    DATASET_REGISTRY,
+    SITE_CONFIG,
 )
 
 INFERENCE_CONFIG_PATH = Path(EXPERIMENT["inference_config"])
@@ -123,6 +249,8 @@ FINAL_ROUND = EXPERIMENT_ARGS["n_rounds"] - 1
 RESULT_DIR = f"results/{EXPERIMENT_ID}"
 OBSERVATION_DIR = f"derived/observations/{OBSERVATION_ID}"
 OBSERVATION_PATH = f"{OBSERVATION_DIR}/reference_observation.npz"
+DATA_VALIDATION_DIR = f"derived/data-validation/{OBSERVATION_ID}"
+DATA_VALIDATION_PATH = f"{DATA_VALIDATION_DIR}/validation-report.yaml"
 
 SAMPLES_PATH = f"{RESULT_DIR}/samples_rnd-{FINAL_ROUND}.csv"
 CHECKPOINT_PATH = f"{RESULT_DIR}/nflow_checkpoint_r{FINAL_ROUND}.npz"

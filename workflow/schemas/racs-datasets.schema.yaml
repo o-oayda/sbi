@@ -1,0 +1,46 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+
+type: object
+required: [datasets]
+additionalProperties: false
+
+properties:
+  datasets:
+    type: object
+    minProperties: 1
+    propertyNames:
+      pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    additionalProperties:
+      type: object
+      required: [type, description, source]
+      additionalProperties: false
+      properties:
+        type:
+          enum: [file, file_collection]
+        description:
+          type: string
+          minLength: 1
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        manifest:
+          type: string
+          minLength: 1
+        source:
+          type: string
+          minLength: 1
+      allOf:
+        - if:
+            properties:
+              type: {const: file}
+          then:
+            required: [sha256]
+            not:
+              required: [manifest]
+        - if:
+            properties:
+              type: {const: file_collection}
+          then:
+            required: [manifest]
+            not:
+              required: [sha256]

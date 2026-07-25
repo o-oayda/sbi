@@ -22,6 +22,11 @@ CORE_WORKFLOW_FILES = (
     "workflow/schemas/racs-experiment.schema.yaml",
     "workflow/schemas/racs-observation.schema.yaml",
     "workflow/schemas/racs-inference.schema.yaml",
+    "workflow/schemas/racs-datasets.schema.yaml",
+    "workflow/schemas/racs-site.schema.yaml",
+    "workflow/schemas/racs-file-collection.schema.yaml",
+    "workflow/configs/datasets.yaml",
+    "workflow/configs/sites/site.example.yaml",
 )
 EXPERIMENT_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 MANIFEST_PATH = Path("workflow/export-manifest.yaml")
@@ -97,11 +102,46 @@ def selected_files(repository_root: Path, experiment_name: str) -> list[Path]:
         "inference_config",
     )
 
+    observation = load_yaml_mapping(
+        repository_root / observation_path,
+        "Observation config",
+    )
+    registry_path = repository_root / "workflow/configs/datasets.yaml"
+    registry = load_yaml_mapping(registry_path, "Dataset registry")
+    registered_datasets = registry.get("datasets")
+    observation_datasets = observation.get("datasets")
+    if not isinstance(registered_datasets, dict) or not isinstance(
+        observation_datasets, dict
+    ):
+        raise ValueError(
+            "Observation config and dataset registry must declare dataset mappings."
+        )
+
+    dataset_manifest_paths = []
+    for role, dataset_id in observation_datasets.items():
+        dataset = registered_datasets.get(dataset_id)
+        if not isinstance(dataset, dict):
+            raise ValueError(
+                f"Observation dataset {role!r} refers to unknown dataset "
+                f"{dataset_id!r}."
+            )
+        manifest_reference = dataset.get("manifest")
+        if manifest_reference is not None:
+            dataset_manifest_paths.append(
+                checked_reference(
+                    repository_root,
+                    manifest_reference,
+                    "workflow/data-manifests",
+                    f"manifest for dataset {dataset_id!r}",
+                )
+            )
+
     paths = [
         *(Path(path) for path in CORE_WORKFLOW_FILES),
         experiment_path,
         observation_path,
         inference_path,
+        *dataset_manifest_paths,
     ]
     for relative_path in paths:
         if not (repository_root / relative_path).is_file():

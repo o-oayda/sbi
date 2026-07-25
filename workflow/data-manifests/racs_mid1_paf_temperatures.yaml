@@ -1,0 +1,75 @@
+dataset_id: racs_mid1_paf_temperatures
+file_glob: "mid1/ak*.csv"
+files:
+  - relative_path: "mid1/ak01 ctrl_adc1_pafAvTemp-data-2026-06-12 04_53_58.csv"
+    sha256: e5438eb6bd7ba7052027652ae7414485804a49124943c926c6640757253472ab
+  - relative_path: "mid1/ak02 ctrl_adc1_pafAvTemp-data-2026-06-12 04_13_17.csv"
+    sha256: c058adbdc03f938dc81a79b2cbc04ae9dcb0371cea981e7588b8232919929e6b
+  - relative_path: "mid1/ak03 ctrl_adc1_pafAvTemp-data-2026-06-12 04_54_29.csv"
+    sha256: 05d16f592a063b8a4092979e3a500bbf1ce0b79bafc7e3a19eb424ff32ec3972
+  - relative_path: "mid1/ak04 ctrl_adc1_pafAvTemp-data-2026-06-12 04_54_54.csv"
+    sha256: a1d21ce98e4c1779de47c3eb6266b34cdaedb79637cc4843b526043386b459d9
+  - relative_path: "mid1/ak05 ctrl_adc1_pafAvTemp-data-2026-06-12 04_55_17.csv"
+    sha256: 8102ebae270009e17575917da377aef676b42133570709127b68435eb46017cb
+  - relative_path: "mid1/ak06 ctrl_adc1_pafAvTemp-data-2026-06-12 04_55_37.csv"
+    sha256: 02156265552de2a9825117b240df66918b46a314f6739fa4c25c5f667a261dcf
+  - relative_path: "mid1/ak07 ctrl_adc1_pafAvTemp-data-2026-06-12 04_56_00.csv"
+    sha256: 41958d937c0ebaca6efc50b0802f6086db84199b535de4be44b7c359fa2af387
+  - relative_path: "mid1/ak08 ctrl_adc1_pafAvTemp-data-2026-06-12 04_57_44.csv"
+    sha256: b033e3d868064e263d62901817c3d64987361e7d1420e5a6276922b3d39b9a95
+  - relative_path: "mid1/ak09 ctrl_adc1_pafAvTemp-data-2026-06-12 04_58_07.csv"
+    sha256: 0dd90816e783b60b06f49888fb6580bedc92b346e5aa5431627922f1319c0582
+  - relative_path: "mid1/ak10 ctrl_adc1_pafAvTemp-data-2026-06-12 04_58_27.csv"
+    sha256: 1bdcd8be4f474e005d32d157e09773ca3f1d8cac66883b6ed9d70649a93edb46
+  - relative_path: "mid1/ak11 ctrl_adc1_pafAvTemp-data-2026-06-12 04_58_51.csv"
+    sha256: 9c7f6b224da990a3b285fda2c927d27a04cad0b5f531b7ee77c0a3558a0003c1
+  - relative_path: "mid1/ak12 ctrl_adc1_pafAvTemp-data-2026-06-12 04_59_09.csv"
+    sha256: 6b4cc48fb17fbb1111abfbe19ac9ac60de7294ceb22c91a0b8491ee7633fbbf4
+  - relative_path: "mid1/ak13 ctrl_adc1_pafAvTemp-data-2026-06-12 04_59_28.csv"
+    sha256: 1fdaeb39105f1d8006b3967c2dd098ac32fd5b34d28aa1e8a2df1f4df458898c
+  - relative_path: "mid1/ak14 ctrl_adc1_pafAvTemp-data-2026-06-12 04_59_46.csv"
+    sha256: c1b24fd0b0b80713af8e393eb97a2e32b6016665c024541d5e9ec3467b36d8f4
+  - relative_path: "mid1/ak15 ctrl_adc1_pafAvTemp-data-2026-06-12 05_00_04.csv"
+    sha256: d6ae54c422d42532c0ee48445a57136aee5f83fa1e227648df5f9cde375a07b9
+  - relative_path: "mid1/ak16 ctrl_adc1_pafAvTemp-data-2026-06-12 05_00_40.csv"
+    sha256: d0c3c7797ea0c5a5bba17a4dbafee17ffd308ba2645c35b5933f97ced419f80d
+  - relative_path: "mid1/ak17 ctrl_adc1_pafAvTemp-data-2026-06-12 05_01_02.csv"
+    sha256: 10879fc93d47f4f190794d93a23ab803b2d544af72955772313923439764e09a
+  - relative_path: "mid1/ak18 ctrl_adc1_pafAvTemp-data-2026-06-12 05_01_22.csv"
+    sha256: ad2ab49188e8a5944354c6acf819fc856577bedd3fc121d5135d387a75574181
+  - relative_path: "mid1/ak19 ctrl_adc1_pafAvTemp-data-2026-06-12 05_01_42.csv"
+    sha256: 4503e73618db4fcf79120c88b73f28b799aae5c69c1468c57f5acbb70837f585
+  - relative_path: "mid1/ak20 ctrl_adc1_pafAvTemp-data-2026-06-12 05_02_03.csv"
+    sha256: 7297d1114394b107a62247ed5c4f617c9b9257d225d9298835c69e10657f2f8e
+  - relative_path: "mid1/ak21 ctrl_adc1_pafAvTemp-data-2026-06-12 05_02_24.csv"
+    sha256: 2db8bd8c127c112e973c5700def822b6cfb3b799d15f80d3b988af94c4060628
+  - relative_path: "mid1/ak22 ctrl_adc1_pafAvTemp-data-2026-06-12 05_02_59.csv"
+    sha256: 9ad2d8f8c88fcca86a4fd7d9aaebf2ff51df0ec9e6cce29068641ab285be73be
+  - relative_path: "mid1/ak23 ctrl_adc1_pafAvTemp-data-2026-06-12 05_03_17.csv"
+    sha256: 631d559945b0fe195134b5abc61862fd5a1984fe163b282f7809db1605ac3379
+  - relative_path: "mid1/ak24 ctrl_adc1_pafAvTemp-data-2026-06-12 05_03_36.csv"
+    sha256: a2423c35a8bb4f04e8ac9909272aff7b203bdabf2d862b5ee56920305bafd373
+  - relative_path: "mid1/ak25 ctrl_adc1_pafAvTemp-data-2026-06-12 05_03_57.csv"
+    sha256: 6b1908d7ead99ade51b94770be97dd7ca373a3fb55821ca49c675374291af222
+  - relative_path: "mid1/ak26 ctrl_adc1_pafAvTemp-data-2026-06-12 05_04_19.csv"
+    sha256: 765ca225d7d620781d8151f6e0022e4f00362a24901c35321f7d7928f48e14b6
+  - relative_path: "mid1/ak27 ctrl_adc1_pafAvTemp-data-2026-06-12 05_04_41.csv"
+    sha256: 63aefee29d0ef8811bb302f2bc4c29d81a8b970cf5df1647fa596a8f2dc796b6
+  - relative_path: "mid1/ak28 ctrl_adc1_pafAvTemp-data-2026-06-12 05_04_59.csv"
+    sha256: c68855a4ed913d6252d51fa75849b77e91d7143e50b9d85ea210c2bd1d9876b8
+  - relative_path: "mid1/ak29 ctrl_adc1_pafAvTemp-data-2026-06-12 05_05_24.csv"
+    sha256: 532641fd149de257dd67c7030dafeaf8bc119ead69e995993567427fe65acd41
+  - relative_path: "mid1/ak30 ctrl_adc1_pafAvTemp-data-2026-06-12 05_05_43.csv"
+    sha256: 32cfc6d681bc9233437df927da3ff201f7d8a4d98b00e09bb2f70b314d79555f
+  - relative_path: "mid1/ak31 ctrl_adc1_pafAvTemp-data-2026-06-12 05_06_03.csv"
+    sha256: 23e03055c1738944038e9089672fa63a42591f194a9ef48a18154a305c5f8270
+  - relative_path: "mid1/ak32 ctrl_adc1_pafAvTemp-data-2026-06-12 05_06_21.csv"
+    sha256: 414dcbd29b6f2efad3ad0ec91f57e67eb2195d27f790a68ed082db55c01f3788
+  - relative_path: "mid1/ak33 ctrl_adc1_pafAvTemp-data-2026-06-12 05_06_38.csv"
+    sha256: c5678765b94982fa5ef7dff62a0c76e190e178a27d70f55fab3e83632affd928
+  - relative_path: "mid1/ak34 ctrl_adc1_pafAvTemp-data-2026-06-12 05_06_58.csv"
+    sha256: 8e9ce5db6d57bf762d7d4e6a64c2a8ccb110b03ef1557ce39f631e2a757de71b
+  - relative_path: "mid1/ak35 ctrl_adc1_pafAvTemp-data-2026-06-12 05_07_18.csv"
+    sha256: c1c804a4f6511791db6a07ce6f1c9746feddc848e0602c6bf82ce2110551f15b
+  - relative_path: "mid1/ak36 ctrl_adc1_pafAvTemp-data-2026-06-12 05_07_37.csv"
+    sha256: f4c32a4ec5028b75a5ddec9aa80b81372a52802ad7e552d8dcd829bdfbe8625c
