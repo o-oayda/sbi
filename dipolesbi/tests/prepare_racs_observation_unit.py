@@ -26,7 +26,6 @@ def _observation_config(catalogue_path: Path, *, use_jax: bool = True):
             "downscale_nside": 4,
             "use_jax": use_jax,
             "chunk_size": 128,
-            "temperature_model": "hot_linear",
             "paf_temperature_data_dir": "/tmp/paf",
             "openmeteo_fallback": False,
             "summary_features": ["log_dispersion", "flux_quantiles"],
@@ -113,6 +112,7 @@ def test_prepare_reference_observation_wires_config(tmp_path, monkeypatch):
     assert calls["initialised"] is True
     assert calls["mask_config"] is config
     assert calls["model_config"]["catalogue_path"] == str(catalogue_path.resolve())
+    assert "temperature_model" not in calls["model_config"]
     assert calls["real_sample"][1] is catalogue
     assert calls["real_sample"][4]["local_source_crossmatch_radius_arcsec"] == 5.0
     assert calls["real_sample"][4]["save_map_plot"] is False

@@ -41,7 +41,6 @@ def prepare_reference_observation(
         store_final_samples=not use_jax,
         fractional_error_flux_min_mjy=args["fractional_error_flux_min_mjy"],
         flux_temperature_min_mjy=args["flux_temperature_min_mjy"],
-        temperature_model=args["temperature_model"],
         paf_temperature_data_dir=args["paf_temperature_data_dir"],
         temperature_fallback=(
             "open_meteo" if args["openmeteo_fallback"] else "none"

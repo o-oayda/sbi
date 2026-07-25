@@ -20,12 +20,14 @@ args:
   alpha_mean: 0.8
   alpha_sigma: 0.2
 
+  temperature_model: hot_linear
+
   simulate_clustering: poisson
   max_children: 5
   add_extra_error: false
   add_elevation_model: false
 
-  # Active prior bounds for this experiment.
+  # Active prior bounds for this experiment
   log10_n_initial_samples_min: 5.6
   log10_n_initial_samples_max: 6.8
   observer_speed_min: 0.0

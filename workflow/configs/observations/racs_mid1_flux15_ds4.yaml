@@ -18,7 +18,6 @@ args:
   use_jax: true
   chunk_size: 140_000
 
-  temperature_model: hot_linear
   paf_temperature_data_dir: /home/oliver/Documents/dipole-utils/data/paf_temps
   openmeteo_fallback: false
 

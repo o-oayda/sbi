@@ -42,6 +42,7 @@ properties:
       - no_ui
       - alpha_mean
       - alpha_sigma
+      - temperature_model
       - simulate_clustering
       - add_extra_error
       - log10_n_initial_samples_min
@@ -92,6 +93,8 @@ properties:
       alpha_sigma:
         type: number
         exclusiveMinimum: 0
+      temperature_model:
+        enum: [hot_linear, hot_quadratic]
       simulate_clustering:
         enum: [geometric, poisson]
       add_extra_error:

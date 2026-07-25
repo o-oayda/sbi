@@ -28,7 +28,6 @@ properties:
       - downscale_nside
       - use_jax
       - chunk_size
-      - temperature_model
       - paf_temperature_data_dir
       - openmeteo_fallback
       - summary_features
@@ -72,10 +71,6 @@ properties:
       chunk_size:
         type: integer
         minimum: 1
-
-      temperature_model:
-        type: string
-        minLength: 1
 
       paf_temperature_data_dir:
         type: string
