@@ -10,9 +10,8 @@ rule prepare_racs_observation:
     input:
         config=OBSERVATION_CONFIG_PATH,
         catalogue=OBSERVATION["catalogue_path"],
-        program="dipolesbi/pipelines/prepare_racs_observation.py",
-        helpers="dipolesbi/pipelines/racs_observation_helpers.py",
-        summaries="dipolesbi/pipelines/summary_stats.py",
+        project="pyproject.toml",
+        software_lock="uv.lock",
     output:
         observation=OBSERVATION_PATH,
     params:
@@ -42,6 +41,8 @@ rule infer_racs:
         inference_config=INFERENCE_CONFIG_PATH,
         catalogue=OBSERVATION["catalogue_path"],
         prepared_observation=rules.prepare_racs_observation.output.observation,
+        project="pyproject.toml",
+        software_lock="uv.lock",
     output:
         samples=SAMPLES_PATH,
         checkpoint=CHECKPOINT_PATH,
