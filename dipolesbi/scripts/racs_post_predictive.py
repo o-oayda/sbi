@@ -346,7 +346,14 @@ ratio_ax.legend()
 fig.tight_layout()
 plt.show()
 
-x0, mask = build_real_sample(model, flux_min=15, save_map_plot=False)
+catalogue = DataLoader(*model.product.data_loader_args).load()
+x0, mask = build_real_sample(
+    model,
+    catalogue,
+    flux_min=15,
+    local_source_crossmatch_radius_arcsec=5.0,
+    save_map_plot=False,
+)
 
 # compute per pixel mean and std, assume gaussian, and z-score x0 pixels
 # but downscale first to resemble an average

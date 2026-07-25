@@ -194,7 +194,13 @@ def main() -> None:
     model = RacsLow3(config)
     model.initialise_data()
 
-    x0, mask = build_real_sample(model, flux_min=args.flux_min)
+    catalogue = DataLoader(*model.product.data_loader_args).load()
+    x0, mask = build_real_sample(
+        model,
+        catalogue,
+        flux_min=args.flux_min,
+        local_source_crossmatch_radius_arcsec=5.0,
+    )
     effective_nside = int(np.sqrt(x0.size / 12))
 
     prior, theta_0 = build_prior_and_reference_theta(model)

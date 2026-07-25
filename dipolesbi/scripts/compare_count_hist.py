@@ -4,6 +4,7 @@ from dipolesbi.tools.plotting import smooth_map
 from dipolesbi.tools.posterior_samples import sample_posterior_npz
 from dipolesbi.tools.utils import batch_simulate
 from dipolesbi.pipelines.based_racs import build_mask, build_real_sample
+from dipoleutils.utils.data_loader import DataLoader
 import healpy as hp
 import matplotlib; matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
@@ -56,7 +57,13 @@ config = RacsLow3Config(
 )
 model = RacsLow3(config)
 model.initialise_data()
-x0, mask0 = build_real_sample(model, 15)
+catalogue = DataLoader(*model.product.data_loader_args).load()
+x0, mask0 = build_real_sample(
+    model,
+    catalogue,
+    15,
+    local_source_crossmatch_radius_arcsec=5.0,
+)
 x, mask = batch_simulate(samples_fmt, model.generate_dipole, n_workers=N_CPUS)
 x_av = np.nanmean(x, axis=0)
 x_single, mask = model.generate_dipole(**single_sample)

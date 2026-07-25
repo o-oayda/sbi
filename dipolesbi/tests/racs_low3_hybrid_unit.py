@@ -1,4 +1,6 @@
 import os
+from dataclasses import asdict
+from pathlib import Path
 from types import SimpleNamespace
 
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
@@ -7,6 +9,8 @@ import healpy as hp
 import numpy as np
 import pytest
 from astropy.table import Table
+from catsim import RACS_PRODUCTS
+from dipoleutils.utils.samples import CatalogueToMap
 
 from dipolesbi.pipelines.based_racs import (
     DEFAULT_FLUX_ELEVATION_QUANTILES,
@@ -14,8 +18,15 @@ from dipolesbi.pipelines.based_racs import (
     build_hybrid_sample_from_native,
     build_prior_and_reference_theta,
     build_racs_config,
+    build_scenario,
+    load_inference_config,
     make_simulator_wrapper,
     _write_run_command,
+)
+from dipolesbi.pipelines.racs_observation_helpers import (
+    _catalogue_view,
+    build_mask,
+    load_catalogue,
 )
 from dipolesbi.pipelines.summary_stats import (
     _flux_elevation_edges,
@@ -29,9 +40,11 @@ from dipolesbi.pipelines.summary_stats import (
     _real_catalogue_flux_elevation_samples,
 )
 from dipolesbi.tools.configs import (
+    DataTransformSpec,
     DataTransformConfig,
     MultiRoundInfererConfig,
     NeuralFlowConfig,
+    Scenario,
     ThetaTransformConfig,
     TransformConfig,
     TrainingConfig,
@@ -42,6 +55,7 @@ from dipolesbi.tools.priors_np import DipolePriorNP
 
 def _minimal_racs_config_kwargs(**overrides):
     kwargs = {
+        "catalogue_path": "/tmp/racs-test-catalogue.fits",
         "racs_epoch": "low3",
         "flux_min": 2.0,
         "nside": 1,
@@ -59,6 +73,93 @@ def _minimal_racs_config_kwargs(**overrides):
     }
     kwargs.update(overrides)
     return kwargs
+
+
+def test_build_mask_explicit_settings_match_defaults():
+    default = build_mask(8)
+    explicit = build_mask(
+        8,
+        galactic_plane_width_deg=5,
+        north_equatorial_pole_radius_deg=42,
+        default_a_team_radius_deg=2,
+        source_radii_deg={"Cygnus A": 3, "LMC": 13, "SMC": 8},
+    )
+
+    np.testing.assert_array_equal(default, explicit)
+    assert default.shape == (hp.nside2npix(8),)
+
+
+def test_load_catalogue_reads_explicit_path(tmp_path):
+    path = tmp_path / "catalogue.fits"
+    expected = Table({"RA": [10.0, 20.0], "Dec": [-5.0, 6.0]})
+    expected.write(path)
+
+    loaded = load_catalogue(path)
+
+    np.testing.assert_array_equal(loaded["RA"], expected["RA"])
+    np.testing.assert_array_equal(loaded["Dec"], expected["Dec"])
+
+
+def test_load_catalogue_rejects_missing_path(tmp_path):
+    with pytest.raises(FileNotFoundError, match="Catalogue does not exist"):
+        load_catalogue(tmp_path / "missing.fits")
+
+
+def test_catalogue_view_forwards_local_crossmatch_radius(monkeypatch):
+    calls = []
+    catalogue = Table(
+        {
+            "Total_flux": [10.0],
+            "Source_Name": ["RACS-source"],
+        }
+    )
+    monkeypatch.setattr(CatalogueToMap, "make_cut", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        CatalogueToMap,
+        "crossmatch_local_sources",
+        lambda self, coordinate_system, radius, source_name_A_column: calls.append(
+            (coordinate_system, radius, source_name_A_column)
+        ),
+    )
+
+    _catalogue_view(
+        catalogue,
+        RACS_PRODUCTS["mid1"],
+        minimum_flux=5.0,
+        local_source_crossmatch_radius_arcsec=7.5,
+    )
+
+    assert calls == [("equatorial", 7.5, "Source_Name")]
+
+
+def test_catalogue_view_can_disable_local_crossmatch(monkeypatch):
+    catalogue = Table({"Total_flux": [10.0]})
+    monkeypatch.setattr(CatalogueToMap, "make_cut", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        CatalogueToMap,
+        "crossmatch_local_sources",
+        lambda *args, **kwargs: pytest.fail("Cross-matching should be disabled."),
+    )
+
+    _catalogue_view(
+        catalogue,
+        RACS_PRODUCTS["mid1"],
+        minimum_flux=5.0,
+        local_source_crossmatch_radius_arcsec=None,
+    )
+
+
+def test_catalogue_view_requires_source_name_column_for_crossmatch(monkeypatch):
+    catalogue = Table({"Total_flux": [10.0]})
+    monkeypatch.setattr(CatalogueToMap, "make_cut", lambda *args, **kwargs: None)
+
+    with pytest.raises(ValueError, match="Source_Name.*missing"):
+        _catalogue_view(
+            catalogue,
+            RACS_PRODUCTS["mid1"],
+            minimum_flux=5.0,
+            local_source_crossmatch_radius_arcsec=5.0,
+        )
 
 
 def test_build_racs_config_defaults_to_low3_product():
@@ -155,6 +256,71 @@ def test_build_prior_and_reference_theta_accepts_custom_bounds():
     assert prior.prior_dict["pstop"]["low_range"] == 0.5
     assert prior.prior_dict["pstop"]["high_range"] == 0.9
     assert theta_0["temp_beta"] == 0.02
+
+
+def test_inference_yaml_reproduces_previous_nle_scenario():
+    inference_config = load_inference_config(
+        Path("workflow/configs/inference/nle_maf11_zscore.yaml")
+    )
+    prior, theta_0 = build_prior_and_reference_theta(
+        simulate_clustering="poisson",
+        log10_n_initial_samples_range=(5.6, 6.8),
+        observer_speed_range=(0.0, 12.0),
+        dipole_longitude_range=(0.0, 360.0),
+        dipole_latitude_range=(-90.0, 90.0),
+        temp_beta_range=(0.0, 0.05),
+        lambda_clus_range=(0.0, 3.0),
+    )
+    common = {
+        "nside": 4,
+        "theta_prior": prior.to_jax(),
+        "reference_theta": theta_0,
+        "multiround_overrides": {
+            "prng_integer_seed": 0,
+            "plot_save_dir": "results/test",
+            "simulation_budget": 100_000,
+            "n_rounds": 20,
+            "likelihood_chunk_size_gb": 0.5,
+            "n_likelihood_samples": 10_000,
+            "map_ndim": 192,
+            "summary_ndim": 51,
+            "native_count_summary": "log_dispersion",
+        },
+    }
+    previous = Scenario.anynside_nle(
+        **common,
+        training_overrides={"learning_rate": 1e-4, "min_lr_ratio": 1.0},
+        flow_overrides={
+            "decoder_n_neurons": 128,
+            "decoder_n_layers": 4,
+            "architecture": 11 * ["MAF"],
+            "data_reduction_factor": 0.5,
+        },
+        data_spec=DataTransformSpec.zscore(method="batchwise"),
+    )
+    configured = build_scenario(
+        inference_config=inference_config,
+        effective_nside=4,
+        prior=prior,
+        theta_0=theta_0,
+        out_dir="results/test",
+        ssnle_seed=0,
+        n_rounds=20,
+        n_simulations=100_000,
+        map_ndim=192,
+        summary_ndim=51,
+        summary_features=["log_dispersion", "flux_quantiles"],
+    )
+
+    assert asdict(configured.training) == asdict(previous.training)
+    assert asdict(configured.flow) == asdict(previous.flow)
+    assert asdict(configured.multiround) == asdict(previous.multiround)
+    assert asdict(configured.transforms.data_transform_config.spec) == asdict(
+        previous.transforms.data_transform_config.spec
+    )
+    assert asdict(configured.transforms.theta_transform_config.spec) == asdict(
+        previous.transforms.theta_transform_config.spec
+    )
 
 
 def test_native_count_log_dispersion_feature():
@@ -482,6 +648,7 @@ def test_build_hybrid_sample_appends_log_dispersion_summary():
 def test_multiround_inferer_accepts_hybrid_target_dimension(tmp_path):
     map_ndim = hp.nside2npix(1)
     summary_ndim = 3
+    output_dir = tmp_path / "run"
     reference_data = np.zeros(map_ndim + summary_ndim, dtype=np.float32)
     reference_mask = np.ones_like(reference_data, dtype=bool)
 
@@ -496,7 +663,7 @@ def test_multiround_inferer_accepts_hybrid_target_dimension(tmp_path):
         multi_round_config=MultiRoundInfererConfig(
             simulation_budget=2,
             n_rounds=1,
-            plot_save_dir=str(tmp_path),
+            plot_save_dir=str(output_dir),
             save_round_simulations=False,
             map_ndim=map_ndim,
             summary_ndim=summary_ndim,
@@ -515,6 +682,8 @@ def test_multiround_inferer_accepts_hybrid_target_dimension(tmp_path):
     assert inferer.summary_start == map_ndim
     assert inferer.summary_ndim == summary_ndim
     assert inferer.nside == 1
+    assert inferer.mr_config.plot_save_dir == str(output_dir)
+    assert output_dir.is_dir()
 
 
 def test_multiround_config_jax_ns_defaults_and_overrides():
