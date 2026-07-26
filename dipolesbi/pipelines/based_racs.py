@@ -52,9 +52,6 @@ from dipolesbi.tools.summary_diagnostics import (
 from dipolesbi.tools.ui import MultiRoundInfererUI
 from dipolesbi.tools.utils import batch_simulate
 
-DEFAULT_PAF_TEMPERATURE_DATA_DIR = "/home/oliver/Documents/dipole-utils/data/paf_temps"
-
-
 def _write_run_command(out_dir: str) -> Path:
     """Write a shell-safe reconstruction of the Python invocation."""
     output_dir = Path(out_dir).expanduser()
@@ -203,7 +200,7 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
     parser.add_argument(
         "--paf_temperature_data_dir",
         type=str,
-        default=DEFAULT_PAF_TEMPERATURE_DATA_DIR,
+        required=True,
         help="Directory containing PAF temperature data.",
     )
     parser.add_argument(
@@ -435,11 +432,11 @@ def build_racs_config(
     alpha_mean: float,
     alpha_sigma: float,
     fractional_error_flux_min_mjy: float,
+    paf_temperature_data_dir: str,
     flux_temperature_min_mjy: float | None = None,
     temperature_model: str = "hot_linear",
     mask_map: np.ndarray | None = None,
     max_cluster_children_per_parent: int = 16,
-    paf_temperature_data_dir: str = DEFAULT_PAF_TEMPERATURE_DATA_DIR,
     openmeteo_fallback: bool = False,
 ) -> RacsConfig:
     return RacsConfig(

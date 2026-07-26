@@ -13,6 +13,7 @@ simulations/*
 derived/*
 ultranest_logs/*
 results/*
+artifacts/*
 nle_out/*
 exp_out/*
 nice_rig/*

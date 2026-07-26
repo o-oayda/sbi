@@ -40,17 +40,14 @@ rule prepare_racs_observation:
     input:
         data_validation=rules.validate_racs_data.output.report,
         config=OBSERVATION_CONFIG_PATH,
-        dataset_registry=DATASET_REGISTRY_PATH,
         catalogue=CATALOGUE_PATH,
-        paf_temperature_manifest=PAF_TEMPERATURE_MANIFEST_PATH,
         paf_temperature_files=PAF_TEMPERATURE_FILES,
-        project="pyproject.toml",
-        software_lock="uv.lock",
     output:
         observation=OBSERVATION_PATH,
     params:
         output_dir=OBSERVATION_DIR,
         paf_temperature_dir=PAF_TEMPERATURE_DIR,
+        implementation_fingerprint=IMPLEMENTATION_FINGERPRINT,
         jax_platforms=EXECUTION["jax_platforms"],
     threads:
         EXECUTION["threads"]
@@ -76,23 +73,21 @@ rule infer_racs:
         experiment_config=EXPERIMENT_CONFIG_PATH,
         observation_config=OBSERVATION_CONFIG_PATH,
         inference_config=INFERENCE_CONFIG_PATH,
-        dataset_registry=DATASET_REGISTRY_PATH,
         catalogue=CATALOGUE_PATH,
-        paf_temperature_manifest=PAF_TEMPERATURE_MANIFEST_PATH,
         paf_temperature_files=PAF_TEMPERATURE_FILES,
         prepared_observation=rules.prepare_racs_observation.output.observation,
-        project="pyproject.toml",
-        software_lock="uv.lock",
     output:
         samples=SAMPLES_PATH,
         checkpoint=CHECKPOINT_PATH,
         observation=RESULT_OBSERVATION_PATH,
-        experiment_config=EXPERIMENT_SNAPSHOT_PATH,
-        inference_config=INFERENCE_SNAPSHOT_PATH,
+        model_config=MODEL_CONFIG_PATH,
+        configs=CONFIGS_PATH,
+        run_command=RUN_COMMAND_PATH,
     params:
         output_dir=RESULT_DIR,
         paf_temperature_dir=PAF_TEMPERATURE_DIR,
         cli_args=command_line_arguments(INFERENCE_ARGS),
+        implementation_fingerprint=IMPLEMENTATION_FINGERPRINT,
         jax_platforms=EXECUTION["jax_platforms"],
     threads:
         EXECUTION["threads"]
@@ -113,6 +108,53 @@ rule infer_racs:
             --reference_observation {input.prepared_observation:q} \
             --out_dir {params.output_dir:q} \
             > {log:q} 2>&1
-        cp {input.experiment_config:q} {output.experiment_config:q}
-        cp {input.inference_config:q} {output.inference_config:q}
+        """
+
+
+rule package_racs_analysis:
+    input:
+        final_posterior=rules.infer_racs.output.samples,
+        reference_observation=rules.infer_racs.output.observation,
+        experiment_config=EXPERIMENT_CONFIG_PATH,
+        observation_config=OBSERVATION_CONFIG_PATH,
+        inference_config=INFERENCE_CONFIG_PATH,
+        data_validation=rules.validate_racs_data.output.report,
+        dataset_registry=DATASET_REGISTRY_PATH,
+        paf_manifest=PAF_TEMPERATURE_MANIFEST_PATH,
+        model_config=rules.infer_racs.output.model_config,
+        configs=rules.infer_racs.output.configs,
+        run_command=rules.infer_racs.output.run_command,
+        project="pyproject.toml",
+        software_lock="uv.lock",
+    output:
+        archive=ANALYSIS_ARCHIVE_PATH,
+        checksum=ANALYSIS_CHECKSUM_PATH,
+    params:
+        artifacts_root="artifacts",
+        experiment_id=EXPERIMENT_ID,
+        implementation_fingerprint=IMPLEMENTATION_FINGERPRINT,
+    log:
+        f"{ARTIFACT_DIR}/packaging.log"
+    shell:
+        """
+        mkdir -p {ARTIFACT_DIR:q}
+        dipolesbi-package-racs-analysis \
+            --experiment-id {params.experiment_id:q} \
+            --artifacts-root {params.artifacts_root:q} \
+            --repository-root . \
+            --implementation-fingerprint {params.implementation_fingerprint:q} \
+            --final-posterior {input.final_posterior:q} \
+            --reference-observation {input.reference_observation:q} \
+            --experiment-config {input.experiment_config:q} \
+            --observation-config {input.observation_config:q} \
+            --inference-config {input.inference_config:q} \
+            --data-validation-report {input.data_validation:q} \
+            --dataset-registry {input.dataset_registry:q} \
+            --paf-manifest {input.paf_manifest:q} \
+            --model-config {input.model_config:q} \
+            --configs {input.configs:q} \
+            --run-command {input.run_command:q} \
+            --pyproject {input.project:q} \
+            --uv-lock {input.software_lock:q} \
+            > {log:q} 2>&1
         """

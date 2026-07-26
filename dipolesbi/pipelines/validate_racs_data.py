@@ -72,7 +72,7 @@ def validate_racs_data(
 
     expected_manifest = Path(paf_collection["manifest"])
     if not expected_manifest.is_absolute():
-        expected_manifest = Path.cwd() / expected_manifest
+        expected_manifest = registry_path.parent / expected_manifest
     if expected_manifest.resolve(strict=True) != paf_manifest_path:
         raise DataValidationError(
             f"Registry manifest for {paf_id!r} does not match the selected manifest: "
@@ -89,8 +89,7 @@ def validate_racs_data(
     failures: list[str] = []
     catalogue_expected = catalogue["sha256"]
     catalogue_actual = sha256(catalogue_path)
-    catalogue_valid = catalogue_actual == catalogue_expected
-    if not catalogue_valid:
+    if catalogue_actual != catalogue_expected:
         failures.append(f"checksum mismatch: {catalogue_id} ({catalogue_path})")
 
     paf_files = []
@@ -110,15 +109,13 @@ def validate_racs_data(
 
         actual = sha256(path)
         expected = entry["sha256"]
-        valid = actual == expected
-        if not valid:
+        if actual != expected:
             failures.append(f"checksum mismatch: {paf_id}/{relative_path}")
         paf_files.append(
             {
                 "relative_path": relative_path.as_posix(),
                 "expected_sha256": expected,
                 "actual_sha256": actual,
-                "valid": valid,
             }
         )
 
@@ -141,17 +138,13 @@ def validate_racs_data(
                 "path": str(catalogue_path),
                 "expected_sha256": catalogue_expected,
                 "actual_sha256": catalogue_actual,
-                "valid": catalogue_valid,
             },
             paf_id: {
                 "type": "file_collection",
                 "root": str(paf_root),
                 "manifest": str(paf_manifest_path),
                 "file_glob": manifest["file_glob"],
-                "valid": not any(not entry["valid"] for entry in paf_files)
-                and not unexpected,
                 "files": paf_files,
-                "unexpected_files": [str(path) for path in unexpected],
             },
         },
     }

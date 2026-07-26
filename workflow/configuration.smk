@@ -8,6 +8,8 @@ from snakemake.exceptions import WorkflowError
 from snakemake.utils import validate
 import yaml
 
+from dipolesbi.pipelines.package_racs_analysis import implementation_fingerprint
+
 
 EXPERIMENT_SCHEMA_PATH = "schemas/racs-experiment.schema.yaml"
 OBSERVATION_SCHEMA_PATH = "schemas/racs-observation.schema.yaml"
@@ -135,6 +137,9 @@ def resolve_file_collection_dataset(dataset_id, dataset_registry, site_config):
         )
 
     manifest_path = Path(dataset["manifest"])
+    if not manifest_path.is_absolute():
+        manifest_path = DATASET_REGISTRY_PATH.parent / manifest_path
+    manifest_path = manifest_path.resolve(strict=True)
     manifest = load_and_validate_yaml(
         manifest_path,
         FILE_COLLECTION_SCHEMA_PATH,
@@ -206,6 +211,11 @@ OBSERVATION = load_and_validate_yaml(
     OBSERVATION_SCHEMA_PATH,
     "Observation",
 )
+if OBSERVATION["observation_id"] != OBSERVATION_CONFIG_PATH.stem:
+    raise WorkflowError(
+        f"Observation config '{OBSERVATION_CONFIG_PATH}' declares observation_id "
+        f"'{OBSERVATION['observation_id']}'. The filename and ID must match."
+    )
 CATALOGUE_DATASET_ID = OBSERVATION["datasets"]["catalogue"]
 CATALOGUE_PATH = resolve_file_dataset(
     CATALOGUE_DATASET_ID,
@@ -244,23 +254,28 @@ EXECUTION = EXPERIMENT["execution"]
 EXPERIMENT_ARGS = EXPERIMENT["args"]
 OBSERVATION_ARGS = OBSERVATION["args"]
 INFERENCE_ARGS = merge_distinct_arguments(OBSERVATION_ARGS, EXPERIMENT_ARGS)
+IMPLEMENTATION_FINGERPRINT = implementation_fingerprint(Path.cwd())
 
 FINAL_ROUND = EXPERIMENT_ARGS["n_rounds"] - 1
 RESULT_DIR = f"results/{EXPERIMENT_ID}"
 OBSERVATION_DIR = f"derived/observations/{OBSERVATION_ID}"
 OBSERVATION_PATH = f"{OBSERVATION_DIR}/reference_observation.npz"
-DATA_VALIDATION_DIR = f"derived/data-validation/{OBSERVATION_ID}"
+DATA_VALIDATION_DIR = (
+    f"derived/data-validation/{CATALOGUE_DATASET_ID}--"
+    f"{PAF_TEMPERATURE_DATASET_ID}"
+)
 DATA_VALIDATION_PATH = f"{DATA_VALIDATION_DIR}/validation-report.yaml"
 
 SAMPLES_PATH = f"{RESULT_DIR}/samples_rnd-{FINAL_ROUND}.csv"
 CHECKPOINT_PATH = f"{RESULT_DIR}/nflow_checkpoint_r{FINAL_ROUND}.npz"
 RESULT_OBSERVATION_PATH = f"{RESULT_DIR}/reference_observation.npz"
-EXPERIMENT_SNAPSHOT_PATH = f"{RESULT_DIR}/experiment.yaml"
-INFERENCE_SNAPSHOT_PATH = f"{RESULT_DIR}/inference.yaml"
+MODEL_CONFIG_PATH = f"{RESULT_DIR}/model_config.json"
+CONFIGS_PATH = f"{RESULT_DIR}/configs.txt"
+RUN_COMMAND_PATH = f"{RESULT_DIR}/run_command.txt"
+ARTIFACT_DIR = f"artifacts/{EXPERIMENT_ID}"
+ANALYSIS_ARCHIVE_PATH = f"{ARTIFACT_DIR}/{EXPERIMENT_ID}.analysis.zip"
+ANALYSIS_CHECKSUM_PATH = f"{ANALYSIS_ARCHIVE_PATH}.sha256"
 FINAL_OUTPUTS = (
-    SAMPLES_PATH,
-    CHECKPOINT_PATH,
-    RESULT_OBSERVATION_PATH,
-    EXPERIMENT_SNAPSHOT_PATH,
-    INFERENCE_SNAPSHOT_PATH,
+    ANALYSIS_ARCHIVE_PATH,
+    ANALYSIS_CHECKSUM_PATH,
 )

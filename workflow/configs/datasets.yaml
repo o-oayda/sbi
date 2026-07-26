@@ -8,5 +8,5 @@ datasets:
   racs_mid1_paf_temperatures:
     type: file_collection
     description: Per-antenna ASKAP PAF temperatures used for RACS mid1.
-    manifest: workflow/data-manifests/racs_mid1_paf_temperatures.yaml
+    manifest: ../data-manifests/racs_mid1_paf_temperatures.yaml
     source: Internal file

@@ -52,7 +52,7 @@ def _dataset_files(tmp_path: Path):
                     },
                     "paf": {
                         "type": "file_collection",
-                        "manifest": str(manifest),
+                        "manifest": manifest.name,
                     },
                 }
             }
@@ -78,9 +78,7 @@ def test_validate_racs_data_reports_verified_files(tmp_path):
     report = _validate(tmp_path)
 
     assert report["result"] == "valid"
-    assert report["datasets"]["catalogue"]["valid"] is True
     paf = report["datasets"]["paf"]
-    assert paf["valid"] is True
     assert paf["files"][0]["relative_path"] == "mid1/ak01.csv"
     assert paf["files"][0]["actual_sha256"] == paf["files"][0]["expected_sha256"]
 

@@ -69,7 +69,7 @@ def _minimal_racs_config_kwargs(**overrides):
         "mask_map": np.ones(hp.nside2npix(1), dtype=bool),
         "max_cluster_children_per_parent": 16,
         "openmeteo_fallback": False,
-        "paf_temperature_data_dir": "/home/oliver/Documents/dipole-utils/data/paf_temps",
+        "paf_temperature_data_dir": "/tmp/paf_temps",
     }
     kwargs.update(overrides)
     return kwargs
