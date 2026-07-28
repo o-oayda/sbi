@@ -40,6 +40,7 @@ def _inputs(tmp_path: Path) -> AnalysisInputs:
     values = {
         "samples_rnd-1.csv": "a,b\n1,2\n",
         "reference-observation.npz": "observation",
+        "reference-observation-native.npz": "native observation",
         "racs_example.yaml": yaml.safe_dump(
             {"experiment_id": "racs_example", "args": {"n_rounds": 2}}
         ),
@@ -61,6 +62,7 @@ def _inputs(tmp_path: Path) -> AnalysisInputs:
     return AnalysisInputs(
         final_posterior=source / "samples_rnd-1.csv",
         reference_observation=source / "reference-observation.npz",
+        native_reference_observation=source / "reference-observation-native.npz",
         experiment_config=source / "racs_example.yaml",
         observation_config=source / "observation_one.yaml",
         inference_config=source / "inference_one.yaml",

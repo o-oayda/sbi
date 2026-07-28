@@ -44,10 +44,13 @@ rule prepare_racs_observation:
         paf_temperature_files=PAF_TEMPERATURE_FILES,
     output:
         observation=OBSERVATION_PATH,
+        native_observation=NATIVE_OBSERVATION_PATH,
     params:
         output_dir=OBSERVATION_DIR,
         paf_temperature_dir=PAF_TEMPERATURE_DIR,
-        implementation_fingerprint=IMPLEMENTATION_FINGERPRINT,
+        preparation_implementation_fingerprint=(
+            PREPARATION_IMPLEMENTATION_FINGERPRINT
+        ),
         jax_platforms=EXECUTION["jax_platforms"],
     threads:
         EXECUTION["threads"]
@@ -64,6 +67,7 @@ rule prepare_racs_observation:
             --catalogue-path {input.catalogue:q} \
             --paf-temperature-data-dir {params.paf_temperature_dir:q} \
             --output {output.observation:q} \
+            --native-output {output.native_observation:q} \
             > {log:q} 2>&1
         """
 
@@ -87,7 +91,7 @@ rule infer_racs:
         output_dir=RESULT_DIR,
         paf_temperature_dir=PAF_TEMPERATURE_DIR,
         cli_args=command_line_arguments(INFERENCE_ARGS),
-        implementation_fingerprint=IMPLEMENTATION_FINGERPRINT,
+        inference_implementation_fingerprint=INFERENCE_IMPLEMENTATION_FINGERPRINT,
         jax_platforms=EXECUTION["jax_platforms"],
     threads:
         EXECUTION["threads"]
@@ -115,6 +119,9 @@ rule package_racs_analysis:
     input:
         final_posterior=rules.infer_racs.output.samples,
         reference_observation=rules.infer_racs.output.observation,
+        native_reference_observation=(
+            rules.prepare_racs_observation.output.native_observation
+        ),
         experiment_config=EXPERIMENT_CONFIG_PATH,
         observation_config=OBSERVATION_CONFIG_PATH,
         inference_config=INFERENCE_CONFIG_PATH,
@@ -145,6 +152,7 @@ rule package_racs_analysis:
             --implementation-fingerprint {params.implementation_fingerprint:q} \
             --final-posterior {input.final_posterior:q} \
             --reference-observation {input.reference_observation:q} \
+            --native-reference-observation {input.native_reference_observation:q} \
             --experiment-config {input.experiment_config:q} \
             --observation-config {input.observation_config:q} \
             --inference-config {input.inference_config:q} \

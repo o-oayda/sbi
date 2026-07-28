@@ -20,7 +20,12 @@ def prepare_reference_observation(
     observation_config: Mapping[str, Any],
     catalogue_path: str | Path,
     paf_temperature_data_dir: str | Path,
-) -> tuple[np.ndarray, np.ndarray]:
+    *,
+    include_native: bool = False,
+) -> (
+    tuple[np.ndarray, np.ndarray]
+    | tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+):
     """Construct the configured RACS reference data vector and mask."""
     args = observation_config["args"]
     catalogue_path = Path(catalogue_path).expanduser().resolve(strict=True)
@@ -52,7 +57,7 @@ def prepare_reference_observation(
     model.initialise_data()
 
     catalogue = load_catalogue(catalogue_path)
-    return build_real_sample(
+    prepared = build_real_sample(
         model,
         catalogue,
         args["flux_min"],
@@ -67,6 +72,25 @@ def prepare_reference_observation(
         flux_elevation_quantiles=tuple(args["flux_elevation_quantiles"]),
         save_map_plot=False,
     )
+    if not include_native:
+        return prepared
+
+    original_downscale_nside = model.downscale_nside
+    try:
+        model.downscale_nside = None
+        native = build_real_sample(
+            model,
+            catalogue,
+            args["flux_min"],
+            [],
+            local_source_crossmatch_radius_arcsec=(
+                args["local_source_crossmatch_radius_arcsec"]
+            ),
+            save_map_plot=False,
+        )
+    finally:
+        model.downscale_nside = original_downscale_nside
+    return *prepared, *native
 
 
 def save_reference_observation(
@@ -85,6 +109,19 @@ def save_reference_observation(
             "Reference data and mask must have identical shapes; "
             f"got {data.shape} and {data_mask.shape}."
         )
+
+    if output.is_file():
+        try:
+            with np.load(output, allow_pickle=False) as existing:
+                unchanged = (
+                    set(existing.files) == {"x0", "mask"}
+                    and np.array_equal(existing["x0"], data, equal_nan=True)
+                    and np.array_equal(existing["mask"], data_mask)
+                )
+        except (OSError, ValueError):
+            unchanged = False
+        if unchanged:
+            return output
 
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: Path | None = None
@@ -133,19 +170,34 @@ def construct_argparser() -> argparse.ArgumentParser:
         required=True,
         help="Output NPZ containing x0 and mask.",
     )
+    parser.add_argument(
+        "--native-output",
+        type=Path,
+        help="Optional native-resolution map-only NPZ containing x0 and mask.",
+    )
     return parser
 
 
 def main() -> None:
     cli_args = construct_argparser().parse_args()
     observation_config = load_observation_config(cli_args.config)
-    x0, mask = prepare_reference_observation(
+    prepared = prepare_reference_observation(
         observation_config,
         cli_args.catalogue_path,
         cli_args.paf_temperature_data_dir,
+        include_native=cli_args.native_output is not None,
     )
+    x0, mask = prepared[:2]
     output = save_reference_observation(cli_args.output, x0, mask)
     print(f"Saved reference observation: {output}")
+    if cli_args.native_output is not None:
+        native_x0, native_mask = prepared[2:]
+        native_output = save_reference_observation(
+            cli_args.native_output,
+            native_x0,
+            native_mask,
+        )
+        print(f"Saved native reference observation: {native_output}")
 
 
 if __name__ == "__main__":

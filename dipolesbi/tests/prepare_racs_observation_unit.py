@@ -126,6 +126,59 @@ def test_prepare_reference_observation_wires_config(tmp_path, monkeypatch):
     assert calls["real_sample"][4]["save_map_plot"] is False
 
 
+def test_prepare_reference_observation_can_include_native_map(tmp_path, monkeypatch):
+    catalogue_path = tmp_path / "catalogue.fits"
+    catalogue_path.touch()
+    paf_temperature_data_dir = tmp_path / "paf_temps"
+    paf_temperature_data_dir.mkdir()
+    calls = []
+
+    monkeypatch.setattr(
+        preparation,
+        "build_mask_from_observation_config",
+        lambda config: np.ones(12 * config["args"]["nside"] ** 2, dtype=bool),
+    )
+    monkeypatch.setattr(preparation, "RacsConfig", lambda **kwargs: object())
+
+    class FakeModel:
+        def __init__(self, config):
+            self.downscale_nside = 4
+
+        def initialise_data(self):
+            pass
+
+    monkeypatch.setattr(preparation, "RacsJax", FakeModel)
+    monkeypatch.setattr(preparation, "load_catalogue", lambda path: "catalogue")
+
+    def fake_build_real_sample(model, catalogue, flux_min, summaries, **kwargs):
+        calls.append((model.downscale_nside, summaries, kwargs))
+        size = 4 if model.downscale_nside == 4 else 12
+        return np.arange(size, dtype=np.float32), np.ones(size, dtype=bool)
+
+    monkeypatch.setattr(preparation, "build_real_sample", fake_build_real_sample)
+
+    prepared = preparation.prepare_reference_observation(
+        _observation_config(),
+        catalogue_path,
+        paf_temperature_data_dir,
+        include_native=True,
+    )
+
+    x0, mask, native_x0, native_mask = prepared
+    assert x0.shape == mask.shape == (4,)
+    assert native_x0.shape == native_mask.shape == (12,)
+    assert calls[0][0] == 4
+    assert calls[0][1] == ["log_dispersion", "flux_quantiles"]
+    assert calls[1] == (
+        None,
+        [],
+        {
+            "local_source_crossmatch_radius_arcsec": 5.0,
+            "save_map_plot": False,
+        },
+    )
+
+
 def test_save_reference_observation_round_trip(tmp_path):
     path = tmp_path / "nested" / "reference_observation.npz"
     x0 = np.array([1.0, np.nan, 3.0], dtype=np.float64)
@@ -143,6 +196,19 @@ def test_save_reference_observation_round_trip(tmp_path):
     loaded_x0, loaded_mask = load_reference_observation(path)
     np.testing.assert_array_equal(loaded_x0, x0.astype(np.float32))
     np.testing.assert_array_equal(loaded_mask, mask)
+
+
+def test_save_reference_observation_preserves_unchanged_file_mtime(tmp_path):
+    path = tmp_path / "reference_observation.npz"
+    x0 = np.array([1.0, np.nan, 3.0], dtype=np.float32)
+    mask = np.array([True, False, True])
+    preparation.save_reference_observation(path, x0, mask)
+    old_mtime_ns = 1_000_000_000
+    os.utime(path, ns=(old_mtime_ns, old_mtime_ns))
+
+    preparation.save_reference_observation(path, x0, mask)
+
+    assert path.stat().st_mtime_ns == old_mtime_ns
 
 
 def test_load_reference_observation_rejects_unexpected_keys(tmp_path):

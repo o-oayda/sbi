@@ -1,5 +1,6 @@
 """Load, validate, and derive values for one selected RACS experiment."""
 
+import hashlib
 import re
 import shlex
 from pathlib import Path
@@ -19,6 +20,39 @@ SITE_SCHEMA_PATH = "schemas/racs-site.schema.yaml"
 FILE_COLLECTION_SCHEMA_PATH = "schemas/racs-file-collection.schema.yaml"
 EXPERIMENT_CONFIG_DIR = Path("workflow/configs/experiments")
 DATASET_REGISTRY_PATH = Path("workflow/configs/datasets.yaml")
+PREPARATION_IMPLEMENTATION_PATHS = (
+    Path("dipolesbi/pipelines/prepare_racs_observation.py"),
+    Path("dipolesbi/pipelines/racs_observation_helpers.py"),
+    Path("dipolesbi/pipelines/summary_stats.py"),
+    Path("uv.lock"),
+)
+INFERENCE_IMPLEMENTATION_PATHS = (
+    Path("dipolesbi/pipelines/based_racs.py"),
+    Path("dipolesbi/pipelines/racs_observation_helpers.py"),
+    Path("dipolesbi/pipelines/summary_stats.py"),
+    Path("dipolesbi/tools"),
+    Path("uv.lock"),
+)
+
+
+def content_fingerprint(paths):
+    """Fingerprint live contents of explicitly scoped files and Python trees."""
+    files = set()
+    for path in map(Path, paths):
+        if path.is_dir():
+            files.update(path.rglob("*.py"))
+        elif path.is_file():
+            files.add(path)
+        else:
+            raise WorkflowError(f"Fingerprint input does not exist: {path}")
+
+    digest = hashlib.sha256()
+    for path in sorted(files):
+        digest.update(path.as_posix().encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def load_and_validate_yaml(path, schema_path, description):
@@ -255,11 +289,18 @@ EXPERIMENT_ARGS = EXPERIMENT["args"]
 OBSERVATION_ARGS = OBSERVATION["args"]
 INFERENCE_ARGS = merge_distinct_arguments(OBSERVATION_ARGS, EXPERIMENT_ARGS)
 IMPLEMENTATION_FINGERPRINT = implementation_fingerprint(Path.cwd())
+PREPARATION_IMPLEMENTATION_FINGERPRINT = content_fingerprint(
+    PREPARATION_IMPLEMENTATION_PATHS
+)
+INFERENCE_IMPLEMENTATION_FINGERPRINT = content_fingerprint(
+    INFERENCE_IMPLEMENTATION_PATHS
+)
 
 FINAL_ROUND = EXPERIMENT_ARGS["n_rounds"] - 1
 RESULT_DIR = f"results/{EXPERIMENT_ID}"
 OBSERVATION_DIR = f"derived/observations/{OBSERVATION_ID}"
 OBSERVATION_PATH = f"{OBSERVATION_DIR}/reference_observation.npz"
+NATIVE_OBSERVATION_PATH = f"{OBSERVATION_DIR}/reference_observation_native.npz"
 DATA_VALIDATION_DIR = (
     f"derived/data-validation/{CATALOGUE_DATASET_ID}--"
     f"{PAF_TEMPERATURE_DATASET_ID}"
