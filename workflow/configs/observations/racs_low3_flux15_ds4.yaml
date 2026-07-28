@@ -1,0 +1,42 @@
+observation_id: racs_low3_flux15_ds4
+
+datasets:
+  catalogue: racs_low3_catalogue
+  paf_temperatures: racs_low3_paf_temperatures
+
+args:
+  racs_epoch: low3
+
+  flux_min: 15.0
+  flux_temperature_min_mjy: 5.0
+  fractional_error_flux_min_mjy: 10.0
+  local_source_crossmatch_radius_arcsec: 5.0
+
+  nside: 64
+  downscale_nside: 4
+
+  # The current JAX implementation uses histogram-based flux summaries,
+  # so this can affect the resulting observation
+  use_jax: true
+  chunk_size: 140_000
+
+  openmeteo_fallback: false
+
+  summary_features:
+    - log_dispersion
+    - flux_quantiles
+
+  flux_temperature_n_bins: 10
+  flux_temperature_quantiles: [0.10, 0.25, 0.50, 0.75, 0.90]
+  flux_elevation_n_bins: 10
+  flux_elevation_quantiles: [0.10, 0.25, 0.50, 0.75, 0.90]
+
+# Sky mask applied when constructing the reusable observation.
+mask:
+  galactic_plane_width_deg: 5
+  north_equatorial_pole_radius_deg: 42
+  default_a_team_radius_deg: 2
+  source_radii_deg:
+    Cygnus A: 3
+    LMC: 13
+    SMC: 8

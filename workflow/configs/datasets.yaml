@@ -10,3 +10,15 @@ datasets:
     description: Per-antenna ASKAP PAF temperatures used for RACS mid1.
     manifest: ../data-manifests/racs_mid1_paf_temperatures.yaml
     source: Internal file
+
+  racs_low3_catalogue:
+    type: file
+    description: RACS low3 source catalogue used for the reference observation.
+    sha256: 7fa137fd34e4b0ba28741dbc2a01dfbb9d98da57ddf65dc1a37a190e421308f1
+    source: Internal file
+
+  racs_low3_paf_temperatures:
+    type: file_collection
+    description: Per-antenna ASKAP PAF temperatures used for RACS low3.
+    manifest: ../data-manifests/racs_low3_paf_temperatures.yaml
+    source: Internal file
