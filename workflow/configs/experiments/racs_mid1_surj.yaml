@@ -1,0 +1,55 @@
+experiment_id: racs_mid1_surj
+
+observation_config: workflow/configs/observations/racs_mid1_flux15_ds4.yaml
+inference_config: workflow/configs/inference/nle_surjmaf_zscore.yaml
+
+execution:
+  jax_platforms: cuda
+  threads: 1
+  mem_mb: 64000
+
+args:
+  n_simulations: 100_000
+  n_rounds: 20
+  n_workers: null
+  jax_batch_size: 5
+  ssnle_seed: 0
+  no_ui: true
+
+  # Assumed population spectral index distribution
+  alpha_mean: 0.8
+  alpha_sigma: 0.2
+
+  temperature_model: hot_linear
+
+  simulate_clustering: poisson
+  max_children: 5
+  add_extra_error: false
+  add_elevation_model: false
+
+  # Active prior bounds for this experiment
+  log10_n_initial_samples_min: 5.6
+  log10_n_initial_samples_max: 6.8
+  observer_speed_min: 0.0
+  observer_speed_max: 12.0
+  dipole_longitude_min: 0.0
+  dipole_longitude_max: 360.0
+  dipole_latitude_min: -90.0
+  dipole_latitude_max: 90.0
+  temp_beta_min: 0.0
+  temp_beta_max: 0.05
+  lambda_clus_min: 0.0
+  lambda_clus_max: 3.0
+
+  # These are inactive by default but become active depending on the above
+  # choices
+  elevation_trough_min: 0.0
+  elevation_trough_max: 90.0
+  elevation_amp_min: 0.0
+  elevation_amp_max: 0.2
+  p_clus_min: 0.0
+  p_clus_max: 1.0
+  clus_stop_prob_min: 0.4
+  clus_stop_prob_max: 1.0
+  eta_min: 0.0
+  eta_max: 8.0
