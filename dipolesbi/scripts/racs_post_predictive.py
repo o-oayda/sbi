@@ -173,7 +173,7 @@ SURVEY_FREQUENCY_MHZ = {
     'low3': 943.5,
     'mid1': 1367.5,
 }
-root = Path.home() / 'Documents' / 'sbi' / RESULTS_DICT[SURVEY][MODEL]
+root = Path.home() / 'Documents' / 'sbi' / 'archive' / RESULTS_DICT[SURVEY][MODEL]
 
 DEFAULT_FLUX_TEMPERATURE_N_BINS = 10
 DEFAULT_FLUX_TEMPERATURE_QUANTILES = (0.10, 0.25, 0.50, 0.75, 0.90)

@@ -8,6 +8,49 @@ required:
   - mask
 additionalProperties: false
 
+allOf:
+  - if:
+      properties:
+        args:
+          required: [racs_epoch]
+          properties:
+            racs_epoch:
+              enum: [low3, mid1]
+    then:
+      properties:
+        datasets:
+          required: [paf_temperatures]
+  - if:
+      properties:
+        args:
+          required: [temperature_fallback]
+          properties:
+            temperature_fallback:
+              enum: [none, reference]
+    then:
+      properties:
+        datasets:
+          required: [paf_temperatures]
+  - if:
+      properties:
+        args:
+          required: [temperature_fallback]
+          properties:
+            temperature_fallback: {const: reference}
+    then:
+      properties:
+        args:
+          required:
+            - paf_reference_temp_c
+            - max_reference_fallback_tiles
+    else:
+      properties:
+        args:
+          not:
+            anyOf:
+              - required: [paf_reference_temp_c]
+              - required: [max_reference_fallback_tiles]
+
 properties:
   observation_id:
     type: string
@@ -15,7 +58,7 @@ properties:
 
   datasets:
     type: object
-    required: [catalogue, paf_temperatures]
+    required: [catalogue]
     additionalProperties: false
     properties:
       catalogue:
@@ -36,7 +79,7 @@ properties:
       - downscale_nside
       - use_jax
       - chunk_size
-      - openmeteo_fallback
+      - temperature_fallback
       - summary_features
       - flux_temperature_n_bins
       - flux_temperature_quantiles
@@ -46,7 +89,7 @@ properties:
 
     properties:
       racs_epoch:
-        enum: [low3, mid1]
+        enum: [low2, low3, mid1]
 
       flux_min:
         type: number
@@ -79,8 +122,15 @@ properties:
         type: integer
         minimum: 1
 
-      openmeteo_fallback:
-        type: boolean
+      temperature_fallback:
+        enum: [none, open_meteo, reference]
+
+      paf_reference_temp_c:
+        type: number
+
+      max_reference_fallback_tiles:
+        type: integer
+        minimum: 1
 
       summary_features:
         type: array
@@ -123,7 +173,6 @@ properties:
       - galactic_plane_width_deg
       - north_equatorial_pole_radius_deg
       - default_a_team_radius_deg
-      - source_radii_deg
     additionalProperties: false
 
     properties:
@@ -144,10 +193,6 @@ properties:
 
       source_radii_deg:
         type: object
-        required:
-          - Cygnus A
-          - LMC
-          - SMC
         additionalProperties: false
         properties:
           Cygnus A:

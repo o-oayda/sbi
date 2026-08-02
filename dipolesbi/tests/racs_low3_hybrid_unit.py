@@ -12,6 +12,7 @@ from astropy.table import Table
 from catsim import RACS_PRODUCTS
 from dipoleutils.utils.samples import CatalogueToMap
 
+import dipolesbi.pipelines.racs_observation_helpers as observation_helpers
 from dipolesbi.pipelines.based_racs import (
     DEFAULT_FLUX_ELEVATION_QUANTILES,
     DEFAULT_FLUX_TEMPERATURE_QUANTILES,
@@ -68,7 +69,7 @@ def _minimal_racs_config_kwargs(**overrides):
         "fractional_error_flux_min_mjy": 10.0,
         "mask_map": np.ones(hp.nside2npix(1), dtype=bool),
         "max_cluster_children_per_parent": 16,
-        "openmeteo_fallback": False,
+        "temperature_fallback": "none",
         "paf_temperature_data_dir": "/tmp/paf_temps",
     }
     kwargs.update(overrides)
@@ -87,6 +88,31 @@ def test_build_mask_explicit_settings_match_defaults():
 
     np.testing.assert_array_equal(default, explicit)
     assert default.shape == (hp.nside2npix(8),)
+
+
+def test_build_mask_config_allows_no_source_specific_radii(monkeypatch):
+    calls = {}
+    expected = np.ones(hp.nside2npix(8), dtype=bool)
+
+    def fake_build_mask(nside, **kwargs):
+        calls["nside"] = nside
+        calls.update(kwargs)
+        return expected
+
+    monkeypatch.setattr(observation_helpers, "build_mask", fake_build_mask)
+    config = {
+        "args": {"nside": 8},
+        "mask": {
+            "galactic_plane_width_deg": 5,
+            "north_equatorial_pole_radius_deg": 44,
+            "default_a_team_radius_deg": 2,
+        },
+    }
+
+    actual = observation_helpers.build_mask_from_observation_config(config)
+
+    assert actual is expected
+    assert calls["source_radii_deg"] == {}
 
 
 def test_load_catalogue_reads_explicit_path(tmp_path):
@@ -181,9 +207,33 @@ def test_build_racs_config_selects_mid1_product():
 
 
 def test_build_racs_config_enables_openmeteo_fallback():
-    config = build_racs_config(**_minimal_racs_config_kwargs(openmeteo_fallback=True))
+    config = build_racs_config(
+        **_minimal_racs_config_kwargs(temperature_fallback="open_meteo")
+    )
 
     assert config.temperature_fallback == "open_meteo"
+
+
+def test_build_racs_config_wires_explicit_reference_fallback(monkeypatch):
+    calls = {}
+
+    class FakeRacsConfig:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+    monkeypatch.setattr("dipolesbi.pipelines.based_racs.RacsConfig", FakeRacsConfig)
+
+    build_racs_config(
+        **_minimal_racs_config_kwargs(
+            temperature_fallback="reference",
+            paf_reference_temp_c=25.0,
+            max_reference_fallback_tiles=1,
+        )
+    )
+
+    assert calls["temperature_fallback"] == "reference"
+    assert calls["paf_reference_temp_c"] == 25.0
+    assert calls["max_reference_fallback_tiles"] == 1
 
 
 def test_build_racs_config_accepts_paf_temperature_data_dir():

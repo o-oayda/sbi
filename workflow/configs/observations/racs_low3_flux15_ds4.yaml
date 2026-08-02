@@ -20,7 +20,7 @@ args:
   use_jax: true
   chunk_size: 140_000
 
-  openmeteo_fallback: false
+  temperature_fallback: none
 
   summary_features:
     - log_dispersion

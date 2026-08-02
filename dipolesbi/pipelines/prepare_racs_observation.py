@@ -19,7 +19,7 @@ from dipolesbi.pipelines.racs_observation_helpers import (
 def prepare_reference_observation(
     observation_config: Mapping[str, Any],
     catalogue_path: str | Path,
-    paf_temperature_data_dir: str | Path,
+    paf_temperature_data_dir: str | Path | None,
     *,
     include_native: bool = False,
 ) -> (
@@ -28,14 +28,53 @@ def prepare_reference_observation(
 ):
     """Construct the configured RACS reference data vector and mask."""
     args = observation_config["args"]
+    if args["temperature_fallback"] == "reference":
+        reference_temp = args.get("paf_reference_temp_c")
+        max_reference_tiles = args.get("max_reference_fallback_tiles")
+        if reference_temp is None or not np.isfinite(reference_temp):
+            raise ValueError(
+                "Reference fallback requires an explicitly configured finite "
+                "paf_reference_temp_c."
+            )
+        if max_reference_tiles is None or max_reference_tiles <= 0:
+            raise ValueError(
+                "Reference fallback requires an explicitly configured positive "
+                "max_reference_fallback_tiles."
+            )
+    elif (
+        "paf_reference_temp_c" in args
+        or "max_reference_fallback_tiles" in args
+    ):
+        raise ValueError(
+            "Reference fallback settings may only be configured when "
+            "temperature_fallback is 'reference'."
+        )
+    if paf_temperature_data_dir is None and not (
+        args["racs_epoch"] == "low2"
+        and args["temperature_fallback"] == "open_meteo"
+    ):
+        raise ValueError(
+            "A PAF temperature directory may only be omitted for LOW2 when "
+            "Open-Meteo fallback is selected."
+        )
     catalogue_path = Path(catalogue_path).expanduser().resolve(strict=True)
-    paf_temperature_data_dir = (
-        Path(paf_temperature_data_dir).expanduser().resolve(strict=True)
+    resolved_paf_temperature_data_dir = (
+        None
+        if paf_temperature_data_dir is None
+        else Path(paf_temperature_data_dir).expanduser().resolve(strict=True)
     )
 
     mask = build_mask_from_observation_config(observation_config)
 
     use_jax = bool(args["use_jax"])
+    fallback_config = {}
+    if args["temperature_fallback"] == "reference":
+        fallback_config = {
+            "paf_reference_temp_c": args["paf_reference_temp_c"],
+            "max_reference_fallback_tiles": args[
+                "max_reference_fallback_tiles"
+            ],
+        }
     model_config = RacsConfig(
         product=args["racs_epoch"],
         catalogue_path=str(catalogue_path),
@@ -47,11 +86,14 @@ def prepare_reference_observation(
         store_final_samples=not use_jax,
         fractional_error_flux_min_mjy=args["fractional_error_flux_min_mjy"],
         flux_temperature_min_mjy=args["flux_temperature_min_mjy"],
-        paf_temperature_data_dir=str(paf_temperature_data_dir),
-        temperature_fallback=(
-            "open_meteo" if args["openmeteo_fallback"] else "none"
+        paf_temperature_data_dir=(
+            None
+            if resolved_paf_temperature_data_dir is None
+            else str(resolved_paf_temperature_data_dir)
         ),
+        temperature_fallback=args["temperature_fallback"],
         mask_map=mask,
+        **fallback_config,
     )
     model = RacsJax(model_config) if use_jax else Racs(model_config)
     model.initialise_data()
@@ -161,8 +203,10 @@ def construct_argparser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--paf-temperature-data-dir",
         type=Path,
-        required=True,
-        help="Resolved root of the PAF temperature collection.",
+        help=(
+            "Resolved root of the PAF temperature collection. May be omitted "
+            "for LOW2 when the observation selects Open-Meteo fallback."
+        ),
     )
     parser.add_argument(
         "--output",

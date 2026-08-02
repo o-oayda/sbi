@@ -340,7 +340,7 @@ wheels = [
 [[package]]
 name = "catsim"
 version = "0.1.0"
-source = { git = "https://github.com/o-oayda/catsim.git?rev=v0.1.0#89f81c05cbe2d897f8888f665296270cf20cbf68" }
+source = { git = "https://github.com/o-oayda/catsim.git?rev=paf-fallback#ffd9b2f6287d811f51fde0be89b5eb1b3ac4f735" }
 dependencies = [
     { name = "astropy" },
     { name = "dill" },
@@ -701,7 +701,7 @@ requires-dist = [
     { name = "anesthetic", specifier = "<=2.10.3" },
     { name = "astropy", specifier = ">=7.0.2,<8.0.0" },
     { name = "blackjax", git = "https://github.com/handley-lab/blackjax?rev=95e93ed93e726b95143b2f4a9582888621625f52" },
-    { name = "catsim", git = "https://github.com/o-oayda/catsim.git?rev=v0.1.0" },
+    { name = "catsim", git = "https://github.com/o-oayda/catsim.git?rev=paf-fallback" },
     { name = "corner", specifier = ">=2.2.3,<3.0.0" },
     { name = "dill", specifier = ">=0.4.0,<0.5.0" },
     { name = "dipole-utils", git = "https://github.com/o-oayda/dipole-utils.git?rev=main" },

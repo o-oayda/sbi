@@ -127,6 +127,24 @@ def test_manifest_roles_sizes_and_hashes_match_extracted_files(tmp_path):
     assert filename == archive.name
 
 
+def test_package_accepts_missing_paf_manifest(tmp_path):
+    repository = _repository(tmp_path)
+    inputs = _inputs(tmp_path)
+    inputs = AnalysisInputs(**{**inputs.__dict__, "paf_manifest": None})
+
+    archive, _ = package_racs_analysis(
+        experiment_id="racs_example",
+        inputs=inputs,
+        artifacts_root=tmp_path / "artifacts",
+        repository_root=repository,
+    )
+    manifest = verify_analysis_archive(archive)
+
+    assert {entry["role"] for entry in manifest["files"]} == (
+        set(packaging._ARCHIVE_PATHS) - {"paf_manifest"}
+    )
+
+
 def test_missing_input_is_rejected(tmp_path):
     repository = _repository(tmp_path)
     inputs = _inputs(tmp_path)

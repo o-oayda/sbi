@@ -10,15 +10,17 @@ rule validate_racs_data:
     input:
         dataset_registry=DATASET_REGISTRY_PATH,
         catalogue=CATALOGUE_PATH,
-        paf_temperature_manifest=PAF_TEMPERATURE_MANIFEST_PATH,
+        paf_temperature_manifest=(
+            () if PAF_TEMPERATURE_MANIFEST_PATH is None
+            else PAF_TEMPERATURE_MANIFEST_PATH
+        ),
         paf_temperature_files=PAF_TEMPERATURE_VALIDATION_FILES,
     output:
         report=DATA_VALIDATION_PATH,
     params:
         output_dir=DATA_VALIDATION_DIR,
         catalogue_id=CATALOGUE_DATASET_ID,
-        paf_temperature_id=PAF_TEMPERATURE_DATASET_ID,
-        paf_temperature_dir=PAF_TEMPERATURE_DIR,
+        paf_cli_args=PAF_VALIDATION_CLI_ARGS,
     log:
         f"{DATA_VALIDATION_DIR}/validation.log"
     shell:
@@ -28,9 +30,7 @@ rule validate_racs_data:
             --registry {input.dataset_registry:q} \
             --catalogue-id {params.catalogue_id:q} \
             --catalogue-path {input.catalogue:q} \
-            --paf-id {params.paf_temperature_id:q} \
-            --paf-root {params.paf_temperature_dir:q} \
-            --paf-manifest {input.paf_temperature_manifest:q} \
+            {params.paf_cli_args} \
             --output {output.report:q} \
             > {log:q} 2>&1
         """
@@ -47,7 +47,7 @@ rule prepare_racs_observation:
         native_observation=NATIVE_OBSERVATION_PATH,
     params:
         output_dir=OBSERVATION_DIR,
-        paf_temperature_dir=PAF_TEMPERATURE_DIR,
+        paf_cli_args=PAF_PREPARATION_CLI_ARGS,
         preparation_implementation_fingerprint=(
             PREPARATION_IMPLEMENTATION_FINGERPRINT
         ),
@@ -65,7 +65,7 @@ rule prepare_racs_observation:
             dipolesbi-prepare-racs-observation \
             --config {input.config:q} \
             --catalogue-path {input.catalogue:q} \
-            --paf-temperature-data-dir {params.paf_temperature_dir:q} \
+            {params.paf_cli_args} \
             --output {output.observation:q} \
             --native-output {output.native_observation:q} \
             > {log:q} 2>&1
@@ -89,7 +89,7 @@ rule infer_racs:
         run_command=RUN_COMMAND_PATH,
     params:
         output_dir=RESULT_DIR,
-        paf_temperature_dir=PAF_TEMPERATURE_DIR,
+        paf_cli_args=PAF_INFERENCE_CLI_ARGS,
         cli_args=command_line_arguments(INFERENCE_ARGS),
         inference_implementation_fingerprint=INFERENCE_IMPLEMENTATION_FINGERPRINT,
         jax_platforms=EXECUTION["jax_platforms"],
@@ -106,7 +106,7 @@ rule infer_racs:
             dipolesbi-infer-racs \
             {params.cli_args} \
             --catalogue_path {input.catalogue:q} \
-            --paf_temperature_data_dir {params.paf_temperature_dir:q} \
+            {params.paf_cli_args} \
             --observation_config {input.observation_config:q} \
             --inference_config {input.inference_config:q} \
             --reference_observation {input.prepared_observation:q} \
@@ -127,7 +127,10 @@ rule package_racs_analysis:
         inference_config=INFERENCE_CONFIG_PATH,
         data_validation=rules.validate_racs_data.output.report,
         dataset_registry=DATASET_REGISTRY_PATH,
-        paf_manifest=PAF_TEMPERATURE_MANIFEST_PATH,
+        paf_manifest=(
+            () if PAF_TEMPERATURE_MANIFEST_PATH is None
+            else PAF_TEMPERATURE_MANIFEST_PATH
+        ),
         model_config=rules.infer_racs.output.model_config,
         configs=rules.infer_racs.output.configs,
         run_command=rules.infer_racs.output.run_command,
@@ -140,6 +143,7 @@ rule package_racs_analysis:
         artifacts_root="artifacts",
         experiment_id=EXPERIMENT_ID,
         implementation_fingerprint=IMPLEMENTATION_FINGERPRINT,
+        paf_cli_args=PAF_PACKAGING_CLI_ARGS,
     log:
         f"{ARTIFACT_DIR}/packaging.log"
     shell:
@@ -158,11 +162,12 @@ rule package_racs_analysis:
             --inference-config {input.inference_config:q} \
             --data-validation-report {input.data_validation:q} \
             --dataset-registry {input.dataset_registry:q} \
-            --paf-manifest {input.paf_manifest:q} \
+            {params.paf_cli_args} \
             --model-config {input.model_config:q} \
             --configs {input.configs:q} \
             --run-command {input.run_command:q} \
             --pyproject {input.project:q} \
             --uv-lock {input.software_lock:q} \
+            --allow-dirty
             > {log:q} 2>&1
         """

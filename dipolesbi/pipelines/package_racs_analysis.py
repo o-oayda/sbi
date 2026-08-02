@@ -38,7 +38,7 @@ class AnalysisInputs:
     inference_config: Path
     data_validation_report: Path
     dataset_registry: Path
-    paf_manifest: Path
+    paf_manifest: Path | None
     model_config: Path
     configs: Path
     run_command: Path
@@ -62,6 +62,8 @@ _ARCHIVE_PATHS = {
     "pyproject": "software/pyproject.toml",
     "uv_lock": "software/uv.lock",
 }
+_OPTIONAL_ARCHIVE_ROLES = {"paf_manifest"}
+_REQUIRED_ARCHIVE_ROLES = set(_ARCHIVE_PATHS) - _OPTIONAL_ARCHIVE_ROLES
 
 
 def sha256(path: Path) -> str:
@@ -132,7 +134,10 @@ def _validated_inputs(experiment_id: str, inputs: AnalysisInputs) -> dict[str, P
 
     paths: dict[str, Path] = {}
     for field in fields(inputs):
-        path = Path(getattr(inputs, field.name)).expanduser().resolve(strict=True)
+        value = getattr(inputs, field.name)
+        if value is None and field.name in _OPTIONAL_ARCHIVE_ROLES:
+            continue
+        path = Path(value).expanduser().resolve(strict=True)
         if not path.is_file():
             raise AnalysisPackagingError(f"Analysis input is not a file: {path}")
         paths[field.name] = path
@@ -263,9 +268,15 @@ def verify_analysis_archive(
                 if actual != entry.get("sha256"):
                     raise AnalysisPackagingError(f"Checksum mismatch for {name}.")
 
-            if roles != set(_ARCHIVE_PATHS):
-                missing = ", ".join(sorted(set(_ARCHIVE_PATHS) - roles))
+            if not _REQUIRED_ARCHIVE_ROLES.issubset(roles):
+                missing = ", ".join(sorted(_REQUIRED_ARCHIVE_ROLES - roles))
                 raise AnalysisPackagingError(f"Artifact manifest is missing roles: {missing}")
+            unexpected_roles = roles - set(_ARCHIVE_PATHS)
+            if unexpected_roles:
+                unexpected = ", ".join(sorted(unexpected_roles))
+                raise AnalysisPackagingError(
+                    f"Artifact manifest contains unexpected roles: {unexpected}"
+                )
             if set(names) != declared | {"artifact-manifest.yaml"}:
                 raise AnalysisPackagingError("Archive contains undeclared files.")
     except (OSError, zipfile.BadZipFile, yaml.YAMLError) as error:
@@ -372,7 +383,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-dirty", action="store_true")
     for field in fields(AnalysisInputs):
         parser.add_argument(
-            "--" + field.name.replace("_", "-"), type=Path, required=True
+            "--" + field.name.replace("_", "-"),
+            type=Path,
+            required=field.name not in _OPTIONAL_ARCHIVE_ROLES,
         )
     return parser
 

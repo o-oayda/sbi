@@ -193,15 +193,34 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
         ),
     )
     parser.add_argument(
-        "--openmeteo_fallback",
-        action="store_true",
-        help="Use Open-Meteo ambient temperatures when PAF temperatures are unavailable.",
+        "--temperature_fallback",
+        choices=("none", "open_meteo", "reference"),
+        default="none",
+        help="Strategy used when one or more PAF temperatures are unavailable.",
+    )
+    parser.add_argument(
+        "--paf_reference_temp_c",
+        type=float,
+        help=(
+            "Explicit reference temperature used by --temperature_fallback "
+            "reference."
+        ),
+    )
+    parser.add_argument(
+        "--max_reference_fallback_tiles",
+        type=int,
+        help=(
+            "Maximum number of missing tiles that may use the explicit "
+            "reference temperature."
+        ),
     )
     parser.add_argument(
         "--paf_temperature_data_dir",
         type=str,
-        required=True,
-        help="Directory containing PAF temperature data.",
+        help=(
+            "Directory containing PAF temperature data. May be omitted for "
+            "LOW2 when --temperature_fallback open_meteo is selected."
+        ),
     )
     parser.add_argument(
         "--temperature_model",
@@ -321,6 +340,37 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
 def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> list[str]:
     if args.chunk_size is None:
         args.chunk_size = 140_000 if args.use_jax else 2_500_000
+    if args.paf_temperature_data_dir is None and not (
+        args.racs_epoch == "low2" and args.temperature_fallback == "open_meteo"
+    ):
+        parser.error(
+            "--paf_temperature_data_dir may only be omitted for LOW2 when "
+            "--temperature_fallback open_meteo is selected."
+        )
+    if args.temperature_fallback == "reference":
+        if args.paf_reference_temp_c is None or not np.isfinite(
+            args.paf_reference_temp_c
+        ):
+            parser.error(
+                "--paf_reference_temp_c must be explicitly set to a finite "
+                "value for reference fallback."
+            )
+        if (
+            args.max_reference_fallback_tiles is None
+            or args.max_reference_fallback_tiles <= 0
+        ):
+            parser.error(
+                "--max_reference_fallback_tiles must be explicitly set to a "
+                "positive integer for reference fallback."
+            )
+    elif (
+        args.paf_reference_temp_c is not None
+        or args.max_reference_fallback_tiles is not None
+    ):
+        parser.error(
+            "--paf_reference_temp_c and --max_reference_fallback_tiles may only "
+            "be used with --temperature_fallback reference."
+        )
     if args.use_jax and args.n_workers is not None:
         parser.error("--n_workers is only used by the NumPy simulator.")
     if args.use_jax and args.jax_batch_size <= 0:
@@ -432,13 +482,44 @@ def build_racs_config(
     alpha_mean: float,
     alpha_sigma: float,
     fractional_error_flux_min_mjy: float,
-    paf_temperature_data_dir: str,
+    paf_temperature_data_dir: str | None,
     flux_temperature_min_mjy: float | None = None,
     temperature_model: str = "hot_linear",
     mask_map: np.ndarray | None = None,
     max_cluster_children_per_parent: int = 16,
-    openmeteo_fallback: bool = False,
+    temperature_fallback: str = "none",
+    paf_reference_temp_c: float | None = None,
+    max_reference_fallback_tiles: int | None = None,
 ) -> RacsConfig:
+    if temperature_fallback not in {"none", "open_meteo", "reference"}:
+        raise ValueError(f"Unknown temperature fallback: {temperature_fallback}")
+    if temperature_fallback == "reference":
+        if paf_reference_temp_c is None or not np.isfinite(paf_reference_temp_c):
+            raise ValueError(
+                "Reference fallback requires a finite paf_reference_temp_c."
+            )
+        if (
+            max_reference_fallback_tiles is None
+            or max_reference_fallback_tiles <= 0
+        ):
+            raise ValueError(
+                "Reference fallback requires a positive "
+                "max_reference_fallback_tiles."
+            )
+    elif (
+        paf_reference_temp_c is not None
+        or max_reference_fallback_tiles is not None
+    ):
+        raise ValueError(
+            "Reference fallback settings may only be used when "
+            "temperature_fallback='reference'."
+        )
+    fallback_config = {}
+    if temperature_fallback == "reference":
+        fallback_config = {
+            "paf_reference_temp_c": paf_reference_temp_c,
+            "max_reference_fallback_tiles": max_reference_fallback_tiles,
+        }
     return RacsConfig(
         product=racs_epoch,
         catalogue_path=str(Path(catalogue_path).expanduser()),
@@ -455,9 +536,10 @@ def build_racs_config(
         flux_temperature_min_mjy=flux_temperature_min_mjy,
         temperature_model=temperature_model,
         paf_temperature_data_dir=paf_temperature_data_dir,
-        temperature_fallback="open_meteo" if openmeteo_fallback else "none",
+        temperature_fallback=temperature_fallback,
         mask_map=mask_map,
         max_cluster_children_per_parent=max_cluster_children_per_parent,
+        **fallback_config,
     )
 
 
@@ -1036,7 +1118,9 @@ def main() -> None:
         fractional_error_flux_min_mjy=args.fractional_error_flux_min_mjy,
         flux_temperature_min_mjy=args.flux_temperature_min_mjy,
         temperature_model=args.temperature_model,
-        openmeteo_fallback=args.openmeteo_fallback,
+        temperature_fallback=args.temperature_fallback,
+        paf_reference_temp_c=args.paf_reference_temp_c,
+        max_reference_fallback_tiles=args.max_reference_fallback_tiles,
         mask_map=mask,
         max_cluster_children_per_parent=args.max_children,
         paf_temperature_data_dir=args.paf_temperature_data_dir,

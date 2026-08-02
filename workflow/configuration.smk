@@ -1,6 +1,7 @@
 """Load, validate, and derive values for one selected RACS experiment."""
 
 import hashlib
+import math
 import re
 import shlex
 from pathlib import Path
@@ -245,6 +246,14 @@ OBSERVATION = load_and_validate_yaml(
     OBSERVATION_SCHEMA_PATH,
     "Observation",
 )
+if (
+    OBSERVATION["args"]["temperature_fallback"] == "reference"
+    and not math.isfinite(OBSERVATION["args"]["paf_reference_temp_c"])
+):
+    raise WorkflowError(
+        "Reference temperature fallback requires a finite "
+        "'paf_reference_temp_c'."
+    )
 if OBSERVATION["observation_id"] != OBSERVATION_CONFIG_PATH.stem:
     raise WorkflowError(
         f"Observation config '{OBSERVATION_CONFIG_PATH}' declares observation_id "
@@ -256,17 +265,48 @@ CATALOGUE_PATH = resolve_file_dataset(
     DATASET_REGISTRY,
     SITE_CONFIG,
 )
-PAF_TEMPERATURE_DATASET_ID = OBSERVATION["datasets"]["paf_temperatures"]
-(
-    PAF_TEMPERATURE_DIR,
-    PAF_TEMPERATURE_FILES,
-    PAF_TEMPERATURE_VALIDATION_FILES,
-    PAF_TEMPERATURE_MANIFEST_PATH,
-) = resolve_file_collection_dataset(
-    PAF_TEMPERATURE_DATASET_ID,
-    DATASET_REGISTRY,
-    SITE_CONFIG,
-)
+PAF_TEMPERATURE_DATASET_ID = OBSERVATION["datasets"].get("paf_temperatures")
+if PAF_TEMPERATURE_DATASET_ID is None:
+    PAF_TEMPERATURE_DIR = None
+    PAF_TEMPERATURE_FILES = ()
+    PAF_TEMPERATURE_VALIDATION_FILES = ()
+    PAF_TEMPERATURE_MANIFEST_PATH = None
+    PAF_VALIDATION_CLI_ARGS = ""
+    PAF_PREPARATION_CLI_ARGS = ""
+    PAF_INFERENCE_CLI_ARGS = ""
+    PAF_PACKAGING_CLI_ARGS = ""
+else:
+    (
+        PAF_TEMPERATURE_DIR,
+        PAF_TEMPERATURE_FILES,
+        PAF_TEMPERATURE_VALIDATION_FILES,
+        PAF_TEMPERATURE_MANIFEST_PATH,
+    ) = resolve_file_collection_dataset(
+        PAF_TEMPERATURE_DATASET_ID,
+        DATASET_REGISTRY,
+        SITE_CONFIG,
+    )
+    PAF_VALIDATION_CLI_ARGS = " ".join(
+        (
+            "--paf-id",
+            shlex.quote(PAF_TEMPERATURE_DATASET_ID),
+            "--paf-root",
+            shlex.quote(str(PAF_TEMPERATURE_DIR)),
+            "--paf-manifest",
+            shlex.quote(str(PAF_TEMPERATURE_MANIFEST_PATH)),
+        )
+    )
+    PAF_PREPARATION_CLI_ARGS = (
+        "--paf-temperature-data-dir "
+        + shlex.quote(str(PAF_TEMPERATURE_DIR))
+    )
+    PAF_INFERENCE_CLI_ARGS = (
+        "--paf_temperature_data_dir "
+        + shlex.quote(str(PAF_TEMPERATURE_DIR))
+    )
+    PAF_PACKAGING_CLI_ARGS = (
+        "--paf-manifest " + shlex.quote(str(PAF_TEMPERATURE_MANIFEST_PATH))
+    )
 
 INFERENCE_CONFIG_PATH = Path(EXPERIMENT["inference_config"])
 INFERENCE = load_and_validate_yaml(
@@ -303,7 +343,7 @@ OBSERVATION_PATH = f"{OBSERVATION_DIR}/reference_observation.npz"
 NATIVE_OBSERVATION_PATH = f"{OBSERVATION_DIR}/reference_observation_native.npz"
 DATA_VALIDATION_DIR = (
     f"derived/data-validation/{CATALOGUE_DATASET_ID}--"
-    f"{PAF_TEMPERATURE_DATASET_ID}"
+    f"{PAF_TEMPERATURE_DATASET_ID or 'open-meteo'}"
 )
 DATA_VALIDATION_PATH = f"{DATA_VALIDATION_DIR}/validation-report.yaml"
 

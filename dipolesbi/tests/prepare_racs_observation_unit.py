@@ -26,7 +26,7 @@ def _observation_config(*, use_jax: bool = True):
             "downscale_nside": 4,
             "use_jax": use_jax,
             "chunk_size": 128,
-            "openmeteo_fallback": False,
+            "temperature_fallback": "none",
             "summary_features": ["log_dispersion", "flux_quantiles"],
             "flux_temperature_n_bins": 3,
             "flux_temperature_quantiles": [0.25, 0.5, 0.75],
@@ -124,6 +124,139 @@ def test_prepare_reference_observation_wires_config(tmp_path, monkeypatch):
     assert calls["real_sample"][1] is catalogue
     assert calls["real_sample"][4]["local_source_crossmatch_radius_arcsec"] == 5.0
     assert calls["real_sample"][4]["save_map_plot"] is False
+
+
+def test_prepare_reference_observation_accepts_no_paf_directory_for_open_meteo(
+    tmp_path, monkeypatch
+):
+    catalogue_path = tmp_path / "catalogue.fits"
+    catalogue_path.touch()
+    config = _observation_config()
+    config["args"]["racs_epoch"] = "low2"
+    config["args"]["temperature_fallback"] = "open_meteo"
+    calls = {}
+
+    monkeypatch.setattr(
+        preparation,
+        "build_mask_from_observation_config",
+        lambda config: np.ones(12 * config["args"]["nside"] ** 2, dtype=bool),
+    )
+
+    class FakeModelConfig:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+    class FakeModel:
+        def __init__(self, config):
+            pass
+
+        def initialise_data(self):
+            pass
+
+    monkeypatch.setattr(preparation, "RacsConfig", FakeModelConfig)
+    monkeypatch.setattr(preparation, "RacsJax", FakeModel)
+    monkeypatch.setattr(preparation, "load_catalogue", lambda path: object())
+    monkeypatch.setattr(
+        preparation,
+        "build_real_sample",
+        lambda *args, **kwargs: (np.zeros(1), np.ones(1, dtype=bool)),
+    )
+
+    preparation.prepare_reference_observation(config, catalogue_path, None)
+
+    assert calls["paf_temperature_data_dir"] is None
+    assert calls["temperature_fallback"] == "open_meteo"
+
+
+def test_prepare_reference_observation_rejects_no_paf_without_low2_fallback(
+    tmp_path,
+):
+    catalogue_path = tmp_path / "catalogue.fits"
+    catalogue_path.touch()
+
+    with pytest.raises(ValueError, match="may only be omitted for LOW2"):
+        preparation.prepare_reference_observation(
+            _observation_config(), catalogue_path, None
+        )
+
+
+def test_prepare_reference_observation_wires_explicit_reference_fallback(
+    tmp_path, monkeypatch
+):
+    catalogue_path = tmp_path / "catalogue.fits"
+    catalogue_path.touch()
+    paf_temperature_data_dir = tmp_path / "paf_temps"
+    paf_temperature_data_dir.mkdir()
+    config = _observation_config()
+    config["args"].update(
+        temperature_fallback="reference",
+        paf_reference_temp_c=25.0,
+        max_reference_fallback_tiles=1,
+    )
+    calls = {}
+
+    monkeypatch.setattr(
+        preparation,
+        "build_mask_from_observation_config",
+        lambda config: np.ones(12 * config["args"]["nside"] ** 2, dtype=bool),
+    )
+
+    class FakeModelConfig:
+        def __init__(self, **kwargs):
+            calls.update(kwargs)
+
+    class FakeModel:
+        def __init__(self, config):
+            pass
+
+        def initialise_data(self):
+            pass
+
+    monkeypatch.setattr(preparation, "RacsConfig", FakeModelConfig)
+    monkeypatch.setattr(preparation, "RacsJax", FakeModel)
+    monkeypatch.setattr(preparation, "load_catalogue", lambda path: object())
+    monkeypatch.setattr(
+        preparation,
+        "build_real_sample",
+        lambda *args, **kwargs: (np.zeros(1), np.ones(1, dtype=bool)),
+    )
+
+    preparation.prepare_reference_observation(
+        config, catalogue_path, paf_temperature_data_dir
+    )
+
+    assert calls["temperature_fallback"] == "reference"
+    assert calls["paf_reference_temp_c"] == 25.0
+    assert calls["max_reference_fallback_tiles"] == 1
+
+
+@pytest.mark.parametrize(
+    ("settings", "message"),
+    [
+        (
+            {"paf_reference_temp_c": np.nan, "max_reference_fallback_tiles": 1},
+            "finite paf_reference_temp_c",
+        ),
+        (
+            {"paf_reference_temp_c": 25.0, "max_reference_fallback_tiles": 0},
+            "positive max_reference_fallback_tiles",
+        ),
+    ],
+)
+def test_prepare_reference_observation_rejects_unsafe_reference_fallback(
+    tmp_path, settings, message
+):
+    catalogue_path = tmp_path / "catalogue.fits"
+    catalogue_path.touch()
+    paf_temperature_data_dir = tmp_path / "paf_temps"
+    paf_temperature_data_dir.mkdir()
+    config = _observation_config()
+    config["args"].update(temperature_fallback="reference", **settings)
+
+    with pytest.raises(ValueError, match=message):
+        preparation.prepare_reference_observation(
+            config, catalogue_path, paf_temperature_data_dir
+        )
 
 
 def test_prepare_reference_observation_can_include_native_map(tmp_path, monkeypatch):

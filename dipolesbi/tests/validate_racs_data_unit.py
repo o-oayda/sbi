@@ -83,6 +83,31 @@ def test_validate_racs_data_reports_verified_files(tmp_path):
     assert paf["files"][0]["actual_sha256"] == paf["files"][0]["expected_sha256"]
 
 
+def test_validate_racs_data_accepts_catalogue_without_paf(tmp_path):
+    registry, catalogue, _, _, _ = _dataset_files(tmp_path)
+
+    report = validate_racs_data(
+        registry_path=registry,
+        catalogue_id="catalogue",
+        catalogue_path=catalogue,
+    )
+
+    assert report["result"] == "valid"
+    assert set(report["datasets"]) == {"catalogue"}
+
+
+def test_validate_racs_data_rejects_partial_paf_arguments(tmp_path):
+    registry, catalogue, _, _, _ = _dataset_files(tmp_path)
+
+    with pytest.raises(DataValidationError, match="must be provided together"):
+        validate_racs_data(
+            registry_path=registry,
+            catalogue_id="catalogue",
+            catalogue_path=catalogue,
+            paf_id="paf",
+        )
+
+
 def test_validate_racs_data_rejects_changed_catalogue(tmp_path):
     registry, catalogue, paf_root, _, manifest = _dataset_files(tmp_path)
     catalogue.write_bytes(b"changed")

@@ -142,7 +142,7 @@ def build_mask_from_observation_config(
             mask_args["north_equatorial_pole_radius_deg"]
         ),
         default_a_team_radius_deg=mask_args["default_a_team_radius_deg"],
-        source_radii_deg=dict(mask_args["source_radii_deg"]),
+        source_radii_deg=dict(mask_args.get("source_radii_deg", {})),
     )
 
 
