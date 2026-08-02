@@ -4,3 +4,5 @@ data_locations:
     path: /path/to/RACS-mid1_noscale_srl.fits
   racs_mid1_paf_temperatures:
     path: /path/to/paf_temps
+  racs_low2_paf_temperatures:
+    path: /path/to/paf_temps/mid1
