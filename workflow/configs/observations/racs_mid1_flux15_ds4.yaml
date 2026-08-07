@@ -38,5 +38,3 @@ mask:
   default_a_team_radius_deg: 2
   source_radii_deg:
     Cygnus A: 3
-    LMC: 13
-    SMC: 8
