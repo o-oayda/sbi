@@ -54,8 +54,6 @@ def copy_artifact(
         )
 
     repository = destination_repository.expanduser().resolve(strict=True)
-    if not (repository / ".git").exists():
-        raise ValueError(f"Destination path is not a Git repository: {repository}")
 
     cache = repository / "artifacts" / "cache"
     cache.mkdir(parents=True, exist_ok=True)
