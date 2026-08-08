@@ -1,4 +1,4 @@
-experiment_id: racs_mid1_example
+experiment_id: racs_mid1_fiducial
 
 observation_config: workflow/configs/observations/racs_mid1_flux15_ds4.yaml
 inference_config: workflow/configs/inference/nle_maf11_zscore.yaml
@@ -18,7 +18,7 @@ args:
 
   # Assumed population spectral index distribution
   alpha_mean: 0.8
-  alpha_sigma: 0.2
+  alpha_sigma: 0.3
 
   temperature_model: hot_linear
 

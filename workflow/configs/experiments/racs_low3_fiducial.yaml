@@ -18,7 +18,7 @@ args:
 
   # Assumed population spectral index distribution
   alpha_mean: 0.8
-  alpha_sigma: 0.2
+  alpha_sigma: 0.3
 
   temperature_model: hot_linear
 
