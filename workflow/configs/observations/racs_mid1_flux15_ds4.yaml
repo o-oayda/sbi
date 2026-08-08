@@ -25,7 +25,7 @@ args:
   # The current JAX implementation uses histogram-based flux summaries,
   # so this can affect the resulting observation
   use_jax: true
-  chunk_size: 140_000
+  chunk_size: 25_000
 
   temperature_fallback: none
 
