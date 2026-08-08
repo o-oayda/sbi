@@ -11,6 +11,12 @@ datasets:
     manifest: ../data-manifests/racs_mid1_paf_temperatures.yaml
     source: Internal file
 
+  racs_mid1_noise_maps:
+    type: file_collection
+    description: RACS MID1 survey noise map used by the flux-error lookup.
+    manifest: ../data-manifests/racs_mid1_noise_maps.yaml
+    source: Internal file
+
   racs_low3_catalogue:
     type: file
     description: RACS low3 source catalogue used for the reference observation.
@@ -21,6 +27,12 @@ datasets:
     type: file_collection
     description: Per-antenna ASKAP PAF temperatures used for RACS low3.
     manifest: ../data-manifests/racs_low3_paf_temperatures.yaml
+    source: Internal file
+
+  racs_low3_noise_maps:
+    type: file_collection
+    description: RACS LOW3 survey noise map used by the flux-error lookup.
+    manifest: ../data-manifests/racs_low3_noise_maps.yaml
     source: Internal file
 
   racs_low2_catalogue:

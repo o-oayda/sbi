@@ -69,4 +69,4 @@ dev = [
 ]
 
 [tool.uv.sources]
-catsim = { git = "https://github.com/o-oayda/catsim.git", rev = "paf-fallback" }
+catsim = { git = "https://github.com/o-oayda/catsim.git", rev = "racs-noise-lookup" }

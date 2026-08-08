@@ -15,12 +15,15 @@ rule validate_racs_data:
             else PAF_TEMPERATURE_MANIFEST_PATH
         ),
         paf_temperature_files=PAF_TEMPERATURE_VALIDATION_FILES,
+        noise_map_manifest=NOISE_MAP_MANIFEST_PATH,
+        noise_map_files=NOISE_MAP_VALIDATION_FILES,
     output:
         report=DATA_VALIDATION_PATH,
     params:
         output_dir=DATA_VALIDATION_DIR,
         catalogue_id=CATALOGUE_DATASET_ID,
         paf_cli_args=PAF_VALIDATION_CLI_ARGS,
+        noise_map_cli_args=NOISE_MAP_VALIDATION_CLI_ARGS,
     log:
         f"{DATA_VALIDATION_DIR}/validation.log"
     shell:
@@ -31,6 +34,7 @@ rule validate_racs_data:
             --catalogue-id {params.catalogue_id:q} \
             --catalogue-path {input.catalogue:q} \
             {params.paf_cli_args} \
+            {params.noise_map_cli_args} \
             --output {output.report:q} \
             > {log:q} 2>&1
         """
@@ -42,12 +46,14 @@ rule prepare_racs_observation:
         config=OBSERVATION_CONFIG_PATH,
         catalogue=CATALOGUE_PATH,
         paf_temperature_files=PAF_TEMPERATURE_FILES,
+        noise_map_files=NOISE_MAP_FILES,
     output:
         observation=OBSERVATION_PATH,
         native_observation=NATIVE_OBSERVATION_PATH,
     params:
         output_dir=OBSERVATION_DIR,
         paf_cli_args=PAF_PREPARATION_CLI_ARGS,
+        noise_map_cli_args=NOISE_MAP_PREPARATION_CLI_ARGS,
         preparation_implementation_fingerprint=(
             PREPARATION_IMPLEMENTATION_FINGERPRINT
         ),
@@ -66,6 +72,7 @@ rule prepare_racs_observation:
             --config {input.config:q} \
             --catalogue-path {input.catalogue:q} \
             {params.paf_cli_args} \
+            {params.noise_map_cli_args} \
             --output {output.observation:q} \
             --native-output {output.native_observation:q} \
             > {log:q} 2>&1
@@ -79,6 +86,7 @@ rule infer_racs:
         inference_config=INFERENCE_CONFIG_PATH,
         catalogue=CATALOGUE_PATH,
         paf_temperature_files=PAF_TEMPERATURE_FILES,
+        noise_map_files=NOISE_MAP_FILES,
         prepared_observation=rules.prepare_racs_observation.output.observation,
     output:
         samples=SAMPLES_PATH,
@@ -90,6 +98,7 @@ rule infer_racs:
     params:
         output_dir=RESULT_DIR,
         paf_cli_args=PAF_INFERENCE_CLI_ARGS,
+        noise_map_cli_args=NOISE_MAP_INFERENCE_CLI_ARGS,
         cli_args=command_line_arguments(INFERENCE_ARGS),
         inference_implementation_fingerprint=INFERENCE_IMPLEMENTATION_FINGERPRINT,
         jax_platforms=EXECUTION["jax_platforms"],
@@ -107,6 +116,7 @@ rule infer_racs:
             {params.cli_args} \
             --catalogue_path {input.catalogue:q} \
             {params.paf_cli_args} \
+            {params.noise_map_cli_args} \
             --observation_config {input.observation_config:q} \
             --inference_config {input.inference_config:q} \
             --reference_observation {input.prepared_observation:q} \

@@ -51,6 +51,78 @@ def registry_dataset(
     return dataset
 
 
+def validate_file_collection(
+    *,
+    dataset_id: str,
+    root: Path,
+    manifest_path: Path,
+    registry: dict[str, Any],
+    registry_path: Path,
+    failures: list[str],
+) -> dict[str, Any]:
+    """Validate one manifest-backed collection and return its report entry."""
+    root = root.resolve(strict=True)
+    manifest_path = manifest_path.resolve(strict=True)
+    collection = registry_dataset(registry, dataset_id, "file_collection")
+    expected_manifest = Path(collection["manifest"])
+    if not expected_manifest.is_absolute():
+        expected_manifest = registry_path.parent / expected_manifest
+    if expected_manifest.resolve(strict=True) != manifest_path:
+        raise DataValidationError(
+            f"Registry manifest for {dataset_id!r} does not match the selected "
+            f"manifest: {collection['manifest']}"
+        )
+    manifest = load_yaml_mapping(manifest_path, "File-collection manifest")
+    if manifest.get("dataset_id") != dataset_id:
+        raise DataValidationError(
+            f"Manifest declares dataset_id {manifest.get('dataset_id')!r}; "
+            f"expected {dataset_id!r}."
+        )
+
+    files = []
+    declared_paths: set[Path] = set()
+    for entry in manifest["files"]:
+        relative_path = Path(entry["relative_path"])
+        path = (root / relative_path).resolve(strict=True)
+        if not path.is_relative_to(root) or not path.is_file():
+            raise DataValidationError(
+                f"Manifest entry is not a file below {root}: {relative_path}"
+            )
+        if path in declared_paths:
+            raise DataValidationError(
+                f"Manifest contains a duplicate file: {relative_path}"
+            )
+        declared_paths.add(path)
+
+        actual = sha256(path)
+        expected = entry["sha256"]
+        if actual != expected:
+            failures.append(f"checksum mismatch: {dataset_id}/{relative_path}")
+        files.append(
+            {
+                "relative_path": relative_path.as_posix(),
+                "expected_sha256": expected,
+                "actual_sha256": actual,
+            }
+        )
+
+    matched_paths = {
+        path.resolve(strict=True)
+        for path in root.glob(manifest["file_glob"])
+        if path.is_file()
+    }
+    unexpected = sorted(matched_paths - declared_paths)
+    if unexpected:
+        failures.extend(f"unexpected file: {path}" for path in unexpected)
+    return {
+        "type": "file_collection",
+        "root": str(root),
+        "manifest": str(manifest_path),
+        "file_glob": manifest["file_glob"],
+        "files": files,
+    }
+
+
 def validate_racs_data(
     *,
     registry_path: Path,
@@ -59,6 +131,9 @@ def validate_racs_data(
     paf_id: str | None = None,
     paf_root: Path | None = None,
     paf_manifest_path: Path | None = None,
+    noise_map_id: str | None = None,
+    noise_map_root: Path | None = None,
+    noise_map_manifest_path: Path | None = None,
 ) -> dict[str, Any]:
     """Validate file contents and return a provenance-ready report."""
     registry_path = registry_path.resolve(strict=True)
@@ -69,6 +144,13 @@ def validate_racs_data(
     ):
         raise DataValidationError(
             "PAF dataset ID, root, and manifest must be provided together."
+        )
+    noise_map_values = (noise_map_id, noise_map_root, noise_map_manifest_path)
+    if any(value is None for value in noise_map_values) and not all(
+        value is None for value in noise_map_values
+    ):
+        raise DataValidationError(
+            "Noise-map dataset ID, root, and manifest must be provided together."
         )
 
     registry = load_yaml_mapping(registry_path, "Dataset registry")
@@ -90,67 +172,25 @@ def validate_racs_data(
     if paf_id is not None:
         assert paf_root is not None
         assert paf_manifest_path is not None
-        paf_root = paf_root.resolve(strict=True)
-        paf_manifest_path = paf_manifest_path.resolve(strict=True)
-        paf_collection = registry_dataset(registry, paf_id, "file_collection")
-        expected_manifest = Path(paf_collection["manifest"])
-        if not expected_manifest.is_absolute():
-            expected_manifest = registry_path.parent / expected_manifest
-        if expected_manifest.resolve(strict=True) != paf_manifest_path:
-            raise DataValidationError(
-                f"Registry manifest for {paf_id!r} does not match the selected "
-                f"manifest: {paf_collection['manifest']}"
-            )
-        manifest = load_yaml_mapping(paf_manifest_path, "PAF temperature manifest")
-        if manifest.get("dataset_id") != paf_id:
-            raise DataValidationError(
-                f"Manifest declares dataset_id {manifest.get('dataset_id')!r}; "
-                f"expected {paf_id!r}."
-            )
-
-        paf_files = []
-        declared_paths: set[Path] = set()
-        for entry in manifest["files"]:
-            relative_path = Path(entry["relative_path"])
-            path = (paf_root / relative_path).resolve(strict=True)
-            if not path.is_relative_to(paf_root) or not path.is_file():
-                raise DataValidationError(
-                    f"PAF manifest entry is not a file below {paf_root}: "
-                    f"{relative_path}"
-                )
-            if path in declared_paths:
-                raise DataValidationError(
-                    f"PAF manifest contains a duplicate file: {relative_path}"
-                )
-            declared_paths.add(path)
-
-            actual = sha256(path)
-            expected = entry["sha256"]
-            if actual != expected:
-                failures.append(f"checksum mismatch: {paf_id}/{relative_path}")
-            paf_files.append(
-                {
-                    "relative_path": relative_path.as_posix(),
-                    "expected_sha256": expected,
-                    "actual_sha256": actual,
-                }
-            )
-
-        matched_paths = {
-            path.resolve(strict=True)
-            for path in paf_root.glob(manifest["file_glob"])
-            if path.is_file()
-        }
-        unexpected = sorted(matched_paths - declared_paths)
-        if unexpected:
-            failures.extend(f"unexpected file: {path}" for path in unexpected)
-        datasets[paf_id] = {
-            "type": "file_collection",
-            "root": str(paf_root),
-            "manifest": str(paf_manifest_path),
-            "file_glob": manifest["file_glob"],
-            "files": paf_files,
-        }
+        datasets[paf_id] = validate_file_collection(
+            dataset_id=paf_id,
+            root=paf_root,
+            manifest_path=paf_manifest_path,
+            registry=registry,
+            registry_path=registry_path,
+            failures=failures,
+        )
+    if noise_map_id is not None:
+        assert noise_map_root is not None
+        assert noise_map_manifest_path is not None
+        datasets[noise_map_id] = validate_file_collection(
+            dataset_id=noise_map_id,
+            root=noise_map_root,
+            manifest_path=noise_map_manifest_path,
+            registry=registry,
+            registry_path=registry_path,
+            failures=failures,
+        )
 
     report = {
         "format_version": 1,
@@ -181,7 +221,7 @@ def write_report(path: Path, report: dict[str, Any]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Validate the catalogue and PAF temperatures for one RACS observation."
+        description="Validate the external datasets for one RACS observation."
     )
     parser.add_argument("--registry", type=Path, required=True)
     parser.add_argument("--catalogue-id", required=True)
@@ -189,6 +229,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--paf-id")
     parser.add_argument("--paf-root", type=Path)
     parser.add_argument("--paf-manifest", type=Path)
+    parser.add_argument("--noise-map-id")
+    parser.add_argument("--noise-map-root", type=Path)
+    parser.add_argument("--noise-map-manifest", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
 
@@ -203,6 +246,9 @@ def main() -> None:
             paf_id=args.paf_id,
             paf_root=args.paf_root,
             paf_manifest_path=args.paf_manifest,
+            noise_map_id=args.noise_map_id,
+            noise_map_root=args.noise_map_root,
+            noise_map_manifest_path=args.noise_map_manifest,
         )
         write_report(args.output, report)
     except (DataValidationError, FileNotFoundError, KeyError) as error:

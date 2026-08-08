@@ -308,6 +308,34 @@ else:
         "--paf-manifest " + shlex.quote(str(PAF_TEMPERATURE_MANIFEST_PATH))
     )
 
+NOISE_MAP_DATASET_ID = OBSERVATION["datasets"]["noise_maps"]
+(
+    NOISE_MAP_DIR,
+    NOISE_MAP_FILES,
+    NOISE_MAP_VALIDATION_FILES,
+    NOISE_MAP_MANIFEST_PATH,
+) = resolve_file_collection_dataset(
+    NOISE_MAP_DATASET_ID,
+    DATASET_REGISTRY,
+    SITE_CONFIG,
+)
+NOISE_MAP_PREPARATION_CLI_ARGS = (
+    "--noisemap-data-dir " + shlex.quote(str(NOISE_MAP_DIR))
+)
+NOISE_MAP_INFERENCE_CLI_ARGS = (
+    "--noisemap_data_dir " + shlex.quote(str(NOISE_MAP_DIR))
+)
+NOISE_MAP_VALIDATION_CLI_ARGS = " ".join(
+    (
+        "--noise-map-id",
+        shlex.quote(NOISE_MAP_DATASET_ID),
+        "--noise-map-root",
+        shlex.quote(str(NOISE_MAP_DIR)),
+        "--noise-map-manifest",
+        shlex.quote(str(NOISE_MAP_MANIFEST_PATH)),
+    )
+)
+
 INFERENCE_CONFIG_PATH = Path(EXPERIMENT["inference_config"])
 INFERENCE = load_and_validate_yaml(
     INFERENCE_CONFIG_PATH,
@@ -343,7 +371,7 @@ OBSERVATION_PATH = f"{OBSERVATION_DIR}/reference_observation.npz"
 NATIVE_OBSERVATION_PATH = f"{OBSERVATION_DIR}/reference_observation_native.npz"
 DATA_VALIDATION_DIR = (
     f"derived/data-validation/{CATALOGUE_DATASET_ID}--"
-    f"{PAF_TEMPERATURE_DATASET_ID or 'open-meteo'}"
+    f"{PAF_TEMPERATURE_DATASET_ID or 'open-meteo'}--{NOISE_MAP_DATASET_ID}"
 )
 DATA_VALIDATION_PATH = f"{DATA_VALIDATION_DIR}/validation-report.yaml"
 

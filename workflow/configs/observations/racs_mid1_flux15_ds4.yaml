@@ -3,14 +3,21 @@ observation_id: racs_mid1_flux15_ds4
 datasets:
   catalogue: racs_mid1_catalogue
   paf_temperatures: racs_mid1_paf_temperatures
+  noise_maps: racs_mid1_noise_maps
 
 args:
   racs_epoch: mid1
 
   flux_min: 15.0
   flux_temperature_min_mjy: 5.0
-  fractional_error_flux_min_mjy: 10.0
   local_source_crossmatch_radius_arcsec: 5.0
+
+  noise_map_nside: 256
+  flux_error_noise_bins: 200
+  flux_error_flux_bins: 300
+  flux_error_min_cell_count: 10
+  flux_error_noise_bounds_ujy_beam: [100.0, 1000.0]
+  flux_error_flux_bounds_mjy: [0.1, 10_000.0]
 
   nside: 64
   downscale_nside: 4

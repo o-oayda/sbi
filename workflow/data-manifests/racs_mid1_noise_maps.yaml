@@ -1,0 +1,5 @@
+dataset_id: racs_mid1_noise_maps
+file_glob: RACS-mid1.iqr.hpx
+files:
+  - relative_path: RACS-mid1.iqr.hpx
+    sha256: d0448fdaafb348e572e3ac897845de3e59a9f93d8922eb7a023518ccb3bfeb82

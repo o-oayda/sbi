@@ -15,12 +15,20 @@ from dipolesbi.pipelines.racs_observation_helpers import load_reference_observat
 
 def _observation_config(*, use_jax: bool = True):
     return {
-        "datasets": {"catalogue": "test_catalogue"},
+        "datasets": {
+            "catalogue": "test_catalogue",
+            "noise_maps": "test_noise_maps",
+        },
         "args": {
             "racs_epoch": "mid1",
             "flux_min": 15.0,
             "flux_temperature_min_mjy": 5.0,
-            "fractional_error_flux_min_mjy": 10.0,
+            "noise_map_nside": 256,
+            "flux_error_noise_bins": 200,
+            "flux_error_flux_bins": 300,
+            "flux_error_min_cell_count": 10,
+            "flux_error_noise_bounds_ujy_beam": [100.0, 1000.0],
+            "flux_error_flux_bounds_mjy": [0.1, 10_000.0],
             "local_source_crossmatch_radius_arcsec": 5.0,
             "nside": 8,
             "downscale_nside": 4,
@@ -110,6 +118,7 @@ def test_prepare_reference_observation_wires_config(tmp_path, monkeypatch):
         config,
         catalogue_path,
         paf_temperature_data_dir,
+        tmp_path,
     )
 
     np.testing.assert_array_equal(x0, expected_x0)
@@ -120,6 +129,16 @@ def test_prepare_reference_observation_wires_config(tmp_path, monkeypatch):
     assert calls["model_config"]["paf_temperature_data_dir"] == str(
         paf_temperature_data_dir.resolve()
     )
+    assert calls["model_config"]["noisemap_data_dir"] == str(tmp_path.resolve())
+    assert calls["model_config"]["noise_map_nside"] == 256
+    assert calls["model_config"]["flux_error_noise_bins"] == 200
+    assert calls["model_config"]["flux_error_flux_bins"] == 300
+    assert calls["model_config"]["flux_error_min_cell_count"] == 10
+    assert calls["model_config"]["flux_error_noise_bounds_ujy_beam"] == (
+        100.0,
+        1000.0,
+    )
+    assert calls["model_config"]["flux_error_flux_bounds_mjy"] == (0.1, 10_000.0)
     assert "temperature_model" not in calls["model_config"]
     assert calls["real_sample"][1] is catalogue
     assert calls["real_sample"][4]["local_source_crossmatch_radius_arcsec"] == 5.0
@@ -162,7 +181,7 @@ def test_prepare_reference_observation_accepts_no_paf_directory_for_open_meteo(
         lambda *args, **kwargs: (np.zeros(1), np.ones(1, dtype=bool)),
     )
 
-    preparation.prepare_reference_observation(config, catalogue_path, None)
+    preparation.prepare_reference_observation(config, catalogue_path, None, tmp_path)
 
     assert calls["paf_temperature_data_dir"] is None
     assert calls["temperature_fallback"] == "open_meteo"
@@ -176,7 +195,7 @@ def test_prepare_reference_observation_rejects_no_paf_without_low2_fallback(
 
     with pytest.raises(ValueError, match="may only be omitted for LOW2"):
         preparation.prepare_reference_observation(
-            _observation_config(), catalogue_path, None
+            _observation_config(), catalogue_path, None, tmp_path
         )
 
 
@@ -222,7 +241,7 @@ def test_prepare_reference_observation_wires_explicit_reference_fallback(
     )
 
     preparation.prepare_reference_observation(
-        config, catalogue_path, paf_temperature_data_dir
+        config, catalogue_path, paf_temperature_data_dir, tmp_path
     )
 
     assert calls["temperature_fallback"] == "reference"
@@ -255,7 +274,7 @@ def test_prepare_reference_observation_rejects_unsafe_reference_fallback(
 
     with pytest.raises(ValueError, match=message):
         preparation.prepare_reference_observation(
-            config, catalogue_path, paf_temperature_data_dir
+            config, catalogue_path, paf_temperature_data_dir, tmp_path
         )
 
 
@@ -294,6 +313,7 @@ def test_prepare_reference_observation_can_include_native_map(tmp_path, monkeypa
         _observation_config(),
         catalogue_path,
         paf_temperature_data_dir,
+        tmp_path,
         include_native=True,
     )
 

@@ -8,8 +8,9 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")
 import healpy as hp
 import numpy as np
 import pytest
+import yaml
 from astropy.table import Table
-from catsim import RACS_PRODUCTS
+from catsim import RACS_PRODUCTS, RacsConfig
 from dipoleutils.utils.samples import CatalogueToMap
 
 import dipolesbi.pipelines.racs_observation_helpers as observation_helpers
@@ -66,7 +67,13 @@ def _minimal_racs_config_kwargs(**overrides):
         "downscale_nside": None,
         "alpha_mean": 0.8,
         "alpha_sigma": 0.2,
-        "fractional_error_flux_min_mjy": 10.0,
+        "noisemap_data_dir": "/tmp/noisemaps",
+        "noise_map_nside": 256,
+        "flux_error_noise_bins": 200,
+        "flux_error_flux_bins": 300,
+        "flux_error_min_cell_count": 10,
+        "flux_error_noise_bounds_ujy_beam": (79.0, 1000.0),
+        "flux_error_flux_bounds_mjy": (0.1, 10_000.0),
         "mask_map": np.ones(hp.nside2npix(1), dtype=bool),
         "max_cluster_children_per_parent": 16,
         "temperature_fallback": "none",
@@ -74,6 +81,34 @@ def _minimal_racs_config_kwargs(**overrides):
     }
     kwargs.update(overrides)
     return kwargs
+
+
+@pytest.mark.parametrize("product", ["low3", "mid1"])
+def test_observation_lookup_settings_match_selected_values(product):
+    path = Path(f"workflow/configs/observations/racs_{product}_flux15_ds4.yaml")
+    observation = yaml.safe_load(path.read_text(encoding="utf-8"))
+    defaults = RacsConfig(product=product, flux_min=observation["args"]["flux_min"])
+
+    for name in (
+        "noise_map_nside",
+        "flux_error_noise_bins",
+        "flux_error_flux_bins",
+        "flux_error_min_cell_count",
+        "flux_error_flux_bounds_mjy",
+    ):
+        configured = observation["args"][name]
+        if name.endswith("bounds_ujy_beam") or name.endswith("bounds_mjy"):
+            configured = tuple(configured)
+        assert configured == getattr(defaults, name)
+
+    expected_noise_bounds = (
+        (79.0, 1000.0)
+        if product == "low3"
+        else defaults.flux_error_noise_bounds_ujy_beam
+    )
+    assert tuple(observation["args"]["flux_error_noise_bounds_ujy_beam"]) == (
+        expected_noise_bounds
+    )
 
 
 def test_build_mask_explicit_settings_match_defaults():

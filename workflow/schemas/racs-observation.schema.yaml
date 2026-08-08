@@ -12,28 +12,6 @@ allOf:
   - if:
       properties:
         args:
-          required: [racs_epoch]
-          properties:
-            racs_epoch:
-              enum: [low3, mid1]
-    then:
-      properties:
-        datasets:
-          required: [paf_temperatures]
-  - if:
-      properties:
-        args:
-          required: [temperature_fallback]
-          properties:
-            temperature_fallback:
-              enum: [none, reference]
-    then:
-      properties:
-        datasets:
-          required: [paf_temperatures]
-  - if:
-      properties:
-        args:
           required: [temperature_fallback]
           properties:
             temperature_fallback: {const: reference}
@@ -58,7 +36,7 @@ properties:
 
   datasets:
     type: object
-    required: [catalogue]
+    required: [catalogue, paf_temperatures, noise_maps]
     additionalProperties: false
     properties:
       catalogue:
@@ -67,13 +45,21 @@ properties:
       paf_temperatures:
         type: string
         pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+      noise_maps:
+        type: string
+        pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
 
   args:
     type: object
     required:
       - racs_epoch
       - flux_min
-      - fractional_error_flux_min_mjy
+      - noise_map_nside
+      - flux_error_noise_bins
+      - flux_error_flux_bins
+      - flux_error_min_cell_count
+      - flux_error_noise_bounds_ujy_beam
+      - flux_error_flux_bounds_mjy
       - local_source_crossmatch_radius_arcsec
       - nside
       - downscale_nside
@@ -89,7 +75,7 @@ properties:
 
     properties:
       racs_epoch:
-        enum: [low2, low3, mid1]
+        enum: [low3, mid1]
 
       flux_min:
         type: number
@@ -99,9 +85,44 @@ properties:
         type: [number, "null"]
         exclusiveMinimum: 0
 
-      fractional_error_flux_min_mjy:
-        type: number
-        exclusiveMinimum: 0
+      noise_map_nside:
+        type: integer
+        enum: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
+        default: 256
+
+      flux_error_noise_bins:
+        type: integer
+        minimum: 2
+        default: 200
+
+      flux_error_flux_bins:
+        type: integer
+        minimum: 2
+        default: 300
+
+      flux_error_min_cell_count:
+        type: integer
+        minimum: 1
+        default: 10
+
+      flux_error_noise_bounds_ujy_beam:
+        description: Product-specific noise bounds configured explicitly.
+        type: array
+        minItems: 2
+        maxItems: 2
+        items:
+          type: number
+          exclusiveMinimum: 0
+
+      flux_error_flux_bounds_mjy:
+        description: Flux bounds configured explicitly for reproducibility.
+        type: array
+        minItems: 2
+        maxItems: 2
+        default: [0.1, 10_000.0]
+        items:
+          type: number
+          exclusiveMinimum: 0
 
       local_source_crossmatch_radius_arcsec:
         type: [number, "null"]

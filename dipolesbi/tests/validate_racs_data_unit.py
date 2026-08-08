@@ -96,6 +96,51 @@ def test_validate_racs_data_accepts_catalogue_without_paf(tmp_path):
     assert set(report["datasets"]) == {"catalogue"}
 
 
+def test_validate_racs_data_reports_verified_noise_map(tmp_path):
+    registry, catalogue, _, _, _ = _dataset_files(tmp_path)
+    noise_root = tmp_path / "noise"
+    noise_root.mkdir()
+    noise_map = noise_root / "RACS-mid1.iqr.hpx"
+    noise_map.write_bytes(b"noise map")
+    manifest = tmp_path / "noise-manifest.yaml"
+    manifest.write_text(
+        yaml.safe_dump(
+            {
+                "dataset_id": "noise",
+                "file_glob": "RACS-mid1.iqr.hpx",
+                "files": [
+                    {
+                        "relative_path": noise_map.name,
+                        "sha256": _sha256(noise_map),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry_values = yaml.safe_load(registry.read_text(encoding="utf-8"))
+    registry_values["datasets"]["noise"] = {
+        "type": "file_collection",
+        "manifest": manifest.name,
+    }
+    registry.write_text(yaml.safe_dump(registry_values), encoding="utf-8")
+
+    report = validate_racs_data(
+        registry_path=registry,
+        catalogue_id="catalogue",
+        catalogue_path=catalogue,
+        noise_map_id="noise",
+        noise_map_root=noise_root,
+        noise_map_manifest_path=manifest,
+    )
+
+    noise = report["datasets"]["noise"]
+    assert noise["files"][0]["relative_path"] == noise_map.name
+    assert noise["files"][0]["actual_sha256"] == noise["files"][0][
+        "expected_sha256"
+    ]
+
+
 def test_validate_racs_data_rejects_partial_paf_arguments(tmp_path):
     registry, catalogue, _, _, _ = _dataset_files(tmp_path)
 

@@ -20,6 +20,7 @@ def prepare_reference_observation(
     observation_config: Mapping[str, Any],
     catalogue_path: str | Path,
     paf_temperature_data_dir: str | Path | None,
+    noisemap_data_dir: str | Path,
     *,
     include_native: bool = False,
 ) -> (
@@ -63,6 +64,13 @@ def prepare_reference_observation(
         if paf_temperature_data_dir is None
         else Path(paf_temperature_data_dir).expanduser().resolve(strict=True)
     )
+    resolved_noisemap_data_dir = Path(noisemap_data_dir).expanduser().resolve(
+        strict=True
+    )
+    if not resolved_noisemap_data_dir.is_dir():
+        raise ValueError(
+            f"RACS noise-map path is not a directory: {resolved_noisemap_data_dir}"
+        )
 
     mask = build_mask_from_observation_config(observation_config)
 
@@ -84,7 +92,15 @@ def prepare_reference_observation(
         use_float32=False,
         downscale_nside=args["downscale_nside"],
         store_final_samples=not use_jax,
-        fractional_error_flux_min_mjy=args["fractional_error_flux_min_mjy"],
+        noisemap_data_dir=str(resolved_noisemap_data_dir),
+        noise_map_nside=args["noise_map_nside"],
+        flux_error_noise_bins=args["flux_error_noise_bins"],
+        flux_error_flux_bins=args["flux_error_flux_bins"],
+        flux_error_min_cell_count=args["flux_error_min_cell_count"],
+        flux_error_noise_bounds_ujy_beam=tuple(
+            args["flux_error_noise_bounds_ujy_beam"]
+        ),
+        flux_error_flux_bounds_mjy=tuple(args["flux_error_flux_bounds_mjy"]),
         flux_temperature_min_mjy=args["flux_temperature_min_mjy"],
         paf_temperature_data_dir=(
             None
@@ -209,6 +225,12 @@ def construct_argparser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--noisemap-data-dir",
+        type=Path,
+        required=True,
+        help="Directory containing the product-specific RACS noise map.",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         required=True,
@@ -229,6 +251,7 @@ def main() -> None:
         observation_config,
         cli_args.catalogue_path,
         cli_args.paf_temperature_data_dir,
+        cli_args.noisemap_data_dir,
         include_native=cli_args.native_output is not None,
     )
     x0, mask = prepared[:2]

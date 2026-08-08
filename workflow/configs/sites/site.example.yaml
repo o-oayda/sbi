@@ -4,5 +4,15 @@ data_locations:
     path: /path/to/RACS-mid1_noscale_srl.fits
   racs_mid1_paf_temperatures:
     path: /path/to/paf_temps
+  racs_mid1_noise_maps:
+    path: /path/to/racs/noisemaps
+  racs_low3_catalogue:
+    path: /path/to/RACS-low3_noscale_srl.fits
+  racs_low3_paf_temperatures:
+    path: /path/to/paf_temps
+  racs_low3_noise_maps:
+    path: /path/to/racs/noisemaps
+  racs_low2_catalogue:
+    path: /path/to/RACS-low2_noscale_srl.fits
   racs_low2_paf_temperatures:
     path: /path/to/paf_temps/mid1

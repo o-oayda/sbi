@@ -1,7 +1,6 @@
 import argparse
 import shlex
 import sys
-import warnings
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
@@ -223,6 +222,12 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
         ),
     )
     parser.add_argument(
+        "--noisemap_data_dir",
+        type=str,
+        required=True,
+        help="Directory containing the product-specific RACS noise map.",
+    )
+    parser.add_argument(
         "--temperature_model",
         choices=sorted(TEMPERATURE_MODELS),
         default="hot_linear",
@@ -256,10 +261,50 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
         help="Standard deviation of the Gaussian spectral-index model.",
     )
     parser.add_argument(
-        "--fractional_error_flux_min_mjy",
+        "--noise_map_nside",
+        type=int,
+        default=256,
+        help="HEALPix nside of the cached RACS noise map.",
+    )
+    parser.add_argument(
+        "--flux_error_noise_bins",
+        type=int,
+        default=None,
+        help=(
+            "Number of log-noise bins in the conditional flux-error lookup. "
+            "Defaults to the selected RACS product value."
+        ),
+    )
+    parser.add_argument(
+        "--flux_error_flux_bins",
+        type=int,
+        default=None,
+        help=(
+            "Number of log-flux bins in the conditional flux-error lookup. "
+            "Defaults to the selected RACS product value."
+        ),
+    )
+    parser.add_argument(
+        "--flux_error_min_cell_count",
+        type=int,
+        default=10,
+        help="Minimum catalogue occupancy for a directly sampled lookup cell.",
+    )
+    parser.add_argument(
+        "--flux_error_noise_bounds_ujy_beam",
         type=float,
-        default=10.0,
-        help="Minimum flux used when building the empirical fractional-error lookup.",
+        nargs=2,
+        default=None,
+        metavar=("MIN", "MAX"),
+        help="Noise-axis lookup bounds; defaults to the selected product value.",
+    )
+    parser.add_argument(
+        "--flux_error_flux_bounds_mjy",
+        type=float,
+        nargs=2,
+        default=None,
+        metavar=("MIN", "MAX"),
+        help="Flux-axis lookup bounds; defaults to the selected product value.",
     )
     parser.add_argument(
         "--summary_features",
@@ -404,22 +449,46 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     if "flux_elevation_quantiles" in args.summary_features:
         if args.racs_epoch != "mid1":
             parser.error("Flux-elevation summaries require --racs_epoch mid1.")
-    resolved_temperature_min = (
-        args.flux_min
-        if args.flux_temperature_min_mjy is None
-        else args.flux_temperature_min_mjy
-    )
     if (
-        "flux_quantiles" in args.summary_features
-        and resolved_temperature_min < args.fractional_error_flux_min_mjy
+        args.noise_map_nside <= 0
+        or args.noise_map_nside & (args.noise_map_nside - 1)
     ):
-        warnings.warn(
-            "The temperature-summary flux cut is below "
-            "--fractional_error_flux_min_mjy; the empirical fractional-error model "
-            "is being extrapolated below its calibration floor.",
-            RuntimeWarning,
-            stacklevel=2,
+        parser.error("--noise_map_nside must be a positive power of two.")
+    product = RACS_PRODUCTS[args.racs_epoch]
+    if args.flux_error_noise_bins is None:
+        args.flux_error_noise_bins = product.default_flux_error_noise_bins
+    if args.flux_error_flux_bins is None:
+        args.flux_error_flux_bins = product.default_flux_error_flux_bins
+    if args.flux_error_noise_bounds_ujy_beam is None:
+        args.flux_error_noise_bounds_ujy_beam = (
+            product.default_flux_error_noise_bounds_ujy_beam
         )
+    if args.flux_error_flux_bounds_mjy is None:
+        args.flux_error_flux_bounds_mjy = (
+            product.default_flux_error_flux_bounds_mjy
+        )
+    if args.flux_error_noise_bins < 2:
+        parser.error("--flux_error_noise_bins must be at least 2.")
+    if args.flux_error_flux_bins < 2:
+        parser.error("--flux_error_flux_bins must be at least 2.")
+    if args.flux_error_min_cell_count < 1:
+        parser.error("--flux_error_min_cell_count must be at least 1.")
+    for name in (
+        "flux_error_noise_bounds_ujy_beam",
+        "flux_error_flux_bounds_mjy",
+    ):
+        bounds = getattr(args, name)
+        if (
+            bounds is None
+            or len(bounds) != 2
+            or not np.all(np.isfinite(bounds))
+            or bounds[0] <= 0
+            or bounds[1] <= bounds[0]
+        ):
+            parser.error(
+                f"--{name} must contain two finite positive values in "
+                "strictly increasing order."
+            )
     _validate_prior_bounds(args, parser)
 
     modes = _parse_modes(args.mode, parser)
@@ -481,7 +550,13 @@ def build_racs_config(
     downscale_nside: int | None,
     alpha_mean: float,
     alpha_sigma: float,
-    fractional_error_flux_min_mjy: float,
+    noisemap_data_dir: str,
+    noise_map_nside: int,
+    flux_error_noise_bins: int,
+    flux_error_flux_bins: int,
+    flux_error_min_cell_count: int,
+    flux_error_noise_bounds_ujy_beam: tuple[float, float],
+    flux_error_flux_bounds_mjy: tuple[float, float],
     paf_temperature_data_dir: str | None,
     flux_temperature_min_mjy: float | None = None,
     temperature_model: str = "hot_linear",
@@ -532,7 +607,13 @@ def build_racs_config(
         store_final_samples=not use_jax,
         alpha_mean=alpha_mean,
         alpha_sigma=alpha_sigma,
-        fractional_error_flux_min_mjy=fractional_error_flux_min_mjy,
+        noisemap_data_dir=noisemap_data_dir,
+        noise_map_nside=noise_map_nside,
+        flux_error_noise_bins=flux_error_noise_bins,
+        flux_error_flux_bins=flux_error_flux_bins,
+        flux_error_min_cell_count=flux_error_min_cell_count,
+        flux_error_noise_bounds_ujy_beam=flux_error_noise_bounds_ujy_beam,
+        flux_error_flux_bounds_mjy=flux_error_flux_bounds_mjy,
         flux_temperature_min_mjy=flux_temperature_min_mjy,
         temperature_model=temperature_model,
         paf_temperature_data_dir=paf_temperature_data_dir,
@@ -1115,7 +1196,15 @@ def main() -> None:
         downscale_nside=args.downscale_nside,
         alpha_mean=args.alpha_mean,
         alpha_sigma=args.alpha_sigma,
-        fractional_error_flux_min_mjy=args.fractional_error_flux_min_mjy,
+        noisemap_data_dir=args.noisemap_data_dir,
+        noise_map_nside=args.noise_map_nside,
+        flux_error_noise_bins=args.flux_error_noise_bins,
+        flux_error_flux_bins=args.flux_error_flux_bins,
+        flux_error_min_cell_count=args.flux_error_min_cell_count,
+        flux_error_noise_bounds_ujy_beam=tuple(
+            args.flux_error_noise_bounds_ujy_beam
+        ),
+        flux_error_flux_bounds_mjy=tuple(args.flux_error_flux_bounds_mjy),
         flux_temperature_min_mjy=args.flux_temperature_min_mjy,
         temperature_model=args.temperature_model,
         temperature_fallback=args.temperature_fallback,
