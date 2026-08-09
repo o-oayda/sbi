@@ -11,6 +11,10 @@ from snakemake.utils import validate
 import yaml
 
 from dipolesbi.pipelines.package_racs_analysis import implementation_fingerprint
+from dipolesbi.pipelines.experiment_config import (
+    ExperimentConfigError,
+    resolve_experiment_config,
+)
 
 
 EXPERIMENT_SCHEMA_PATH = "schemas/racs-experiment.schema.yaml"
@@ -229,11 +233,14 @@ SITE_CONFIG = {"data_locations": config["data_locations"]}
 validate(SITE_CONFIG, SITE_SCHEMA_PATH)
 
 EXPERIMENT_NAME, EXPERIMENT_CONFIG_PATH = selected_experiment_config_path(config)
-EXPERIMENT = load_and_validate_yaml(
-    EXPERIMENT_CONFIG_PATH,
-    EXPERIMENT_SCHEMA_PATH,
-    "Experiment",
-)
+try:
+    EXPERIMENT, EXPERIMENT_CONFIG_PATHS = resolve_experiment_config(
+        EXPERIMENT_CONFIG_PATH,
+        experiment_dir=EXPERIMENT_CONFIG_DIR,
+    )
+except (ExperimentConfigError, FileNotFoundError) as error:
+    raise WorkflowError(str(error)) from error
+validate(EXPERIMENT, EXPERIMENT_SCHEMA_PATH)
 if EXPERIMENT["experiment_id"] != EXPERIMENT_NAME:
     raise WorkflowError(
         f"Selected experiment '{EXPERIMENT_NAME}' declares experiment_id "
@@ -366,6 +373,9 @@ INFERENCE_IMPLEMENTATION_FINGERPRINT = content_fingerprint(
 
 FINAL_ROUND = EXPERIMENT_ARGS["n_rounds"] - 1
 RESULT_DIR = f"results/{EXPERIMENT_ID}"
+RESOLVED_EXPERIMENT_CONFIG_PATH = (
+    f"derived/experiments/{EXPERIMENT_ID}/experiment.resolved.yaml"
+)
 OBSERVATION_DIR = f"derived/observations/{OBSERVATION_ID}"
 OBSERVATION_PATH = f"{OBSERVATION_DIR}/reference_observation.npz"
 NATIVE_OBSERVATION_PATH = f"{OBSERVATION_DIR}/reference_observation_native.npz"

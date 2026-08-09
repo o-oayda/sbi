@@ -6,6 +6,20 @@ rule all:
         FINAL_OUTPUTS
 
 
+rule resolve_racs_experiment:
+    input:
+        EXPERIMENT_CONFIG_PATHS
+    output:
+        config=RESOLVED_EXPERIMENT_CONFIG_PATH,
+    run:
+        destination = Path(output.config)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            yaml.safe_dump(EXPERIMENT, sort_keys=False),
+            encoding="utf-8",
+        )
+
+
 rule validate_racs_data:
     input:
         dataset_registry=DATASET_REGISTRY_PATH,
@@ -81,7 +95,7 @@ rule prepare_racs_observation:
 
 rule infer_racs:
     input:
-        experiment_config=EXPERIMENT_CONFIG_PATH,
+        experiment_config=rules.resolve_racs_experiment.output.config,
         observation_config=OBSERVATION_CONFIG_PATH,
         inference_config=INFERENCE_CONFIG_PATH,
         catalogue=CATALOGUE_PATH,
@@ -134,7 +148,7 @@ rule package_racs_analysis:
         native_reference_observation=(
             rules.prepare_racs_observation.output.native_observation
         ),
-        experiment_config=EXPERIMENT_CONFIG_PATH,
+        experiment_config=rules.resolve_racs_experiment.output.config,
         observation_config=OBSERVATION_CONFIG_PATH,
         inference_config=INFERENCE_CONFIG_PATH,
         data_validation=rules.validate_racs_data.output.report,

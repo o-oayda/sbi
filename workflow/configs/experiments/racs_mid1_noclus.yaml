@@ -1,0 +1,6 @@
+extends: racs_mid1_fiducial
+experiment_id: racs_mid1_noclus
+
+args:
+  simulate_clustering: null
+  max_children: 0

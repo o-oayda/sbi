@@ -96,7 +96,7 @@ properties:
       temperature_model:
         enum: [hot_exponential, hot_linear, hot_quadratic]
       simulate_clustering:
-        enum: [geometric, poisson]
+        enum: [geometric, poisson, null]
       add_extra_error:
         type: boolean
       log10_n_initial_samples_min:
@@ -177,4 +177,4 @@ properties:
         minimum: 0
       max_children:
         type: integer
-        minimum: 1
+        minimum: 0

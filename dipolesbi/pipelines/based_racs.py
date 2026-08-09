@@ -495,8 +495,6 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
     if args.summary_features and any(mode != "NLE" for mode in modes):
         parser.error("Summary statistics are only supported for the NLE at the moment.")
 
-    if not args.simulate_clustering:
-        args.simulate_clustering = "geometric"
     args.flux_temperature_quantiles = tuple(args.flux_temperature_quantiles)
     args.flux_elevation_quantiles = tuple(args.flux_elevation_quantiles)
     return modes
@@ -1192,7 +1190,9 @@ def main() -> None:
         nside=args.nside,
         chunk_size=args.chunk_size,
         use_jax=args.use_jax,
-        cluster_count_model=args.simulate_clustering,
+        # catsim requires a count-model implementation even when clustering is
+        # disabled. Poisson with its default lambda_clus=0 is the exact no-op.
+        cluster_count_model=args.simulate_clustering or "poisson",
         downscale_nside=args.downscale_nside,
         alpha_mean=args.alpha_mean,
         alpha_sigma=args.alpha_sigma,

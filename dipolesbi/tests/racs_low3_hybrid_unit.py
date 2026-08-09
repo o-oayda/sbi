@@ -343,6 +343,18 @@ def test_build_prior_and_reference_theta_accepts_custom_bounds():
     assert theta_0["temp_beta"] == 0.02
 
 
+def test_build_prior_and_reference_theta_omits_clustering_when_disabled():
+    prior, theta_0 = build_prior_and_reference_theta(simulate_clustering=None)
+
+    simulator_kwargs = {
+        entry["simulator_kwarg"] for entry in prior.prior_dict.values()
+    }
+    assert "p_clus" not in simulator_kwargs
+    assert "clus_stop_prob" not in simulator_kwargs
+    assert "lambda_clus" not in simulator_kwargs
+    assert "lambda_clus" not in theta_0
+
+
 def test_inference_yaml_reproduces_previous_nle_scenario():
     inference_config = load_inference_config(
         Path("workflow/configs/inference/nle_maf11_zscore.yaml")

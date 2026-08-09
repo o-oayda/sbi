@@ -1,0 +1,6 @@
+extends: racs_low3_fiducial
+experiment_id: racs_low3_noclus
+
+args:
+  simulate_clustering: null
+  max_children: 0
