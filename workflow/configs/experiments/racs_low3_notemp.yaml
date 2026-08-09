@@ -1,0 +1,6 @@
+extends: racs_low3_fiducial
+experiment_id: racs_low3_notemp
+
+args:
+  temp_beta_min: 0.0
+  temp_beta_max: 0.0

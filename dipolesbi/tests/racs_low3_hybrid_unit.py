@@ -23,6 +23,8 @@ from dipolesbi.pipelines.based_racs import (
     build_scenario,
     load_inference_config,
     make_simulator_wrapper,
+    make_jax_model_sim_wrapper,
+    _fixed_parameters_from_args,
     _write_run_command,
 )
 from dipolesbi.pipelines.racs_observation_helpers import (
@@ -52,6 +54,7 @@ from dipolesbi.tools.configs import (
     TrainingConfig,
 )
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
+from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.priors_np import DipolePriorNP
 
 
@@ -353,6 +356,85 @@ def test_build_prior_and_reference_theta_omits_clustering_when_disabled():
     assert "clus_stop_prob" not in simulator_kwargs
     assert "lambda_clus" not in simulator_kwargs
     assert "lambda_clus" not in theta_0
+
+
+def test_equal_direction_bounds_become_fixed_and_leave_the_prior():
+    args = SimpleNamespace(
+        log10_n_initial_samples_min=5.6,
+        log10_n_initial_samples_max=6.8,
+        observer_speed_min=0.0,
+        observer_speed_max=12.0,
+        dipole_longitude_min=264.021,
+        dipole_longitude_max=264.021,
+        dipole_latitude_min=48.253,
+        dipole_latitude_max=48.253,
+        temp_beta_min=0.0,
+        temp_beta_max=0.05,
+        add_elevation_model=False,
+        simulate_clustering="poisson",
+        lambda_clus_min=0.0,
+        lambda_clus_max=3.0,
+        add_extra_error=False,
+    )
+
+    fixed = _fixed_parameters_from_args(args)
+    prior, theta_0 = build_prior_and_reference_theta(
+        simulate_clustering="poisson",
+        fixed_parameters=fixed,
+    )
+
+    assert fixed == {
+        "dipole_longitude": 264.021,
+        "dipole_latitude": 48.253,
+    }
+    simulator_kwargs = {
+        entry["simulator_kwarg"] for entry in prior.prior_dict.values()
+    }
+    assert "dipole_longitude" not in simulator_kwargs
+    assert "dipole_latitude" not in simulator_kwargs
+    assert "dipole_longitude" not in theta_0
+    assert "dipole_latitude" not in theta_0
+
+
+def test_simulator_wrappers_inject_fixed_parameters_and_reject_overlap():
+    class NumpyModel:
+        downscale_nside = None
+
+        def generate_dipole(self, **kwargs):
+            self.parameters = kwargs
+            return np.zeros(1), np.ones(1, dtype=bool)
+
+    numpy_model = NumpyModel()
+    numpy_wrapper = make_simulator_wrapper(
+        numpy_model,
+        fixed_parameters={"dipole_longitude": 264.021},
+    )
+    numpy_wrapper(observer_speed=1.0)
+    assert numpy_model.parameters["dipole_longitude"] == 264.021
+    with pytest.raises(ValueError, match="also sampled"):
+        numpy_wrapper(dipole_longitude=1.0)
+
+    class JaxModel:
+        def batch_generate_dipole(self, theta, key, **kwargs):
+            self.theta = theta
+            return np.zeros((1, 1)), np.ones((1, 1), dtype=bool)
+
+    jax_model = JaxModel()
+    jax_wrapper = make_jax_model_sim_wrapper(
+        jax_model,
+        batch_size=1,
+        fixed_parameters={"dipole_latitude": 48.253},
+    )
+    jax_wrapper(
+        NPKey.from_seed(0),
+        {"observer_speed": np.asarray([1.0])},
+    )
+    assert float(jax_model.theta["dipole_latitude"]) == 48.253
+    with pytest.raises(ValueError, match="also sampled"):
+        jax_wrapper(
+            NPKey.from_seed(0),
+            {"dipole_latitude": np.asarray([1.0])},
+        )
 
 
 def test_inference_yaml_reproduces_previous_nle_scenario():

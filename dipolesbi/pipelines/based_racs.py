@@ -521,10 +521,43 @@ def _validate_prior_bounds(
         "p_clus": (args.p_clus_min, args.p_clus_max),
         "clus_stop_prob": (args.clus_stop_prob_min, args.clus_stop_prob_max),
         "lambda_clus": (args.lambda_clus_min, args.lambda_clus_max),
+        "eta": (args.eta_min, args.eta_max),
     }
     for name, (low, high) in prior_bounds.items():
-        if low >= high:
-            parser.error(f"--{name}_min must be less than --{name}_max.")
+        if low > high:
+            parser.error(
+                f"--{name}_min must be less than or equal to --{name}_max."
+            )
+
+
+def _fixed_parameters_from_args(args: argparse.Namespace) -> dict[str, float]:
+    """Return active simulator parameters whose configured bounds are equal."""
+    active = [
+        "log10_n_initial_samples",
+        "observer_speed",
+        "dipole_longitude",
+        "dipole_latitude",
+        "temp_beta",
+    ]
+    if args.add_elevation_model:
+        active.extend(("elevation_trough", "elevation_amp"))
+    if args.simulate_clustering == "geometric":
+        active.extend(("p_clus", "clus_stop_prob"))
+    elif args.simulate_clustering == "poisson":
+        active.append("lambda_clus")
+    if args.add_extra_error:
+        active.append("fractional_error_eta")
+
+    fixed = {}
+    for simulator_kwarg in active:
+        config_name = (
+            "eta" if simulator_kwarg == "fractional_error_eta" else simulator_kwarg
+        )
+        low = getattr(args, f"{config_name}_min")
+        high = getattr(args, f"{config_name}_max")
+        if low == high:
+            fixed[simulator_kwarg] = float(low)
+    return fixed
 
 
 def _parse_modes(raw_modes: list[str] | None, parser: argparse.ArgumentParser) -> list[str]:
@@ -717,7 +750,8 @@ def build_prior_and_reference_theta(
     p_clus_range: tuple[float, float] = (0.0, 1.0),
     clus_stop_prob_range: tuple[float, float] = (0.4, 1.0),
     lambda_clus_range: tuple[float, float] = (0.0, 3.0),
-    eta_range: tuple[float, float] = (0., 8.)
+    eta_range: tuple[float, float] = (0., 8.),
+    fixed_parameters: Mapping[str, float] | None = None,
 ) -> tuple[DipolePriorNP, dict[str, float]]:
     prior = DipolePriorNP(
         mean_count_range=list(log10_n_initial_samples_range),
@@ -802,6 +836,19 @@ def build_prior_and_reference_theta(
     if simulate_clustering == "poisson":
         theta_0["lambda_clus"] = 0.4
 
+    fixed_parameters = dict(fixed_parameters or {})
+    prior_by_simulator_kwarg = {
+        entry["simulator_kwarg"]: short_name
+        for short_name, entry in prior.prior_dict.items()
+    }
+    unknown = set(fixed_parameters) - set(prior_by_simulator_kwarg)
+    if unknown:
+        names = ", ".join(sorted(unknown))
+        raise ValueError(f"Cannot fix inactive or unknown parameter(s): {names}")
+    for simulator_kwarg in fixed_parameters:
+        prior.remove_prior(prior_by_simulator_kwarg[simulator_kwarg])
+        theta_0.pop(simulator_kwarg, None)
+
     return prior, theta_0
 
 
@@ -834,6 +881,7 @@ def _generate_dipole_with_flux_summaries_native(
 def make_simulator_wrapper(
     model: Racs,
     *,
+    fixed_parameters: Mapping[str, float] | None = None,
     native_output: bool = False,
     summary_features: list[SummaryFeature] | None = None,
     flux_temperature_n_bins: int = DEFAULT_FLUX_TEMPERATURE_N_BINS,
@@ -842,11 +890,17 @@ def make_simulator_wrapper(
     flux_elevation_quantiles: tuple[float, ...] = DEFAULT_FLUX_ELEVATION_QUANTILES,
 ):
     summary_features = list(summary_features or [])
+    fixed_parameters = dict(fixed_parameters or {})
 
     def simulator_wrapper(
         rng_key: NPKey | None = None,
         **kwargs,
     ) -> tuple[np.ndarray, np.ndarray]:
+        overlap = set(kwargs) & set(fixed_parameters)
+        if overlap:
+            names = ", ".join(sorted(overlap))
+            raise ValueError(f"Fixed parameter(s) were also sampled: {names}")
+        kwargs.update(fixed_parameters)
         if native_output:
             return _generate_dipole_native(model, rng_key=rng_key, **kwargs)
 
@@ -966,6 +1020,7 @@ def make_jax_model_sim_wrapper(
     model: RacsJax,
     batch_size: int,
     *,
+    fixed_parameters: Mapping[str, float] | None = None,
     summary_features: list[SummaryFeature] | None = None,
     flux_temperature_n_bins: int = DEFAULT_FLUX_TEMPERATURE_N_BINS,
     flux_temperature_quantiles: tuple[float, ...] = DEFAULT_FLUX_TEMPERATURE_QUANTILES,
@@ -974,6 +1029,7 @@ def make_jax_model_sim_wrapper(
     flux_elevation_quantiles: tuple[float, ...] = DEFAULT_FLUX_ELEVATION_QUANTILES,
 ):
     summary_features = list(summary_features or [])
+    fixed_parameters = dict(fixed_parameters or {})
 
     def model_sim_wrapper(
         npkey: NPKey,
@@ -982,7 +1038,14 @@ def make_jax_model_sim_wrapper(
         ui: MultiRoundInfererUI | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         jax_key = _jax_key_from_npkey(npkey)
+        overlap = set(params) & set(fixed_parameters)
+        if overlap:
+            names = ", ".join(sorted(overlap))
+            raise ValueError(f"Fixed parameter(s) were also sampled: {names}")
         theta = {key: np.asarray(value) for key, value in params.items()}
+        theta.update(
+            {key: np.asarray(value) for key, value in fixed_parameters.items()}
+        )
 
         if not summary_features:
             return model.batch_generate_dipole(
@@ -1262,6 +1325,7 @@ def main() -> None:
             f"Observed {product.label} map has zero total counts after masking/cuts."
         )
 
+    fixed_parameters = _fixed_parameters_from_args(args)
     prior, theta_0 = build_prior_and_reference_theta(
         simulate_clustering=args.simulate_clustering,
         add_extra_error=args.add_extra_error,
@@ -1285,13 +1349,15 @@ def main() -> None:
         p_clus_range=(args.p_clus_min, args.p_clus_max),
         clus_stop_prob_range=(args.clus_stop_prob_min, args.clus_stop_prob_max),
         lambda_clus_range=(args.lambda_clus_min, args.lambda_clus_max),
-        eta_range=(args.eta_min, args.eta_max)
+        eta_range=(args.eta_min, args.eta_max),
+        fixed_parameters=fixed_parameters,
     )
 
     if args.use_jax:
         model_sim_wrapper = make_jax_model_sim_wrapper(
             model,
             batch_size=args.jax_batch_size,
+            fixed_parameters=fixed_parameters,
             summary_features=summary_features,
             flux_temperature_n_bins=args.flux_temperature_n_bins,
             flux_temperature_quantiles=args.flux_temperature_quantiles,
@@ -1301,6 +1367,7 @@ def main() -> None:
     else:
         simulator_wrapper = make_simulator_wrapper(
             model,
+            fixed_parameters=fixed_parameters,
             summary_features=summary_features,
             flux_temperature_n_bins=args.flux_temperature_n_bins,
             flux_temperature_quantiles=args.flux_temperature_quantiles,

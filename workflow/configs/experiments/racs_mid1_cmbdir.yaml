@@ -1,0 +1,8 @@
+extends: racs_mid1_fiducial
+experiment_id: racs_mid1_cmbdir
+
+args:
+  dipole_longitude_min: 264.021
+  dipole_longitude_max: 264.021
+  dipole_latitude_min: 48.253
+  dipole_latitude_max: 48.253
