@@ -90,6 +90,7 @@ rule infer_racs:
         prepared_observation=rules.prepare_racs_observation.output.observation,
     output:
         samples=SAMPLES_PATH,
+        round_evidence=ROUND_EVIDENCE_PATH,
         checkpoint=CHECKPOINT_PATH,
         observation=RESULT_OBSERVATION_PATH,
         model_config=MODEL_CONFIG_PATH,
@@ -128,6 +129,7 @@ rule infer_racs:
 rule package_racs_analysis:
     input:
         final_posterior=rules.infer_racs.output.samples,
+        round_evidence=rules.infer_racs.output.round_evidence,
         reference_observation=rules.infer_racs.output.observation,
         native_reference_observation=(
             rules.prepare_racs_observation.output.native_observation
@@ -165,6 +167,7 @@ rule package_racs_analysis:
             --repository-root . \
             --implementation-fingerprint {params.implementation_fingerprint:q} \
             --final-posterior {input.final_posterior:q} \
+            --round-evidence {input.round_evidence:q} \
             --reference-observation {input.reference_observation:q} \
             --native-reference-observation {input.native_reference_observation:q} \
             --experiment-config {input.experiment_config:q} \

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import io
 from pathlib import Path
 import subprocess
 import zipfile
 
+import numpy as np
 import pytest
 import yaml
 
@@ -59,8 +61,13 @@ def _inputs(tmp_path: Path) -> AnalysisInputs:
     }
     for name, content in values.items():
         (source / name).write_text(content)
+    np.save(
+        source / "epoch_lnZ.npy",
+        np.asarray([[-10.0, -9.5], [0.2, 0.1]], dtype=np.float64),
+    )
     return AnalysisInputs(
         final_posterior=source / "samples_rnd-1.csv",
+        round_evidence=source / "epoch_lnZ.npy",
         reference_observation=source / "reference-observation.npz",
         native_reference_observation=source / "reference-observation-native.npz",
         experiment_config=source / "racs_example.yaml",
@@ -122,6 +129,13 @@ def test_manifest_roles_sizes_and_hashes_match_extracted_files(tmp_path):
             payload = bundle.read(entry["archive_path"])
             assert len(payload) == entry["size"]
             assert hashlib.sha256(payload).hexdigest() == entry["sha256"]
+        evidence = np.load(
+            io.BytesIO(bundle.read("posterior/per-round-log-evidence.npy"))
+        )
+        np.testing.assert_array_equal(
+            evidence,
+            np.asarray([[-10.0, -9.5], [0.2, 0.1]], dtype=np.float64),
+        )
     digest, filename = checksum.read_text().split()
     assert digest == hashlib.sha256(archive.read_bytes()).hexdigest()
     assert filename == archive.name
@@ -149,6 +163,20 @@ def test_missing_input_is_rejected(tmp_path):
     repository = _repository(tmp_path)
     inputs = _inputs(tmp_path)
     inputs.final_posterior.unlink()
+
+    with pytest.raises(FileNotFoundError):
+        package_racs_analysis(
+            experiment_id="racs_example",
+            inputs=inputs,
+            artifacts_root=tmp_path / "artifacts",
+            repository_root=repository,
+        )
+
+
+def test_missing_round_evidence_is_rejected(tmp_path):
+    repository = _repository(tmp_path)
+    inputs = _inputs(tmp_path)
+    inputs.round_evidence.unlink()
 
     with pytest.raises(FileNotFoundError):
         package_racs_analysis(

@@ -17,7 +17,7 @@ import zipfile
 import yaml
 
 
-ARTIFACT_FORMAT_VERSION = 2
+ARTIFACT_FORMAT_VERSION = 3
 _ZIP_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 _EXPERIMENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
@@ -31,6 +31,7 @@ class AnalysisInputs:
     """The workflow-connected files included in an analysis artefact."""
 
     final_posterior: Path
+    round_evidence: Path
     reference_observation: Path
     native_reference_observation: Path
     experiment_config: Path
@@ -48,6 +49,7 @@ class AnalysisInputs:
 
 _ARCHIVE_PATHS = {
     "final_posterior": "posterior/final-posterior.csv",
+    "round_evidence": "posterior/per-round-log-evidence.npy",
     "reference_observation": "observation/reference-observation.npz",
     "native_reference_observation": "observation/reference-observation-native.npz",
     "experiment_config": "configs/experiment.yaml",

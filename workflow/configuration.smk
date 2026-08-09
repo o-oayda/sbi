@@ -376,6 +376,7 @@ DATA_VALIDATION_DIR = (
 DATA_VALIDATION_PATH = f"{DATA_VALIDATION_DIR}/validation-report.yaml"
 
 SAMPLES_PATH = f"{RESULT_DIR}/samples_rnd-{FINAL_ROUND}.csv"
+ROUND_EVIDENCE_PATH = f"{RESULT_DIR}/epoch_lnZ.npy"
 CHECKPOINT_PATH = f"{RESULT_DIR}/nflow_checkpoint_r{FINAL_ROUND}.npz"
 RESULT_OBSERVATION_PATH = f"{RESULT_DIR}/reference_observation.npz"
 MODEL_CONFIG_PATH = f"{RESULT_DIR}/model_config.json"
