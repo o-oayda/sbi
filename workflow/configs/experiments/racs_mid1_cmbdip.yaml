@@ -6,5 +6,5 @@ args:
   dipole_longitude_max: 264.021
   dipole_latitude_min: 48.253
   dipole_latitude_max: 48.253
-  observer_speed_min: 0.0
-  observer_speed_max: 12.0
+  observer_speed_min: 1.
+  observer_speed_max: 1.
