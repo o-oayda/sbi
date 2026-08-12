@@ -26,6 +26,8 @@ FILE_COLLECTION_SCHEMA_PATH = "schemas/racs-file-collection.schema.yaml"
 EXPERIMENT_CONFIG_DIR = Path("workflow/configs/experiments")
 DATASET_REGISTRY_PATH = Path("workflow/configs/datasets.yaml")
 PREPARATION_IMPLEMENTATION_PATHS = (
+    Path("dipolesbi/lib/yaml_to_mask.py"),
+    Path("dipolesbi/pipelines/generate_racs_mask.py"),
     Path("dipolesbi/pipelines/prepare_racs_observation.py"),
     Path("dipolesbi/pipelines/racs_observation_helpers.py"),
     Path("dipolesbi/pipelines/summary_stats.py"),
@@ -253,6 +255,15 @@ OBSERVATION = load_and_validate_yaml(
     OBSERVATION_SCHEMA_PATH,
     "Observation",
 )
+MASK_CONFIG_VALUE = OBSERVATION["mask"].get("config")
+if MASK_CONFIG_VALUE is None:
+    MASK_CONFIG_PATH = None
+    MASK_CONFIG_INPUT = ()
+else:
+    MASK_CONFIG_PATH = Path(MASK_CONFIG_VALUE)
+    if not MASK_CONFIG_PATH.is_file():
+        raise WorkflowError(f"Mask config does not exist: {MASK_CONFIG_PATH}")
+    MASK_CONFIG_INPUT = (MASK_CONFIG_PATH,)
 if (
     OBSERVATION["args"]["temperature_fallback"] == "reference"
     and not math.isfinite(OBSERVATION["args"]["paf_reference_temp_c"])
@@ -379,6 +390,11 @@ RESOLVED_EXPERIMENT_CONFIG_PATH = (
 OBSERVATION_DIR = f"derived/observations/{OBSERVATION_ID}"
 OBSERVATION_PATH = f"{OBSERVATION_DIR}/reference_observation.npz"
 NATIVE_OBSERVATION_PATH = f"{OBSERVATION_DIR}/reference_observation_native.npz"
+MASK_PATH = f"{OBSERVATION_DIR}/mask.npy"
+MASK_PLOT_PATH = f"{OBSERVATION_DIR}/mask.png"
+NATIVE_DENSITY_PLOT_PATH = (
+    f"{OBSERVATION_DIR}/reference_observation_native.png"
+)
 DATA_VALIDATION_DIR = (
     f"derived/data-validation/{CATALOGUE_DATASET_ID}--"
     f"{PAF_TEMPERATURE_DATASET_ID or 'open-meteo'}--{NOISE_MAP_DATASET_ID}"

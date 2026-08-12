@@ -24,6 +24,7 @@ from dipolesbi.pipelines.summary_stats import (
     _real_catalogue_flux_elevation_samples,
     _real_catalogue_flux_temperature_samples,
 )
+from dipolesbi.lib.yaml_to_mask import yaml_to_mask
 
 
 SummaryFeature = Literal[
@@ -132,18 +133,73 @@ def build_mask(
 def build_mask_from_observation_config(
     observation_config: Mapping[str, Any],
 ) -> np.ndarray:
-    """Build the native mask declared by an observation configuration."""
+    """Build the native mask declared by an observation configuration.
+
+    A mask loaded from ``mask.config`` and masks described by the remaining
+    top-level properties are combined so that a pixel is retained only when
+    every configured mask retains it.
+    """
     args = observation_config["args"]
     mask_args = observation_config["mask"]
-    return build_mask(
-        args["nside"],
-        galactic_plane_width_deg=mask_args["galactic_plane_width_deg"],
-        north_equatorial_pole_radius_deg=(
-            mask_args["north_equatorial_pole_radius_deg"]
-        ),
-        default_a_team_radius_deg=mask_args["default_a_team_radius_deg"],
-        source_radii_deg=dict(mask_args.get("source_radii_deg", {})),
+    nside = args["nside"]
+
+    mask_config = mask_args.get("config")
+    legacy_required = {
+        "galactic_plane_width_deg",
+        "north_equatorial_pole_radius_deg",
+        "default_a_team_radius_deg",
+    }
+    if mask_config is None and legacy_required <= mask_args.keys():
+        return build_mask(
+            nside,
+            galactic_plane_width_deg=mask_args["galactic_plane_width_deg"],
+            north_equatorial_pole_radius_deg=(
+                mask_args["north_equatorial_pole_radius_deg"]
+            ),
+            default_a_team_radius_deg=mask_args["default_a_team_radius_deg"],
+            source_radii_deg=dict(mask_args.get("source_radii_deg", {})),
+        )
+
+    combined_mask = np.ones(hp.nside2npix(nside), dtype=np.bool_)
+    if mask_config is not None:
+        configured_mask = yaml_to_mask(
+            mask_config,
+            coordinates="equatorial",
+            nside=nside,
+            ordering="NESTED",
+        )
+        combined_mask &= np.asarray(configured_mask, dtype=np.bool_)
+
+    masker = Masker(
+        np.ones(hp.nside2npix(nside)),
+        coordinate_system="equatorial",
     )
+    has_additional_mask = False
+    if "galactic_plane_width_deg" in mask_args:
+        masker.mask_galactic_plane(mask_args["galactic_plane_width_deg"])
+        has_additional_mask = True
+    if "default_a_team_radius_deg" in mask_args:
+        masker.mask_a_team_sources(
+            radius_deg=mask_args["default_a_team_radius_deg"]
+        )
+        has_additional_mask = True
+    if "north_equatorial_pole_radius_deg" in mask_args:
+        masker.mask_equatorial_poles(
+            north_radius=mask_args["north_equatorial_pole_radius_deg"]
+        )
+        has_additional_mask = True
+    for source_name, radius_deg in mask_args.get("source_radii_deg", {}).items():
+        masker.mask_a_team_sources(
+            radius_deg=radius_deg,
+            source_names=[source_name],
+        )
+        has_additional_mask = True
+
+    if has_additional_mask:
+        combined_mask &= hp.reorder(masker.get_mask_map(), r2n=True).astype(
+            np.bool_, copy=False
+        )
+    return combined_mask
 
 
 def _model_product(model: Racs | RacsJax):

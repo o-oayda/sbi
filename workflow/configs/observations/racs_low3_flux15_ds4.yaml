@@ -4,7 +4,6 @@ datasets:
   catalogue: racs_low3_catalogue
   paf_temperatures: racs_low3_paf_temperatures
   noise_maps: racs_low3_noise_maps
-
 args:
   racs_epoch: low3
 
@@ -40,10 +39,7 @@ args:
 
 # Sky mask applied when constructing the reusable observation.
 mask:
-  galactic_plane_width_deg: 5
-  north_equatorial_pole_radius_deg: 42
-  default_a_team_radius_deg: 2
+  config: workflow/configs/observations/masks/racs_low3_mask.yaml
   source_radii_deg:
-    Cygnus A: 3
     LMC: 13
     SMC: 8

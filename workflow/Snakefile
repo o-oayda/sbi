@@ -54,16 +54,45 @@ rule validate_racs_data:
         """
 
 
-rule prepare_racs_observation:
+rule generate_mask:
+    input:
+        config=OBSERVATION_CONFIG_PATH,
+        mask_config=MASK_CONFIG_INPUT,
+    output:
+        mask=MASK_PATH,
+        plot=MASK_PLOT_PATH,
+    params:
+        output_dir=OBSERVATION_DIR,
+        preparation_implementation_fingerprint=(
+            PREPARATION_IMPLEMENTATION_FINGERPRINT
+        ),
+        jax_platforms=EXECUTION["jax_platforms"],
+    log:
+        f"{OBSERVATION_DIR}/mask-generation.log"
+    shell:
+        """
+        mkdir -p {params.output_dir:q}
+        JAX_PLATFORMS={params.jax_platforms:q} \
+            dipolesbi-generate-racs-mask \
+            --config {input.config:q} \
+            --output {output.mask:q} \
+            --plot-output {output.plot:q} \
+            > {log:q} 2>&1
+        """
+
+
+rule make_observation:
     input:
         data_validation=rules.validate_racs_data.output.report,
         config=OBSERVATION_CONFIG_PATH,
+        mask=rules.generate_mask.output.mask,
         catalogue=CATALOGUE_PATH,
         paf_temperature_files=PAF_TEMPERATURE_FILES,
         noise_map_files=NOISE_MAP_FILES,
     output:
         observation=OBSERVATION_PATH,
         native_observation=NATIVE_OBSERVATION_PATH,
+        native_density_plot=NATIVE_DENSITY_PLOT_PATH,
     params:
         output_dir=OBSERVATION_DIR,
         paf_cli_args=PAF_PREPARATION_CLI_ARGS,
@@ -84,11 +113,13 @@ rule prepare_racs_observation:
         JAX_PLATFORMS={params.jax_platforms:q} \
             dipolesbi-prepare-racs-observation \
             --config {input.config:q} \
+            --mask-path {input.mask:q} \
             --catalogue-path {input.catalogue:q} \
             {params.paf_cli_args} \
             {params.noise_map_cli_args} \
             --output {output.observation:q} \
             --native-output {output.native_observation:q} \
+            --native-plot-output {output.native_density_plot:q} \
             > {log:q} 2>&1
         """
 
@@ -101,7 +132,7 @@ rule infer_racs:
         catalogue=CATALOGUE_PATH,
         paf_temperature_files=PAF_TEMPERATURE_FILES,
         noise_map_files=NOISE_MAP_FILES,
-        prepared_observation=rules.prepare_racs_observation.output.observation,
+        prepared_observation=rules.make_observation.output.observation,
     output:
         samples=SAMPLES_PATH,
         round_evidence=ROUND_EVIDENCE_PATH,
@@ -146,7 +177,7 @@ rule package_racs_analysis:
         round_evidence=rules.infer_racs.output.round_evidence,
         reference_observation=rules.infer_racs.output.observation,
         native_reference_observation=(
-            rules.prepare_racs_observation.output.native_observation
+            rules.make_observation.output.native_observation
         ),
         experiment_config=rules.resolve_racs_experiment.output.config,
         observation_config=OBSERVATION_CONFIG_PATH,

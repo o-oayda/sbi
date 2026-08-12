@@ -40,8 +40,4 @@ args:
 
 # Sky mask applied when constructing the reusable observation.
 mask:
-  galactic_plane_width_deg: 5
-  north_equatorial_pole_radius_deg: 42
-  default_a_team_radius_deg: 2
-  source_radii_deg:
-    Cygnus A: 3
+  config: workflow/configs/observations/masks/racs_mid1_mask.yaml

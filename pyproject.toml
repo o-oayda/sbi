@@ -37,6 +37,7 @@ dependencies = [
 
 [project.scripts]
 dipolesbi-validate-racs-data = "dipolesbi.pipelines.validate_racs_data:main"
+dipolesbi-generate-racs-mask = "dipolesbi.pipelines.generate_racs_mask:main"
 dipolesbi-prepare-racs-observation = "dipolesbi.pipelines.prepare_racs_observation:main"
 dipolesbi-infer-racs = "dipolesbi.pipelines.based_racs:main"
 dipolesbi-package-racs-analysis = "dipolesbi.pipelines.package_racs_analysis:main"

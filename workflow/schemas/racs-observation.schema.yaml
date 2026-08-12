@@ -190,13 +190,14 @@ properties:
 
   mask:
     type: object
-    required:
-      - galactic_plane_width_deg
-      - north_equatorial_pole_radius_deg
-      - default_a_team_radius_deg
+    minProperties: 1
     additionalProperties: false
 
     properties:
+      config:
+        type: string
+        minLength: 1
+
       galactic_plane_width_deg:
         type: number
         minimum: 0

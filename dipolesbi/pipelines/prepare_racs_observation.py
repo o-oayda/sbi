@@ -6,10 +6,11 @@ from typing import Any
 
 from catsim import Racs, RacsConfig
 from catsim.racs_jax import RacsJax
+import healpy as hp
+import matplotlib.pyplot as plt
 import numpy as np
 
 from dipolesbi.pipelines.racs_observation_helpers import (
-    build_mask_from_observation_config,
     build_real_sample,
     load_catalogue,
     load_observation_config,
@@ -21,6 +22,7 @@ def prepare_reference_observation(
     catalogue_path: str | Path,
     paf_temperature_data_dir: str | Path | None,
     noisemap_data_dir: str | Path,
+    mask: np.ndarray,
     *,
     include_native: bool = False,
 ) -> (
@@ -72,7 +74,15 @@ def prepare_reference_observation(
             f"RACS noise-map path is not a directory: {resolved_noisemap_data_dir}"
         )
 
-    mask = build_mask_from_observation_config(observation_config)
+    mask = np.asarray(mask)
+    expected_mask_shape = (12 * args["nside"] ** 2,)
+    if mask.dtype != np.bool_:
+        raise ValueError(f"Mask must have boolean dtype; got {mask.dtype}.")
+    if mask.shape != expected_mask_shape:
+        raise ValueError(
+            "Mask must match the configured native HEALPix resolution; "
+            f"expected {expected_mask_shape}, got {mask.shape}."
+        )
 
     use_jax = bool(args["use_jax"])
     fallback_config = {}
@@ -200,6 +210,30 @@ def save_reference_observation(
     return output
 
 
+def load_mask(mask_path: str | Path) -> np.ndarray:
+    """Load a saved boolean mask without permitting pickled values."""
+    path = Path(mask_path).expanduser()
+    mask = np.load(path, allow_pickle=False)
+    if mask.dtype != np.bool_:
+        raise ValueError(f"Mask must have boolean dtype; got {mask.dtype}.")
+    if mask.ndim != 1:
+        raise ValueError("Mask must be one-dimensional.")
+    return mask
+
+
+def save_native_density_plot(
+    output_path: str | Path,
+    native_x0: np.ndarray,
+) -> Path:
+    """Save an unannotated projection of the native reference density map."""
+    output = Path(output_path).expanduser()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    hp.projview(native_x0, nest=True)
+    plt.savefig(output)
+    plt.close()
+    return output
+
+
 def construct_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Prepare a reusable RACS reference observation."
@@ -231,6 +265,12 @@ def construct_argparser() -> argparse.ArgumentParser:
         help="Directory containing the product-specific RACS noise map.",
     )
     parser.add_argument(
+        "--mask-path",
+        type=Path,
+        required=True,
+        help="Boolean NPY mask generated for this observation.",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         required=True,
@@ -239,7 +279,14 @@ def construct_argparser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--native-output",
         type=Path,
-        help="Optional native-resolution map-only NPZ containing x0 and mask.",
+        required=True,
+        help="Native-resolution map-only NPZ containing x0 and mask.",
+    )
+    parser.add_argument(
+        "--native-plot-output",
+        type=Path,
+        required=True,
+        help="Image containing an unannotated native density projection.",
     )
     return parser
 
@@ -247,24 +294,30 @@ def construct_argparser() -> argparse.ArgumentParser:
 def main() -> None:
     cli_args = construct_argparser().parse_args()
     observation_config = load_observation_config(cli_args.config)
+    mask_map = load_mask(cli_args.mask_path)
     prepared = prepare_reference_observation(
         observation_config,
         cli_args.catalogue_path,
         cli_args.paf_temperature_data_dir,
         cli_args.noisemap_data_dir,
-        include_native=cli_args.native_output is not None,
+        mask_map,
+        include_native=True,
     )
     x0, mask = prepared[:2]
     output = save_reference_observation(cli_args.output, x0, mask)
     print(f"Saved reference observation: {output}")
-    if cli_args.native_output is not None:
-        native_x0, native_mask = prepared[2:]
-        native_output = save_reference_observation(
-            cli_args.native_output,
-            native_x0,
-            native_mask,
-        )
-        print(f"Saved native reference observation: {native_output}")
+    native_x0, native_mask = prepared[2:]
+    native_output = save_reference_observation(
+        cli_args.native_output,
+        native_x0,
+        native_mask,
+    )
+    native_plot_output = save_native_density_plot(
+        cli_args.native_plot_output,
+        native_x0,
+    )
+    print(f"Saved native reference observation: {native_output}")
+    print(f"Saved native density projection: {native_plot_output}")
 
 
 if __name__ == "__main__":

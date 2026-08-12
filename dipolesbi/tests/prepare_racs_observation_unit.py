@@ -50,6 +50,10 @@ def _observation_config(*, use_jax: bool = True):
     }
 
 
+def _native_mask(config):
+    return np.ones(12 * config["args"]["nside"] ** 2, dtype=bool)
+
+
 def test_load_observation_config_requires_mapping(tmp_path):
     path = tmp_path / "observation.yaml"
     path.write_text("- not\n- a\n- mapping\n", encoding="utf-8")
@@ -72,15 +76,8 @@ def test_prepare_reference_observation_wires_config(tmp_path, monkeypatch):
     paf_temperature_data_dir = tmp_path / "paf_temps"
     paf_temperature_data_dir.mkdir()
     config = _observation_config()
+    input_mask = _native_mask(config)
     calls = {}
-
-    monkeypatch.setattr(
-        preparation,
-        "build_mask_from_observation_config",
-        lambda observation_config: calls.setdefault(
-            "mask_config", observation_config
-        ) and np.ones(12 * observation_config["args"]["nside"] ** 2, dtype=bool),
-    )
 
     class FakeModelConfig:
         def __init__(self, **kwargs):
@@ -119,12 +116,13 @@ def test_prepare_reference_observation_wires_config(tmp_path, monkeypatch):
         catalogue_path,
         paf_temperature_data_dir,
         tmp_path,
+        input_mask,
     )
 
     np.testing.assert_array_equal(x0, expected_x0)
     np.testing.assert_array_equal(mask, expected_mask)
     assert calls["initialised"] is True
-    assert calls["mask_config"] is config
+    np.testing.assert_array_equal(calls["model_config"]["mask_map"], input_mask)
     assert calls["model_config"]["catalogue_path"] == str(catalogue_path.resolve())
     assert calls["model_config"]["paf_temperature_data_dir"] == str(
         paf_temperature_data_dir.resolve()
@@ -155,12 +153,6 @@ def test_prepare_reference_observation_accepts_no_paf_directory_for_open_meteo(
     config["args"]["temperature_fallback"] = "open_meteo"
     calls = {}
 
-    monkeypatch.setattr(
-        preparation,
-        "build_mask_from_observation_config",
-        lambda config: np.ones(12 * config["args"]["nside"] ** 2, dtype=bool),
-    )
-
     class FakeModelConfig:
         def __init__(self, **kwargs):
             calls.update(kwargs)
@@ -181,7 +173,9 @@ def test_prepare_reference_observation_accepts_no_paf_directory_for_open_meteo(
         lambda *args, **kwargs: (np.zeros(1), np.ones(1, dtype=bool)),
     )
 
-    preparation.prepare_reference_observation(config, catalogue_path, None, tmp_path)
+    preparation.prepare_reference_observation(
+        config, catalogue_path, None, tmp_path, _native_mask(config)
+    )
 
     assert calls["paf_temperature_data_dir"] is None
     assert calls["temperature_fallback"] == "open_meteo"
@@ -195,7 +189,11 @@ def test_prepare_reference_observation_rejects_no_paf_without_low2_fallback(
 
     with pytest.raises(ValueError, match="may only be omitted for LOW2"):
         preparation.prepare_reference_observation(
-            _observation_config(), catalogue_path, None, tmp_path
+            _observation_config(),
+            catalogue_path,
+            None,
+            tmp_path,
+            _native_mask(_observation_config()),
         )
 
 
@@ -213,12 +211,6 @@ def test_prepare_reference_observation_wires_explicit_reference_fallback(
         max_reference_fallback_tiles=1,
     )
     calls = {}
-
-    monkeypatch.setattr(
-        preparation,
-        "build_mask_from_observation_config",
-        lambda config: np.ones(12 * config["args"]["nside"] ** 2, dtype=bool),
-    )
 
     class FakeModelConfig:
         def __init__(self, **kwargs):
@@ -241,7 +233,11 @@ def test_prepare_reference_observation_wires_explicit_reference_fallback(
     )
 
     preparation.prepare_reference_observation(
-        config, catalogue_path, paf_temperature_data_dir, tmp_path
+        config,
+        catalogue_path,
+        paf_temperature_data_dir,
+        tmp_path,
+        _native_mask(config),
     )
 
     assert calls["temperature_fallback"] == "reference"
@@ -274,7 +270,11 @@ def test_prepare_reference_observation_rejects_unsafe_reference_fallback(
 
     with pytest.raises(ValueError, match=message):
         preparation.prepare_reference_observation(
-            config, catalogue_path, paf_temperature_data_dir, tmp_path
+            config,
+            catalogue_path,
+            paf_temperature_data_dir,
+            tmp_path,
+            _native_mask(config),
         )
 
 
@@ -285,11 +285,6 @@ def test_prepare_reference_observation_can_include_native_map(tmp_path, monkeypa
     paf_temperature_data_dir.mkdir()
     calls = []
 
-    monkeypatch.setattr(
-        preparation,
-        "build_mask_from_observation_config",
-        lambda config: np.ones(12 * config["args"]["nside"] ** 2, dtype=bool),
-    )
     monkeypatch.setattr(preparation, "RacsConfig", lambda **kwargs: object())
 
     class FakeModel:
@@ -314,6 +309,7 @@ def test_prepare_reference_observation_can_include_native_map(tmp_path, monkeypa
         catalogue_path,
         paf_temperature_data_dir,
         tmp_path,
+        _native_mask(_observation_config()),
         include_native=True,
     )
 
@@ -391,3 +387,47 @@ def test_save_reference_observation_rejects_shape_mismatch(tmp_path):
             np.zeros(3),
             np.ones(2, dtype=bool),
         )
+
+
+def test_load_mask_requires_one_dimensional_boolean_array(tmp_path):
+    path = tmp_path / "mask.npy"
+    np.save(path, np.ones(4, dtype=bool))
+    np.testing.assert_array_equal(preparation.load_mask(path), np.ones(4, dtype=bool))
+
+    np.save(path, np.ones(4, dtype=np.int8))
+    with pytest.raises(ValueError, match="boolean dtype"):
+        preparation.load_mask(path)
+
+
+def test_prepare_reference_observation_rejects_wrong_mask_resolution(tmp_path):
+    config = _observation_config()
+    catalogue_path = tmp_path / "catalogue.fits"
+    catalogue_path.touch()
+    paf_temperature_data_dir = tmp_path / "paf_temps"
+    paf_temperature_data_dir.mkdir()
+
+    with pytest.raises(ValueError, match="native HEALPix resolution"):
+        preparation.prepare_reference_observation(
+            config,
+            catalogue_path,
+            paf_temperature_data_dir,
+            tmp_path,
+            np.ones(12, dtype=bool),
+        )
+
+
+def test_save_native_density_plot_uses_plain_nested_projview(tmp_path, monkeypatch):
+    calls = []
+    native_x0 = np.array([1.0, np.nan, 3.0], dtype=np.float32)
+    monkeypatch.setattr(
+        preparation.hp,
+        "projview",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(preparation.plt, "savefig", lambda path: calls.append(path))
+    monkeypatch.setattr(preparation.plt, "close", lambda: None)
+    output = tmp_path / "native.png"
+
+    preparation.save_native_density_plot(output, native_x0)
+
+    assert calls == [((native_x0,), {"nest": True}), output]
