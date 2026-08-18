@@ -17,8 +17,10 @@ args:
   no_ui: true
 
   # Assumed population spectral index distribution
-  alpha_mean: 0.8
-  alpha_sigma: 0.3
+  alpha_mean_min: 0.8
+  alpha_mean_max: 0.8
+  alpha_sigma_min: 0.3
+  alpha_sigma_max: 0.3
 
   temperature_model: hot_linear
 

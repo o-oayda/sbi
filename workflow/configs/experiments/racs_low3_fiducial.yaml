@@ -16,9 +16,12 @@ args:
   ssnle_seed: 0
   no_ui: true
 
-  # Assumed population spectral index distribution
-  alpha_mean: 0.8
-  alpha_sigma: 0.3
+  # Population spectral-index distribution. Deliberately broad temporary
+  # priors, for testing whether the data identify either parameter.
+  alpha_mean_min: 0.4
+  alpha_mean_max: 1.2
+  alpha_sigma_min: 0.1
+  alpha_sigma_max: 0.7
 
   temperature_model: hot_linear
 

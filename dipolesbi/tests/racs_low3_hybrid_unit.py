@@ -324,6 +324,8 @@ def test_build_prior_and_reference_theta_accepts_custom_bounds():
         dipole_longitude_range=(10.0, 250.0),
         dipole_latitude_range=(-30.0, 45.0),
         temp_beta_range=(0.01, 0.03),
+        alpha_mean_range=(0.5, 1.1),
+        alpha_sigma_range=(0.1, 0.6),
         p_clus_range=(0.2, 0.8),
         clus_stop_prob_range=(0.5, 0.9),
     )
@@ -339,6 +341,12 @@ def test_build_prior_and_reference_theta_accepts_custom_bounds():
     assert prior.prior_dict["theta"]["high_range"] == 45.0
     assert prior.prior_dict["beta"]["low_range"] == 0.01
     assert prior.prior_dict["beta"]["high_range"] == 0.03
+    assert prior.prior_dict["alpha_mu"]["simulator_kwarg"] == "alpha_mean"
+    assert prior.prior_dict["alpha_mu"]["low_range"] == 0.5
+    assert prior.prior_dict["alpha_mu"]["high_range"] == 1.1
+    assert prior.prior_dict["alpha_sigma"]["simulator_kwarg"] == "alpha_sigma"
+    assert prior.prior_dict["alpha_sigma"]["low_range"] == 0.1
+    assert prior.prior_dict["alpha_sigma"]["high_range"] == 0.6
     assert prior.prior_dict["pclus"]["low_range"] == 0.2
     assert prior.prior_dict["pclus"]["high_range"] == 0.8
     assert prior.prior_dict["pstop"]["low_range"] == 0.5
@@ -370,6 +378,10 @@ def test_equal_direction_bounds_become_fixed_and_leave_the_prior():
         dipole_latitude_max=48.253,
         temp_beta_min=0.0,
         temp_beta_max=0.05,
+        alpha_mean_min=0.8,
+        alpha_mean_max=0.8,
+        alpha_sigma_min=0.3,
+        alpha_sigma_max=0.3,
         add_elevation_model=False,
         simulate_clustering="poisson",
         lambda_clus_min=0.0,
@@ -386,6 +398,8 @@ def test_equal_direction_bounds_become_fixed_and_leave_the_prior():
     assert fixed == {
         "dipole_longitude": 264.021,
         "dipole_latitude": 48.253,
+        "alpha_mean": 0.8,
+        "alpha_sigma": 0.3,
     }
     simulator_kwargs = {
         entry["simulator_kwarg"] for entry in prior.prior_dict.values()
@@ -394,6 +408,10 @@ def test_equal_direction_bounds_become_fixed_and_leave_the_prior():
     assert "dipole_latitude" not in simulator_kwargs
     assert "dipole_longitude" not in theta_0
     assert "dipole_latitude" not in theta_0
+    assert "alpha_mean" not in simulator_kwargs
+    assert "alpha_sigma" not in simulator_kwargs
+    assert "alpha_mean" not in theta_0
+    assert "alpha_sigma" not in theta_0
 
 
 def test_simulator_wrappers_inject_fixed_parameters_and_reject_overlap():

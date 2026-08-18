@@ -249,18 +249,6 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
         ),
     )
     parser.add_argument(
-        "--alpha_mean",
-        type=float,
-        default=0.8,
-        help="Mean of the Gaussian spectral-index model.",
-    )
-    parser.add_argument(
-        "--alpha_sigma",
-        type=float,
-        default=0.2,
-        help="Standard deviation of the Gaussian spectral-index model.",
-    )
-    parser.add_argument(
         "--noise_map_nside",
         type=int,
         default=256,
@@ -361,6 +349,10 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
     parser.add_argument("--dipole_latitude_max", type=float, default=90.0)
     parser.add_argument("--temp_beta_min", type=float, default=0.0)
     parser.add_argument("--temp_beta_max", type=float, default=0.05)
+    parser.add_argument("--alpha_mean_min", type=float, default=0.8)
+    parser.add_argument("--alpha_mean_max", type=float, default=0.8)
+    parser.add_argument("--alpha_sigma_min", type=float, default=0.3)
+    parser.add_argument("--alpha_sigma_max", type=float, default=0.3)
     parser.add_argument(
         "--add_elevation_model",
         action="store_true",
@@ -513,6 +505,8 @@ def _validate_prior_bounds(
         "dipole_longitude": (args.dipole_longitude_min, args.dipole_longitude_max),
         "dipole_latitude": (args.dipole_latitude_min, args.dipole_latitude_max),
         "temp_beta": (args.temp_beta_min, args.temp_beta_max),
+        "alpha_mean": (args.alpha_mean_min, args.alpha_mean_max),
+        "alpha_sigma": (args.alpha_sigma_min, args.alpha_sigma_max),
         "elevation_trough": (
             args.elevation_trough_min,
             args.elevation_trough_max,
@@ -528,6 +522,8 @@ def _validate_prior_bounds(
             parser.error(
                 f"--{name}_min must be less than or equal to --{name}_max."
             )
+    if args.alpha_sigma_min <= 0:
+        parser.error("--alpha_sigma_min must be positive.")
 
 
 def _fixed_parameters_from_args(args: argparse.Namespace) -> dict[str, float]:
@@ -538,6 +534,8 @@ def _fixed_parameters_from_args(args: argparse.Namespace) -> dict[str, float]:
         "dipole_longitude",
         "dipole_latitude",
         "temp_beta",
+        "alpha_mean",
+        "alpha_sigma",
     ]
     if args.add_elevation_model:
         active.extend(("elevation_trough", "elevation_amp"))
@@ -744,6 +742,8 @@ def build_prior_and_reference_theta(
     dipole_longitude_range: tuple[float, float] = (0.0, 360.0),
     dipole_latitude_range: tuple[float, float] = (-90.0, 90.0),
     temp_beta_range: tuple[float, float] = (0.0, 0.05),
+    alpha_mean_range: tuple[float, float] = (0.8, 0.8),
+    alpha_sigma_range: tuple[float, float] = (0.3, 0.3),
     add_elevation_model: bool = False,
     elevation_trough_range: tuple[float, float] = (0.0, 90.0),
     elevation_amp_range: tuple[float, float] = (0.0, 0.2),
@@ -768,6 +768,20 @@ def build_prior_and_reference_theta(
         simulator_kwarg="temp_beta",
         low=temp_beta_range[0],
         high=temp_beta_range[1],
+        dist_type="Uniform",
+    )
+    prior.add_prior(
+        short_name="alpha_mu",
+        simulator_kwarg="alpha_mean",
+        low=alpha_mean_range[0],
+        high=alpha_mean_range[1],
+        dist_type="Uniform",
+    )
+    prior.add_prior(
+        short_name="alpha_sigma",
+        simulator_kwarg="alpha_sigma",
+        low=alpha_sigma_range[0],
+        high=alpha_sigma_range[1],
         dist_type="Uniform",
     )
     if add_elevation_model:
@@ -826,6 +840,8 @@ def build_prior_and_reference_theta(
         "dipole_longitude": 264.021,
         "dipole_latitude": 48.253,
         "temp_beta": 0.02,
+        "alpha_mean": 0.8,
+        "alpha_sigma": 0.3,
         "p_clus": 0.0,
         "clus_stop_prob": 1.0,
         "fractional_error_eta": 0.
@@ -1257,8 +1273,8 @@ def main() -> None:
         # disabled. Poisson with its default lambda_clus=0 is the exact no-op.
         cluster_count_model=args.simulate_clustering or "poisson",
         downscale_nside=args.downscale_nside,
-        alpha_mean=args.alpha_mean,
-        alpha_sigma=args.alpha_sigma,
+        alpha_mean=args.alpha_mean_min,
+        alpha_sigma=args.alpha_sigma_min,
         noisemap_data_dir=args.noisemap_data_dir,
         noise_map_nside=args.noise_map_nside,
         flux_error_noise_bins=args.flux_error_noise_bins,
@@ -1340,6 +1356,8 @@ def main() -> None:
         ),
         dipole_latitude_range=(args.dipole_latitude_min, args.dipole_latitude_max),
         temp_beta_range=(args.temp_beta_min, args.temp_beta_max),
+        alpha_mean_range=(args.alpha_mean_min, args.alpha_mean_max),
+        alpha_sigma_range=(args.alpha_sigma_min, args.alpha_sigma_max),
         add_elevation_model=args.add_elevation_model,
         elevation_trough_range=(
             args.elevation_trough_min,

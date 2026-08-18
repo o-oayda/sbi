@@ -40,8 +40,10 @@ properties:
       - jax_batch_size
       - ssnle_seed
       - no_ui
-      - alpha_mean
-      - alpha_sigma
+      - alpha_mean_min
+      - alpha_mean_max
+      - alpha_sigma_min
+      - alpha_sigma_max
       - temperature_model
       - simulate_clustering
       - add_extra_error
@@ -88,9 +90,14 @@ properties:
         minimum: 0
       no_ui:
         type: boolean
-      alpha_mean:
+      alpha_mean_min:
         type: number
-      alpha_sigma:
+      alpha_mean_max:
+        type: number
+      alpha_sigma_min:
+        type: number
+        exclusiveMinimum: 0
+      alpha_sigma_max:
         type: number
         exclusiveMinimum: 0
       temperature_model:
