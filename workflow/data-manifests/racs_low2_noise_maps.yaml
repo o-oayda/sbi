@@ -1,0 +1,5 @@
+dataset_id: racs_low2_noise_maps
+file_glob: RACS-low2.iqr.hpx
+files:
+  - relative_path: RACS-low2.iqr.hpx
+    sha256: 4f910f0eed4641c1c864038679e0bedc1e5fa3ead1146cafbb4fd44e37204034

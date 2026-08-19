@@ -75,7 +75,7 @@ properties:
 
     properties:
       racs_epoch:
-        enum: [low3, mid1]
+        enum: [low3, mid1, low2]
 
       flux_min:
         type: number
