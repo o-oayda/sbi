@@ -1,0 +1,12 @@
+extends: racs_low2_flux15_ds4
+observation_id: racs_low2_25as_flux15_ds4
+
+datasets:
+  catalogue: racs_low2_25as_catalogue
+
+args:
+  racs_epoch: low2-25as
+
+
+mask:
+  config: workflow/configs/observations/masks/racs_low2_25as_mask.yaml

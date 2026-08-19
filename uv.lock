@@ -340,7 +340,7 @@ wheels = [
 [[package]]
 name = "catsim"
 version = "0.1.0"
-source = { git = "https://github.com/o-oayda/catsim.git?rev=low2-lookup#4d25ced2045fa04eccfa7b6e214ea17dc5a18918" }
+source = { git = "https://github.com/o-oayda/catsim.git?rev=low2-lookup#e5e2f765994da74397db5585ff47c3e00b31be8d" }
 dependencies = [
     { name = "astropy" },
     { name = "dill" },

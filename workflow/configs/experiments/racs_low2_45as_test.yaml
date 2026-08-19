@@ -1,0 +1,4 @@
+extends: racs_low2_test
+experiment_id: racs_low2_45as_test
+
+observation_config: workflow/configs/observations/racs_low2_45as_flux15_ds4.yaml

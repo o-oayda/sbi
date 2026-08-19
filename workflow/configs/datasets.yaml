@@ -41,6 +41,18 @@ datasets:
     sha256: b8a5711f6168522b0064cb757661eba1e987308afa3239cbfc53b4fe04de3f81
     source: Internal file
 
+  racs_low2_25as_catalogue:
+    type: file
+    description: RACS low2 25 arcsec patched source catalogue used for the reference observation.
+    sha256: b86781c93026e49e33ee97b43c180d641774f6c331936c8c21051becaf469efc
+    source: Internal file
+
+  racs_low2_45as_catalogue:
+    type: file
+    description: RACS low2 45 arcsec patched source catalogue used for the reference observation.
+    sha256: ad9f05a76641e552d31b46ef2b6346b6c5bfa437c6c658e211342a36fcc98405
+    source: Internal file
+
   racs_low2_paf_temperatures:
     type: file_collection
     description: MID1 per-antenna ASKAP PAF temperatures reused for RACS low2.

@@ -14,5 +14,9 @@ data_locations:
     path: /path/to/racs/noisemaps
   racs_low2_catalogue:
     path: /path/to/RACS-low2_noscale_srl.fits
+  racs_low2_25as_catalogue:
+    path: /path/to/RACS-low2_sources_25arcsec_patched.fits
+  racs_low2_45as_catalogue:
+    path: /path/to/RACS-low2_sources_45arcsec_patched.fits
   racs_low2_paf_temperatures:
     path: /path/to/paf_temps/mid1
