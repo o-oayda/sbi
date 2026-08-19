@@ -1,0 +1,13 @@
+extends: racs_mid1_flux15_ds4
+observation_id: racs_mid1_25as_flux15_ds4
+
+datasets:
+  catalogue: racs_mid1_25as_catalogue
+  paf_temperatures: racs_mid1_paf_temperatures
+  noise_maps: racs_mid1_noise_maps
+
+args:
+  racs_epoch: mid1-25as
+
+mask:
+  config: workflow/configs/observations/masks/racs_mid1_25as_mask.yaml

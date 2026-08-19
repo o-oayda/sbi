@@ -1,0 +1,5 @@
+extends: racs_mid1_fiducial
+experiment_id: racs_mid1_25as_fiducial
+
+observation_config: workflow/configs/observations/racs_mid1_25as_flux15_ds4.yaml
+inference_config: workflow/configs/inference/nle_maf11_zscore.yaml

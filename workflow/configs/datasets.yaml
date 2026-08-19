@@ -17,6 +17,12 @@ datasets:
     manifest: ../data-manifests/racs_mid1_noise_maps.yaml
     source: Internal file
 
+  racs_mid1_25as_catalogue:
+    type: file
+    description: RACS mid1 25" source catalogue used for the reference observation.
+    sha256:
+    source: Internal file
+
   racs_low3_catalogue:
     type: file
     description: RACS low3 source catalogue used for the reference observation.

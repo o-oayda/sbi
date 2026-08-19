@@ -2,6 +2,8 @@
 data_locations:
   racs_mid1_catalogue:
     path: /path/to/RACS-mid1_noscale_srl.fits
+  racs_mid1_25as_catalogue:
+    path: /path/to/RACS-mid1_25arcsec_sources.csv
   racs_mid1_paf_temperatures:
     path: /path/to/paf_temps
   racs_mid1_noise_maps:

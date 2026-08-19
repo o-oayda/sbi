@@ -1,0 +1,41 @@
+# HEALPix mask, written by dipoleview.
+# Source: racs-mid1-25_20260420_184703_metadata.json
+# Written: 2026-08-11 06:00 UTC
+#
+# Rebuild it with yaml_to_mask.py:
+#     mask = yaml_to_mask("racs-mid1-25_20260420_184703.yaml")
+# giving a boolean array, True = keep, False = masked out.
+#
+# Pixels matching any cut, or falling inside any disc, are masked
+# out. Angles are degrees; cuts and discs name their own frame, so
+# they hold whatever frame the map itself is pixelised in.
+#
+# Every masked pixel follows from the cuts and discs, so this
+# mask can be rebuilt at any nside, ordering and pixelisation
+# frame you like.
+
+coordinates: "equatorial"
+nside: 64
+ordering: "nest"
+
+cuts:
+  - "|b|<5"
+  - "dec>29.4"
+
+discs:
+  - "l=309.5, b=19.4, r=3.4"
+  - "l=242.9, b=25.1, r=2.0"
+  - "l=184.56, b=-5.78, r=3.4"
+  - "l=283.8, b=74.5, r=3.4"
+  - "l=279.7, b=-33.6, r=3.4"
+  - "l=21.2, b=19.6, r=2.0"
+  - "l=289.9, b=64.4, r=3.4"
+  - "l=170.6, b=-11.6, r=3.4"
+  - "l=209.0, b=-19.4, r=3.4"
+  - "l=206.5, b=-16.4, r=2.0"
+  - "l=325.2, b=-7.2, r=2.0"
+  - "l=23.1, b=29.0, r=3.4"
+  - "l=240.2, b=-56.7, r=1.1"
+  - "l=224.8, b=8.7, r=1.1"
+
+pixels: []
