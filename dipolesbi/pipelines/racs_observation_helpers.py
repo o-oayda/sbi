@@ -11,7 +11,6 @@ from dipoleutils.utils.samples import CatalogueToMap
 import healpy as hp
 import matplotlib.pyplot as plt
 import numpy as np
-import yaml
 
 from dipolesbi.pipelines.summary_stats import (
     _flux_elevation_edges,
@@ -23,6 +22,10 @@ from dipolesbi.pipelines.summary_stats import (
     _native_count_log_dispersion_feature,
     _real_catalogue_flux_elevation_samples,
     _real_catalogue_flux_temperature_samples,
+)
+from dipolesbi.pipelines.experiment_config import (
+    ObservationConfigError,
+    resolve_observation_config,
 )
 from dipolesbi.lib.yaml_to_mask import yaml_to_mask
 
@@ -46,12 +49,11 @@ DEFAULT_SOURCE_RADII_DEG: dict[str, float] = {
 
 
 def load_observation_config(config_path: str | Path) -> dict[str, Any]:
-    """Load an observation YAML mapping from disk."""
-    path = Path(config_path).expanduser()
-    with path.open(encoding="utf-8") as stream:
-        config = yaml.safe_load(stream)
-    if not isinstance(config, dict):
-        raise ValueError(f"Observation config must contain a YAML mapping: {path}")
+    """Load and resolve an observation YAML inheritance tree."""
+    try:
+        config, _ = resolve_observation_config(config_path)
+    except (ObservationConfigError, FileNotFoundError) as error:
+        raise ValueError(str(error)) from error
     return config
 
 

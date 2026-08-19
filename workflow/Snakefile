@@ -57,6 +57,7 @@ rule validate_racs_data:
 rule generate_mask:
     input:
         config=OBSERVATION_CONFIG_PATH,
+        inherited_configs=OBSERVATION_CONFIG_PARENT_PATHS,
         mask_config=MASK_CONFIG_INPUT,
     output:
         mask=MASK_PATH,
@@ -85,6 +86,7 @@ rule make_observation:
     input:
         data_validation=rules.validate_racs_data.output.report,
         config=OBSERVATION_CONFIG_PATH,
+        inherited_configs=OBSERVATION_CONFIG_PARENT_PATHS,
         mask=rules.generate_mask.output.mask,
         catalogue=CATALOGUE_PATH,
         paf_temperature_files=PAF_TEMPERATURE_FILES,
@@ -128,6 +130,7 @@ rule infer_racs:
     input:
         experiment_config=rules.resolve_racs_experiment.output.config,
         observation_config=OBSERVATION_CONFIG_PATH,
+        inherited_observation_configs=OBSERVATION_CONFIG_PARENT_PATHS,
         inference_config=INFERENCE_CONFIG_PATH,
         catalogue=CATALOGUE_PATH,
         paf_temperature_files=PAF_TEMPERATURE_FILES,
@@ -181,6 +184,7 @@ rule package_racs_analysis:
         ),
         experiment_config=rules.resolve_racs_experiment.output.config,
         observation_config=OBSERVATION_CONFIG_PATH,
+        inherited_observation_configs=OBSERVATION_CONFIG_PARENT_PATHS,
         inference_config=INFERENCE_CONFIG_PATH,
         data_validation=rules.validate_racs_data.output.report,
         dataset_registry=DATASET_REGISTRY_PATH,

@@ -13,7 +13,9 @@ import yaml
 from dipolesbi.pipelines.package_racs_analysis import implementation_fingerprint
 from dipolesbi.pipelines.experiment_config import (
     ExperimentConfigError,
+    ObservationConfigError,
     resolve_experiment_config,
+    resolve_observation_config,
 )
 
 
@@ -250,10 +252,18 @@ if EXPERIMENT["experiment_id"] != EXPERIMENT_NAME:
     )
 
 OBSERVATION_CONFIG_PATH = Path(EXPERIMENT["observation_config"])
-OBSERVATION = load_and_validate_yaml(
-    OBSERVATION_CONFIG_PATH,
-    OBSERVATION_SCHEMA_PATH,
-    "Observation",
+try:
+    OBSERVATION, OBSERVATION_CONFIG_PATHS = resolve_observation_config(
+        OBSERVATION_CONFIG_PATH,
+        observation_dir=OBSERVATION_CONFIG_PATH.parent,
+    )
+except (ObservationConfigError, FileNotFoundError) as error:
+    raise WorkflowError(str(error)) from error
+validate(OBSERVATION, OBSERVATION_SCHEMA_PATH)
+OBSERVATION_CONFIG_PARENT_PATHS = tuple(
+    path
+    for path in OBSERVATION_CONFIG_PATHS
+    if path != OBSERVATION_CONFIG_PATH.resolve(strict=True)
 )
 MASK_CONFIG_VALUE = OBSERVATION["mask"].get("config")
 if MASK_CONFIG_VALUE is None:
