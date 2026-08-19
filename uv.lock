@@ -340,7 +340,7 @@ wheels = [
 [[package]]
 name = "catsim"
 version = "0.1.0"
-source = { git = "https://github.com/o-oayda/catsim.git?rev=racs-noise-lookup#5baf238effa55cbfe4cf5dc755ee4b4427a91b73" }
+source = { git = "https://github.com/o-oayda/catsim.git?rev=v0.1.1#3201b5861b2cca0eebf6d67553156dc2d7872af8" }
 dependencies = [
     { name = "astropy" },
     { name = "dill" },
@@ -701,7 +701,7 @@ requires-dist = [
     { name = "anesthetic", specifier = "<=2.10.3" },
     { name = "astropy", specifier = ">=7.0.2,<8.0.0" },
     { name = "blackjax", git = "https://github.com/handley-lab/blackjax?rev=95e93ed93e726b95143b2f4a9582888621625f52" },
-    { name = "catsim", git = "https://github.com/o-oayda/catsim.git?rev=racs-noise-lookup" },
+    { name = "catsim", git = "https://github.com/o-oayda/catsim.git?rev=v0.1.1" },
     { name = "corner", specifier = ">=2.2.3,<3.0.0" },
     { name = "dill", specifier = ">=0.4.0,<0.5.0" },
     { name = "dipole-utils", git = "https://github.com/o-oayda/dipole-utils.git?rev=main" },
