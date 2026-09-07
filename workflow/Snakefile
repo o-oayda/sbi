@@ -94,6 +94,7 @@ rule make_observation:
     output:
         observation=OBSERVATION_PATH,
         native_observation=NATIVE_OBSERVATION_PATH,
+        local_source_crossmatches=LOCAL_SOURCE_CROSSMATCH_PATH,
         native_density_plot=NATIVE_DENSITY_PLOT_PATH,
     params:
         output_dir=OBSERVATION_DIR,
@@ -121,6 +122,7 @@ rule make_observation:
             {params.noise_map_cli_args} \
             --output {output.observation:q} \
             --native-output {output.native_observation:q} \
+            --crossmatch-output {output.local_source_crossmatches:q} \
             --native-plot-output {output.native_density_plot:q} \
             > {log:q} 2>&1
         """

@@ -226,6 +226,46 @@ def test_catalogue_view_requires_source_name_column_for_crossmatch(monkeypatch):
         )
 
 
+def test_build_real_sample_can_return_primary_crossmatch_table(monkeypatch):
+    matches = Table(
+        {
+            "A_Source_Name": ["RACS-1"],
+            "B_source_name": ["NGC 1"],
+        }
+    )
+
+    class FakeCatalogueView:
+        local_common_sources = matches
+
+        def make_density_map(self, **kwargs):
+            return np.zeros(12, dtype=np.float32)
+
+    monkeypatch.setattr(
+        observation_helpers,
+        "_catalogue_view",
+        lambda *args, **kwargs: FakeCatalogueView(),
+    )
+    model = SimpleNamespace(
+        product=RACS_PRODUCTS["mid1"],
+        nside=1,
+        mask_map=np.ones(12, dtype=bool),
+        downscale_nside=None,
+    )
+
+    x0, mask, crossmatch_table = observation_helpers.build_real_sample(
+        model,
+        Table(),
+        flux_min=15.0,
+        local_source_crossmatch_radius_arcsec=5.0,
+        save_map_plot=False,
+        return_crossmatch_table=True,
+    )
+
+    assert x0.shape == mask.shape == (12,)
+    assert crossmatch_table is not matches
+    assert list(crossmatch_table["A_Source_Name"]) == ["RACS-1"]
+
+
 def test_build_racs_config_defaults_to_low3_product():
     config = build_racs_config(**_minimal_racs_config_kwargs())
 

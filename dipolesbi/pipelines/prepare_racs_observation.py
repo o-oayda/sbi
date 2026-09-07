@@ -4,6 +4,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
+from astropy.table import Table
 from catsim import Racs, RacsConfig
 from catsim.racs_jax import RacsJax
 import healpy as hp
@@ -25,9 +26,12 @@ def prepare_reference_observation(
     mask: np.ndarray,
     *,
     include_native: bool = False,
+    include_crossmatch: bool = False,
 ) -> (
     tuple[np.ndarray, np.ndarray]
+    | tuple[np.ndarray, np.ndarray, Table]
     | tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+    | tuple[np.ndarray, np.ndarray, Table, np.ndarray, np.ndarray]
 ):
     """Construct the configured RACS reference data vector and mask."""
     args = observation_config["args"]
@@ -139,6 +143,7 @@ def prepare_reference_observation(
         flux_elevation_n_bins=args["flux_elevation_n_bins"],
         flux_elevation_quantiles=tuple(args["flux_elevation_quantiles"]),
         save_map_plot=False,
+        return_crossmatch_table=include_crossmatch,
     )
     if not include_native:
         return prepared
@@ -203,6 +208,30 @@ def save_reference_observation(
         ) as temporary:
             temporary_path = Path(temporary.name)
             np.savez_compressed(temporary, x0=data, mask=data_mask)
+        temporary_path.replace(output)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
+    return output
+
+
+def save_crossmatch_table(
+    output_path: str | Path,
+    crossmatch_table: Table,
+) -> Path:
+    """Atomically save the successful local-source matches as a FITS table."""
+    output = Path(output_path).expanduser()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            dir=output.parent,
+            prefix=f".{output.stem}.",
+            suffix=".fits",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+        crossmatch_table.write(temporary_path, format="fits", overwrite=True)
         temporary_path.replace(output)
     finally:
         if temporary_path is not None and temporary_path.exists():
@@ -283,6 +312,12 @@ def construct_argparser() -> argparse.ArgumentParser:
         help="Native-resolution map-only NPZ containing x0 and mask.",
     )
     parser.add_argument(
+        "--crossmatch-output",
+        type=Path,
+        required=True,
+        help="FITS table of local-source matches removed from the observation.",
+    )
+    parser.add_argument(
         "--native-plot-output",
         type=Path,
         required=True,
@@ -302,11 +337,15 @@ def main() -> None:
         cli_args.noisemap_data_dir,
         mask_map,
         include_native=True,
+        include_crossmatch=True,
     )
-    x0, mask = prepared[:2]
+    x0, mask, crossmatch_table, native_x0, native_mask = prepared
     output = save_reference_observation(cli_args.output, x0, mask)
     print(f"Saved reference observation: {output}")
-    native_x0, native_mask = prepared[2:]
+    crossmatch_output = save_crossmatch_table(
+        cli_args.crossmatch_output,
+        crossmatch_table,
+    )
     native_output = save_reference_observation(
         cli_args.native_output,
         native_x0,
@@ -318,6 +357,7 @@ def main() -> None:
     )
     print(f"Saved native reference observation: {native_output}")
     print(f"Saved native density projection: {native_plot_output}")
+    print(f"Saved local-source crossmatches: {crossmatch_output}")
 
 
 if __name__ == "__main__":

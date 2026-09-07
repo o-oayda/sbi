@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import yaml
+from astropy.table import Table
 
 from dipolesbi.pipelines import prepare_racs_observation as preparation
 from dipolesbi.pipelines.racs_observation_helpers import load_reference_observation
@@ -328,6 +329,52 @@ def test_prepare_reference_observation_can_include_native_map(tmp_path, monkeypa
     )
 
 
+def test_prepare_reference_observation_returns_only_primary_crossmatch(
+    tmp_path, monkeypatch
+):
+    catalogue_path = tmp_path / "catalogue.fits"
+    catalogue_path.touch()
+    paf_temperature_data_dir = tmp_path / "paf_temps"
+    paf_temperature_data_dir.mkdir()
+    calls = []
+
+    monkeypatch.setattr(preparation, "RacsConfig", lambda **kwargs: object())
+
+    class FakeModel:
+        def __init__(self, config):
+            self.downscale_nside = 4
+
+        def initialise_data(self):
+            pass
+
+    monkeypatch.setattr(preparation, "RacsJax", FakeModel)
+    monkeypatch.setattr(preparation, "load_catalogue", lambda path: "catalogue")
+
+    primary_matches = Table({"A_Source_Name": ["RACS-1"]})
+
+    def fake_build_real_sample(model, catalogue, flux_min, summaries, **kwargs):
+        calls.append(kwargs.get("return_crossmatch_table", False))
+        sample = (np.zeros(2, dtype=np.float32), np.ones(2, dtype=bool))
+        if kwargs.get("return_crossmatch_table"):
+            return *sample, primary_matches
+        return sample
+
+    monkeypatch.setattr(preparation, "build_real_sample", fake_build_real_sample)
+
+    prepared = preparation.prepare_reference_observation(
+        _observation_config(),
+        catalogue_path,
+        paf_temperature_data_dir,
+        tmp_path,
+        _native_mask(_observation_config()),
+        include_native=True,
+        include_crossmatch=True,
+    )
+
+    assert prepared[2] is primary_matches
+    assert calls == [True, False]
+
+
 def test_save_reference_observation_round_trip(tmp_path):
     path = tmp_path / "nested" / "reference_observation.npz"
     x0 = np.array([1.0, np.nan, 3.0], dtype=np.float64)
@@ -345,6 +392,29 @@ def test_save_reference_observation_round_trip(tmp_path):
     loaded_x0, loaded_mask = load_reference_observation(path)
     np.testing.assert_array_equal(loaded_x0, x0.astype(np.float32))
     np.testing.assert_array_equal(loaded_mask, mask)
+
+
+def test_save_crossmatch_table_round_trip(tmp_path):
+    path = tmp_path / "nested" / "local_source_crossmatches.fits"
+    table = Table(
+        {
+            "A_Source_Name": ["RACS-1", "RACS-2"],
+            "B_source_name": ["NGC 1", "NGC 2"],
+            "angular_distance_arcsec": [1.25, 2.5],
+        }
+    )
+
+    result = preparation.save_crossmatch_table(path, table)
+
+    assert result == path
+    loaded = Table.read(path, format="fits")
+    assert loaded.colnames == table.colnames
+    assert len(loaded) == 2
+    np.testing.assert_array_equal(loaded["A_Source_Name"], table["A_Source_Name"])
+    np.testing.assert_allclose(
+        loaded["angular_distance_arcsec"],
+        table["angular_distance_arcsec"],
+    )
 
 
 def test_save_reference_observation_preserves_unchanged_file_mtime(tmp_path):

@@ -402,7 +402,11 @@ def build_real_sample(
     flux_elevation_n_bins: int = DEFAULT_FLUX_ELEVATION_N_BINS,
     flux_elevation_quantiles: tuple[float, ...] = DEFAULT_FLUX_ELEVATION_QUANTILES,
     save_map_plot: bool = True,
-) -> tuple[np.ndarray, np.ndarray]:
+    return_crossmatch_table: bool = False,
+) -> (
+    tuple[np.ndarray, np.ndarray]
+    | tuple[np.ndarray, np.ndarray, Table]
+):
     summary_features = list(summary_features or [])
     resolved_temperature_min = (
         flux_min if flux_temperature_min_mjy is None else flux_temperature_min_mjy
@@ -508,10 +512,17 @@ def build_real_sample(
             flux_elevation_n_bins=flux_elevation_n_bins,
             flux_elevation_quantiles=flux_elevation_quantiles,
         )
-    return build_hybrid_sample_from_native(
+    prepared = build_hybrid_sample_from_native(
         native_map,
         native_mask,
         downscale_nside=model.downscale_nside,
         summary_features=summary_features,
         summary_values=summary_values,
     )
+    if not return_crossmatch_table:
+        return prepared
+
+    crossmatch_table = map_catalogue.local_common_sources
+    if crossmatch_table is None:
+        crossmatch_table = Table()
+    return *prepared, crossmatch_table.copy()
