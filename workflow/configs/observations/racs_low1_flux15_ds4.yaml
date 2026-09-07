@@ -1,0 +1,41 @@
+observation_id: racs_low1_flux15_ds4
+
+datasets:
+  catalogue: racs_low1_catalogue
+  paf_temperatures: racs_low1_paf_temperatures
+  noise_maps: racs_low1_noise_maps
+args:
+  racs_epoch: low1
+
+  flux_min: 15.0
+  flux_temperature_min_mjy: 5.0
+  local_source_crossmatch_radius_arcsec: 5.0
+
+  noise_map_nside: 256
+  flux_error_noise_bins: 200
+  flux_error_flux_bins: 300
+  flux_error_min_cell_count: 10
+  flux_error_noise_bounds_ujy_beam: [79.0, 1000.0]
+  flux_error_flux_bounds_mjy: [0.1, 10_000.0]
+
+  nside: 64
+  downscale_nside: 4
+
+  # The current JAX implementation uses histogram-based flux summaries,
+  # so this can affect the resulting observation
+  use_jax: true
+  chunk_size: 25_000
+
+  temperature_fallback: none
+
+  summary_features:
+    - log_dispersion
+    - flux_quantiles
+
+  flux_temperature_n_bins: 10
+  flux_temperature_quantiles: [0.10, 0.25, 0.50, 0.75, 0.90]
+  flux_elevation_n_bins: 10
+  flux_elevation_quantiles: [0.10, 0.25, 0.50, 0.75, 0.90]
+
+mask:
+  config: workflow/configs/observations/masks/racs_low1_mask.yaml

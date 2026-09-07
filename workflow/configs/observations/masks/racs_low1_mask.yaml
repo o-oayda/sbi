@@ -1,0 +1,18 @@
+# mask copied from choices made in oayda+24
+
+coordinates: "equatorial"
+nside: 64
+ordering: "nest"
+
+cuts:
+  - "|b|<=5"
+  - "dec>=29.0"
+  - "dec<=-77.0"
+
+discs:
+  - "l=107.0, b=-43.0  r=3.4"
+  - "l=79.0,  b=−30.0, r=3.4"
+  - "l=25.0,  b=26.0,  r=3.4"
+  - "l=286.7, b=73.5,  r=3.4"
+  - "l=280.8, b=−33.1, r=3.4"
+  - "l=184.8, b=−5.5,  r=3.4"
