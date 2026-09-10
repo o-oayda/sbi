@@ -33,6 +33,7 @@ DEFAULT_SITE_CONFIG = Path("workflow/configs/sites/mac.yaml")
 NSIDE = 64
 PIXEL_AREA_DEG2 = hp.nside2pixarea(NSIDE, degrees=True)
 DECLINATION_BIN_WIDTH_DEG = 5
+DEFAULT_BOOTSTRAP_SAMPLES = 2_000
 
 
 def make_pixel_counts(ra_deg: np.ndarray, dec_deg: np.ndarray) -> np.ndarray:
@@ -75,28 +76,155 @@ def declination_density(
     return declination_edges, mean_counts_per_pixel / PIXEL_AREA_DEG2
 
 
+def bootstrap_density_interval(
+    pixel_counts: np.ndarray,
+    mask: np.ndarray,
+    declination_edges: np.ndarray,
+    *,
+    samples: int,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    _, pixel_declination = hp.pix2ang(
+        NSIDE,
+        np.arange(pixel_counts.size),
+        lonlat=True,
+        nest=True,
+    )
+    unmasked_declination = pixel_declination[mask]
+    unmasked_counts = pixel_counts[mask]
+    lower = np.full(declination_edges.size - 1, np.nan)
+    upper = np.full(declination_edges.size - 1, np.nan)
+    rng = np.random.default_rng(seed)
+
+    for index, (lower_edge, upper_edge) in enumerate(
+        zip(declination_edges[:-1], declination_edges[1:])
+    ):
+        in_bin = (unmasked_declination >= lower_edge) & (
+            unmasked_declination < upper_edge
+        )
+        counts_in_bin = unmasked_counts[in_bin]
+        if counts_in_bin.size == 0:
+            continue
+        bootstrap_density = rng.choice(
+            counts_in_bin,
+            size=(samples, counts_in_bin.size),
+            replace=True,
+        ).mean(axis=1) / PIXEL_AREA_DEG2
+        lower[index], upper[index] = np.percentile(
+            bootstrap_density,
+            [16, 84],
+        )
+    return lower, upper
+
+
+def mean_radius_by_declination(
+    ra_deg: np.ndarray,
+    dec_deg: np.ndarray,
+    radius_arcsec: np.ndarray,
+    mask: np.ndarray,
+) -> np.ndarray:
+    source_pixels = hp.ang2pix(
+        NSIDE,
+        ra_deg,
+        dec_deg,
+        lonlat=True,
+        nest=True,
+    )
+    unmasked = mask[source_pixels]
+    declination_edges = np.arange(
+        -90,
+        90 + DECLINATION_BIN_WIDTH_DEG,
+        DECLINATION_BIN_WIDTH_DEG,
+    )
+    radius_sum, _ = np.histogram(
+        dec_deg[unmasked],
+        bins=declination_edges,
+        weights=radius_arcsec[unmasked],
+    )
+    source_count, _ = np.histogram(
+        dec_deg[unmasked],
+        bins=declination_edges,
+    )
+    return np.divide(
+        radius_sum,
+        source_count,
+        out=np.full(radius_sum.shape, np.nan),
+        where=source_count > 0,
+    )
+
+
 def save_declination_comparison(
     dec_pixel_counts: np.ndarray,
     dec_corr_pixel_counts: np.ndarray,
+    variable_radius_pixel_counts: np.ndarray,
+    mean_radius_arcsec: np.ndarray,
     mask: np.ndarray,
     output: Path,
+    *,
+    bootstrap_samples: int,
+    seed: int,
 ) -> None:
     declination_edges, dec_density = declination_density(dec_pixel_counts, mask)
     _, dec_corr_density = declination_density(dec_corr_pixel_counts, mask)
+    _, variable_radius_density = declination_density(
+        variable_radius_pixel_counts,
+        mask,
+    )
+    variable_radius_lower, variable_radius_upper = bootstrap_density_interval(
+        variable_radius_pixel_counts,
+        mask,
+        declination_edges,
+        samples=bootstrap_samples,
+        seed=seed,
+    )
 
     figure, axis = plt.subplots(figsize=(7, 4))
-    for density, label, colour in (
-        (dec_density, "Crossmatched with Dec", "C0"),
-        (dec_corr_density, "Crossmatched with Dec_corr", "C1"),
-    ):
+    declination_centres = (
+        declination_edges[:-1] + declination_edges[1:]
+    ) / 2
+    series = (
+        (dec_density, "Dec", "C0"),
+        (dec_corr_density, "Dec_corr, 5\"", "C1"),
+        (
+            variable_radius_density,
+            r"Dec_corr, $0.5\,\mathrm{PSF}_{\mathrm{maj}}$",
+            "C2",
+        ),
+    )
+    for density, label, colour in series:
         axis.stairs(density, declination_edges, color=colour, linewidth=2, label=label)
         axis.stairs(
             density,
             declination_edges,
             color=colour,
             fill=True,
-            alpha=0.2,
+            alpha=0.15,
         )
+    axis.errorbar(
+        declination_centres,
+        variable_radius_density,
+        yerr=np.vstack(
+            [
+                variable_radius_density - variable_radius_lower,
+                variable_radius_upper - variable_radius_density,
+            ]
+        ),
+        fmt="none",
+        ecolor="C2",
+        elinewidth=0.8,
+        capsize=1.5,
+    )
+    radius_axis = axis.twinx()
+    radius_line = radius_axis.plot(
+        declination_centres,
+        mean_radius_arcsec,
+        color="C3",
+        linewidth=1.5,
+        linestyle='--',
+        label=r"$0.5\,\mathrm{PSF}_{\mathrm{maj}}$ radius",
+    )[0]
+    radius_axis.set_ylabel("Crossmatch radius (\")", color="C3")
+    radius_axis.tick_params(axis="y", colors="C3")
     axis.set(
         xlabel=r"Declination $\delta^\circ$",
         ylabel=r"Count per square degree",
@@ -106,7 +234,13 @@ def save_declination_comparison(
         # ),
         xlim=(-90, 90),
     )
-    axis.legend()
+    density_handles, density_labels = axis.get_legend_handles_labels()
+    axis.legend(
+        [*density_handles, radius_line],
+        [*density_labels, radius_line.get_label()],
+        loc='upper left',
+        ncols=2
+    )
     figure.tight_layout()
     output.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output, dpi=200)
@@ -117,7 +251,7 @@ def save_declination_comparison(
 def corrected_declination_matches(
     observation_config_path: Path,
     site_config_path: Path,
-) -> Table:
+) -> tuple[Table, Table, Table]:
     with observation_config_path.open(encoding="utf-8") as stream:
         observation = yaml.safe_load(stream)
     with site_config_path.open(encoding="utf-8") as stream:
@@ -125,7 +259,15 @@ def corrected_declination_matches(
 
     catalogue_id = observation["datasets"]["catalogue"]
     catalogue_path = Path(site["data_locations"][catalogue_id]["path"])
-    column_names = ["RA", "Dec", "Dec_corr", "Total_flux", "Name", "Source_ID"]
+    column_names = [
+        "RA",
+        "Dec",
+        "Dec_corr",
+        "Total_flux",
+        "Name",
+        "Source_ID",
+        "PSF_Maj",
+    ]
     with fits.open(catalogue_path, memmap=True) as hdus:
         catalogue = Table(
             {name: np.array(hdus[1].data[name]) for name in column_names}
@@ -134,15 +276,38 @@ def corrected_declination_matches(
 
     catalogue_view = CatalogueToMap(catalogue)
     local_sources = catalogue_view._load_local_table()
-    crossmatcher = CrossMatch(catalogue, local_sources, "equatorial")
-    crossmatcher.lonA_column = "RA"
-    crossmatcher.latA_column = "Dec_corr"
-    crossmatcher.cross_match(
-        observation["args"]["local_source_crossmatch_radius_arcsec"],
-        source_name_A_column="Name",
-        source_name_B_column="source",
+
+    def match(radius_arcsec: float | np.ndarray) -> Table:
+        crossmatcher = CrossMatch(catalogue, local_sources, "equatorial")
+        crossmatcher.lonA_column = "RA"
+        crossmatcher.latA_column = "Dec_corr"
+        crossmatcher.cross_match(
+            radius_arcsec,
+            source_name_A_column="Name",
+            source_name_B_column="source",
+        )
+        return crossmatcher.get_common_sources()
+
+    fixed_radius_matches = match(
+        observation["args"]["local_source_crossmatch_radius_arcsec"]
     )
-    return crossmatcher.get_common_sources()
+    variable_radius_arcsec = 0.5 * np.asarray(catalogue["PSF_Maj"], dtype=float)
+    invalid_radius = ~np.isfinite(variable_radius_arcsec) | (
+        variable_radius_arcsec <= 0
+    )
+    if np.any(invalid_radius):
+        raise ValueError(
+            f"Found {invalid_radius.sum()} invalid PSF-derived crossmatch radii."
+        )
+    variable_radius_matches = match(variable_radius_arcsec)
+    radius_sample = Table(
+        {
+            "RA": catalogue["RA"],
+            "Dec_corr": catalogue["Dec_corr"],
+            "radius_arcsec": variable_radius_arcsec,
+        }
+    )
+    return fixed_radius_matches, variable_radius_matches, radius_sample
 
 
 def main() -> None:
@@ -160,7 +325,15 @@ def main() -> None:
     parser.add_argument("--declination-output", type=Path)
     parser.add_argument("--healpix-output", type=Path)
     parser.add_argument("--dec-corr-only-output", type=Path)
+    parser.add_argument(
+        "--bootstrap-samples",
+        type=int,
+        default=DEFAULT_BOOTSTRAP_SAMPLES,
+    )
+    parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
+    if args.bootstrap_samples <= 0:
+        parser.error("--bootstrap-samples must be positive")
 
     table = Table.read(args.table, format="fits")
     mask_path = args.mask or args.table.parent / "mask.npy"
@@ -231,10 +404,11 @@ def main() -> None:
     plt.close()
     print(f"Saved {healpix_output}")
 
-    dec_corr_matches = corrected_declination_matches(
-        args.observation_config,
-        args.site_config,
-    )
+    (
+        dec_corr_matches,
+        variable_radius_matches,
+        variable_radius_sample,
+    ) = corrected_declination_matches(args.observation_config, args.site_config)
     dec_corr_only = ~np.isin(
         np.asarray(dec_corr_matches["A_Source_ID"]),
         np.asarray(table["A_Source_ID"]),
@@ -253,11 +427,25 @@ def main() -> None:
         np.asarray(dec_corr_matches["A_RA"], dtype=float),
         np.asarray(dec_corr_matches["A_Dec_corr"], dtype=float),
     )
+    variable_radius_pixel_counts = make_pixel_counts(
+        np.asarray(variable_radius_matches["A_RA"], dtype=float),
+        np.asarray(variable_radius_matches["A_Dec_corr"], dtype=float),
+    )
+    mean_radius_arcsec = mean_radius_by_declination(
+        np.asarray(variable_radius_sample["RA"], dtype=float),
+        np.asarray(variable_radius_sample["Dec_corr"], dtype=float),
+        np.asarray(variable_radius_sample["radius_arcsec"], dtype=float),
+        mask,
+    )
     save_declination_comparison(
         pixel_counts,
         dec_corr_pixel_counts,
+        variable_radius_pixel_counts,
+        mean_radius_arcsec,
         mask,
         declination_output,
+        bootstrap_samples=args.bootstrap_samples,
+        seed=args.seed,
     )
 
 
