@@ -46,3 +46,21 @@ datasets:
     description: MID1 per-antenna ASKAP PAF temperatures reused for RACS low2.
     manifest: ../data-manifests/racs_low2_paf_temperatures.yaml
     source: Internal file
+
+  racs_low1_catalogue:
+    type: file
+    description: RACS low1 source catalogue used for the reference observation.
+    sha256: 6b27d0247fcb3df9dce277cf0a517ea69cb3da7e8c0a52231d6a82b25b4e5e40
+    source: Internal file
+
+  racs_low1_paf_temperatures:
+    type: file_collection
+    description: Per-antenna ASKAP PAF temperatures used for RACS low1.
+    manifest: ../data-manifests/racs_low1_paf_temperatures.yaml
+    source: Internal file
+
+  racs_low1_noise_maps:
+    type: file_collection
+    description: RACS LOW1 survey noise map used by the flux-error lookup.
+    manifest: ../data-manifests/racs_low1_noise_maps.yaml
+    source: Internal file

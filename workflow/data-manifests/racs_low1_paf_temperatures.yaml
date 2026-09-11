@@ -1,0 +1,75 @@
+dataset_id: racs_low1_paf_temperatures
+file_glob: "ak*.csv"
+files:
+  - relative_path: "ak01 PAF Average Temp-data-2026-09-09 12_03_13.csv"
+    sha256: 230b6a791756a5c1e46b18d17a6914be874c0cc937999c76b1484614bc0cf8bf
+  - relative_path: "ak02 PAF Average Temp-data-2026-09-09 12_03_53.csv"
+    sha256: 1f954033666b7959e5de2c4fa5fc761655cc2340dde653707601adebca3adb5a
+  - relative_path: "ak03 PAF Average Temp-data-2026-09-09 12_04_12.csv"
+    sha256: 4b3fce20f917c9c0d47426328e5bee7e7097373c3868c8e03b803cf81350f18b
+  - relative_path: "ak04 PAF Average Temp-data-2026-09-09 12_12_10.csv"
+    sha256: e31a6afc306fbdc5ebd92cc1c9287ac0ec42dfae03d506794d1ed082a51f30e1
+  - relative_path: "ak05 PAF Average Temp-data-2026-09-09 12_12_26.csv"
+    sha256: d4173567eb12ad6935118cdad26efc919d5de81f97bf59e5e87858dff825a2d6
+  - relative_path: "ak06 PAF Average Temp-data-2026-09-09 12_12_44.csv"
+    sha256: 17738de13a560fc5962f52b5ff3467322766284bdee1a96ccf153c22eda04f7b
+  - relative_path: "ak07 PAF Average Temp-data-2026-09-09 12_12_59.csv"
+    sha256: a3134e06e3f70b310a646e9b6252ca8d09f077eb0df0e31ffe51a89a6473b02a
+  - relative_path: "ak08 PAF Average Temp-data-2026-09-09 12_13_12.csv"
+    sha256: 33092eef867694884ae47e7dd0ce0216b70b7e71f8826a2192109e0f0b1e5c70
+  - relative_path: "ak09 PAF Average Temp-data-2026-09-09 12_13_28.csv"
+    sha256: abcbc3d1eb09e6e0e751c6e8122c7cce5fbe7e3d65c4e858a6d903a4077e9340
+  - relative_path: "ak10 PAF Average Temp-data-2026-09-09 12_13_41.csv"
+    sha256: 9e0d50462579dc5a575d1ddaf22f1c5ae34a6ca761aa31641b01605312f0aac0
+  - relative_path: "ak11 PAF Average Temp-data-2026-09-09 12_13_53.csv"
+    sha256: 7d307cbd5d92ef1049c6724c957fc1d13f6312f1c0e23673113bae86a1f4c5d2
+  - relative_path: "ak12 PAF Average Temp-data-2026-09-09 12_18_13.csv"
+    sha256: 07524f98b51d0fdc21328f25131b05ea0e2a8e7a16399ca961d9cf5396ab0b86
+  - relative_path: "ak13 PAF Average Temp-data-2026-09-09 12_18_27.csv"
+    sha256: a16f69e8fa91fab10fd83055b93bc4dbacd58e594c0ee99b25a90d1207055caa
+  - relative_path: "ak14 PAF Average Temp-data-2026-09-09 12_38_03.csv"
+    sha256: 191fbfb400e6bd6eb11426e690e675d3be9f47c4aa487f49b47697c30fb06256
+  - relative_path: "ak15 PAF Average Temp-data-2026-09-09 12_38_17.csv"
+    sha256: 96c79e53a6a0171f50aabf1865f48e37059911ab9d7929e68eda4cf76c8b5000
+  - relative_path: "ak16 PAF Average Temp-data-2026-09-09 12_38_34.csv"
+    sha256: 265bbab8c8487c582c054b350f0fd921e4dd2a0bd3defa7309a79b62bc2594a3
+  - relative_path: "ak17 PAF Average Temp-data-2026-09-09 12_38_47.csv"
+    sha256: c7da48dac8b594e94b35cf67539beb40a148255be7a3073a1e74e1b1d279bd7f
+  - relative_path: "ak18 PAF Average Temp-data-2026-09-09 12_39_01.csv"
+    sha256: 36f7078025942391e8005b018303df52ab77607618e78a518f7148e367281821
+  - relative_path: "ak19 PAF Average Temp-data-2026-09-09 12_39_13.csv"
+    sha256: 246a4743f8c9f0fbbf1c3d2ea745d616fd64bfcf6020e3d9e79eb22f93b2491c
+  - relative_path: "ak20 PAF Average Temp-data-2026-09-09 12_39_27.csv"
+    sha256: c48b150b731ac0d95b2910b1f5d820ded3efba7d6e6b26c0afe31833ffc53050
+  - relative_path: "ak21 PAF Average Temp-data-2026-09-09 12_39_50.csv"
+    sha256: f9758a25b5d6d24dc7854dfc6d3cb1556b33d0becd83b3724867f14876833f2f
+  - relative_path: "ak22 PAF Average Temp-data-2026-09-09 12_40_02.csv"
+    sha256: 4196be4e5a7a94ad36ecab2982788e0b7eda1c9e37cbc249d2839643ddc21ab3
+  - relative_path: "ak23 PAF Average Temp-data-2026-09-09 12_40_14.csv"
+    sha256: d87d70c05e93c6cd595d7992568080ee372dce9faaa8f6e7e18a0776b441baa7
+  - relative_path: "ak24 PAF Average Temp-data-2026-09-09 12_40_31.csv"
+    sha256: 12eb86fcaae1e315db51f05af9f797c1b4298346d281032b2294f9a7a1b30783
+  - relative_path: "ak25 PAF Average Temp-data-2026-09-09 12_41_10.csv"
+    sha256: 3a58dc157c6c2bc032044b8cd48398ba6943868d7e8bdfcb345f76aba915b7b6
+  - relative_path: "ak26 PAF Average Temp-data-2026-09-09 12_41_22.csv"
+    sha256: 9dd4237cc54e9b10b0ffa98d3a377803d6cbd62feea32e7c92095abd7951272c
+  - relative_path: "ak27 PAF Average Temp-data-2026-09-09 12_41_34.csv"
+    sha256: 4b74980b73b38638439ca22e15b8792efa7d5dcd3e6bbc1df30d969e93734ea4
+  - relative_path: "ak28 PAF Average Temp-data-2026-09-09 12_41_47.csv"
+    sha256: 49439ed28f00c75816e43937b834bc0d40f4e9ecc8f0b2b19cabe280dea01a70
+  - relative_path: "ak29 PAF Average Temp-data-2026-09-09 12_43_29.csv"
+    sha256: 44fb3120915d216905126bda2d90fd2e022512c2d883ee129c0cccb08be45f0f
+  - relative_path: "ak30 PAF Average Temp-data-2026-09-09 12_43_47.csv"
+    sha256: 8f2df830dad68f8eb573b981fc037a67ae0029064a0280f6af4449b941a02496
+  - relative_path: "ak31 PAF Average Temp-data-2026-09-09 12_43_57.csv"
+    sha256: 12cf104c211de6a38623f0cd79ec40dcaaceb0ad39a4165ec69eb50c75423ceb
+  - relative_path: "ak32 PAF Average Temp-data-2026-09-09 12_44_19.csv"
+    sha256: 0b2d032a1712f87c2d3569640b8c4700a6207328fae76167d12ef2f739fcb269
+  - relative_path: "ak33 PAF Average Temp-data-2026-09-09 12_45_35.csv"
+    sha256: f74d47461f25fa1f8e72dfc3a6c75717681c4a40070eb173b8f9f9ae00a4eb7b
+  - relative_path: "ak34 PAF Average Temp-data-2026-09-09 12_46_02.csv"
+    sha256: 3ac7429458f26ebf6ae718a5ea37c5f950f1eed72221ae846babf3bc62b3d165
+  - relative_path: "ak35 PAF Average Temp-data-2026-09-09 12_46_17.csv"
+    sha256: a768d7a7c867db564f7989ff2b08ba0b761e1f90b49fa87e71cc6bb419286833
+  - relative_path: "ak36 PAF Average Temp-data-2026-09-09 12_46_32.csv"
+    sha256: 627b6f534a4e795107af272a530911c9218c7a12232dc0a500baaa2dc4a74e7f
