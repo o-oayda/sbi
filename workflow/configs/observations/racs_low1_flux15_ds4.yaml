@@ -26,7 +26,12 @@ args:
   use_jax: true
   chunk_size: 25_000
 
-  temperature_fallback: none
+  # 5 tiles are missing because they are later than than the last reading from
+  # any antenna; however, these last measurements are near 25C anyway so setting
+  # the tiles to the reference temperature is fine
+  temperature_fallback: reference
+  paf_reference_temp_c: 25.0
+  max_reference_fallback_tiles: 5
 
   summary_features:
     - log_dispersion
