@@ -19,6 +19,22 @@ def _model_product(model: Any):
     return model.cfg.product
 
 
+def catalogue_runtime_tile_indices(
+    model: Racs,
+    catalogue: Any,
+) -> np.ndarray:
+    """Resolve catalogue tile identities through CatSim's runtime encoding."""
+    product = _model_product(model)
+    runtime_ids = model.runtime_tile_ids(catalogue[product.columns.tile_id])
+    return np.asarray(
+        [
+            model._tile_index_from_sbid.get(int(runtime_id), -1)
+            for runtime_id in runtime_ids
+        ],
+        dtype=np.int32,
+    )
+
+
 def get_valid_native_counts(
     native_map: np.ndarray,
     native_mask: np.ndarray,
@@ -101,16 +117,13 @@ def _real_catalogue_flux_temperature_samples(
     ra = np.asarray(cut_catalogue[product.columns.ra], dtype=np.float64)
     dec = np.asarray(cut_catalogue[product.columns.dec], dtype=np.float64)
     flux = np.asarray(cut_catalogue[product.columns.total_flux], dtype=np.float64)
-    sbid = np.asarray(cut_catalogue[product.columns.tile_id], dtype=np.int64)
+    tile_indices = catalogue_runtime_tile_indices(model, cut_catalogue)
 
     pixel_indices = hp.ang2pix(model.nside, ra, dec, lonlat=True, nest=True)
     in_mask = model.mask_map[pixel_indices].astype(bool, copy=False)
     if not np.any(in_mask):
         raise ValueError("Flux-temperature real summary has no sources in the mask.")
 
-    tile_indices = np.full(sbid.shape, -1, dtype=np.int32)
-    for idx, source_sbid in enumerate(sbid):
-        tile_indices[idx] = model._tile_index_from_sbid.get(int(source_sbid), -1)
     valid_tile = tile_indices >= 0
     temperatures = np.full(flux.shape, np.nan, dtype=np.float64)
     temperatures[valid_tile] = np.asarray(
