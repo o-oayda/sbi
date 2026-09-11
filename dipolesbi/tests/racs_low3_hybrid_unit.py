@@ -275,6 +275,14 @@ def test_build_racs_config_wires_explicit_reference_fallback(monkeypatch):
     assert calls["max_reference_fallback_tiles"] == 1
 
 
+def test_build_racs_config_wires_paf_interpolation_gap():
+    config = build_racs_config(
+        **_minimal_racs_config_kwargs(paf_max_interpolation_gap_minutes=60.0)
+    )
+
+    assert config.paf_max_interpolation_gap_minutes == 60.0
+
+
 def test_build_racs_config_accepts_paf_temperature_data_dir():
     config = build_racs_config(
         **_minimal_racs_config_kwargs(paf_temperature_data_dir="/tmp/paf_temps")

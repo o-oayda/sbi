@@ -214,6 +214,15 @@ def construct_argparser() -> tuple[argparse.Namespace, argparse.ArgumentParser]:
         ),
     )
     parser.add_argument(
+        "--paf_max_interpolation_gap_minutes",
+        type=float,
+        default=None,
+        help=(
+            "Maximum time gap, in minutes, allowed when interpolating PAF "
+            "temperatures. Defaults to the selected catsim product setting."
+        ),
+    )
+    parser.add_argument(
         "--paf_temperature_data_dir",
         type=str,
         help=(
@@ -420,6 +429,13 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         parser.error("--n_workers is only used by the NumPy simulator.")
     if args.use_jax and args.jax_batch_size <= 0:
         parser.error("--jax_batch_size must be positive.")
+    if args.paf_max_interpolation_gap_minutes is not None and (
+        not np.isfinite(args.paf_max_interpolation_gap_minutes)
+        or args.paf_max_interpolation_gap_minutes <= 0.0
+    ):
+        parser.error(
+            "--paf_max_interpolation_gap_minutes must be positive and finite."
+        )
     if not np.isfinite(args.flux_min) or args.flux_min <= 0.0:
         parser.error("--flux_min must be positive and finite.")
     if args.local_source_crossmatch_radius_arcsec is not None and (
@@ -596,6 +612,7 @@ def build_racs_config(
     temperature_fallback: str = "none",
     paf_reference_temp_c: float | None = None,
     max_reference_fallback_tiles: int | None = None,
+    paf_max_interpolation_gap_minutes: float | None = None,
 ) -> RacsConfig:
     if temperature_fallback not in {"none", "open_meteo", "reference"}:
         raise ValueError(f"Unknown temperature fallback: {temperature_fallback}")
@@ -626,6 +643,18 @@ def build_racs_config(
             "paf_reference_temp_c": paf_reference_temp_c,
             "max_reference_fallback_tiles": max_reference_fallback_tiles,
         }
+    paf_interpolation_config = {}
+    if paf_max_interpolation_gap_minutes is not None:
+        if (
+            not np.isfinite(paf_max_interpolation_gap_minutes)
+            or paf_max_interpolation_gap_minutes <= 0.0
+        ):
+            raise ValueError(
+                "paf_max_interpolation_gap_minutes must be positive and finite."
+            )
+        paf_interpolation_config = {
+            "paf_max_interpolation_gap_minutes": paf_max_interpolation_gap_minutes,
+        }
     return RacsConfig(
         product=racs_epoch,
         catalogue_path=str(Path(catalogue_path).expanduser()),
@@ -652,6 +681,7 @@ def build_racs_config(
         mask_map=mask_map,
         max_cluster_children_per_parent=max_cluster_children_per_parent,
         **fallback_config,
+        **paf_interpolation_config,
     )
 
 
@@ -1273,6 +1303,7 @@ def main() -> None:
         temperature_fallback=args.temperature_fallback,
         paf_reference_temp_c=args.paf_reference_temp_c,
         max_reference_fallback_tiles=args.max_reference_fallback_tiles,
+        paf_max_interpolation_gap_minutes=args.paf_max_interpolation_gap_minutes,
         mask_map=mask,
         max_cluster_children_per_parent=args.max_children,
         paf_temperature_data_dir=args.paf_temperature_data_dir,
