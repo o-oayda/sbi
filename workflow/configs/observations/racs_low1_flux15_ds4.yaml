@@ -15,7 +15,7 @@ args:
   flux_error_noise_bins: 200
   flux_error_flux_bins: 300
   flux_error_min_cell_count: 10
-  flux_error_noise_bounds_ujy_beam: [79.0, 1000.0]
+  flux_error_noise_bounds_ujy_beam: [100, 1000.0]
   flux_error_flux_bounds_mjy: [0.1, 10_000.0]
 
   nside: 64
