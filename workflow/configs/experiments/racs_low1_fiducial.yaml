@@ -1,6 +1,6 @@
 experiment_id: racs_low1_fiducial
 
-observation_config: workflow/configs/observations/racs_low1_flux15_ds4.yaml
+observation_config: workflow/configs/observations/racs_low1_flux15_ds4_nofsum.yaml
 inference_config: workflow/configs/inference/nle_maf11_zscore.yaml
 
 execution:
