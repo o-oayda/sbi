@@ -33,6 +33,7 @@ from dipolesbi.pipelines.racs_observation_helpers import (
     load_catalogue,
 )
 from dipolesbi.pipelines.summary_stats import (
+    catalogue_runtime_tile_indices,
     _flux_elevation_edges,
     _flux_elevation_quantile_features,
     _flux_elevation_quantile_ndim,
@@ -272,6 +273,14 @@ def test_build_racs_config_wires_explicit_reference_fallback(monkeypatch):
     assert calls["temperature_fallback"] == "reference"
     assert calls["paf_reference_temp_c"] == 25.0
     assert calls["max_reference_fallback_tiles"] == 1
+
+
+def test_build_racs_config_wires_paf_interpolation_gap():
+    config = build_racs_config(
+        **_minimal_racs_config_kwargs(paf_max_interpolation_gap_minutes=60.0)
+    )
+
+    assert config.paf_max_interpolation_gap_minutes == 60.0
 
 
 def test_build_racs_config_accepts_paf_temperature_data_dir():
@@ -522,6 +531,32 @@ def test_native_count_log_dispersion_feature_dimension():
 
     assert features.shape == (1,)
     assert np.isfinite(features).all()
+
+
+def test_catalogue_runtime_tile_indices_uses_catsim_encoding():
+    class Model:
+        product = SimpleNamespace(
+            columns=SimpleNamespace(tile_id="tile_id"),
+        )
+        _tile_index_from_sbid = {0: 2, 1: 4}
+
+        def runtime_tile_ids(self, tile_ids):
+            np.testing.assert_array_equal(
+                np.asarray(tile_ids),
+                np.asarray(["RACS_0100+00A", "unknown", "RACS_0000+00A"]),
+            )
+            return np.asarray([1, -1, 0], dtype=np.int32)
+
+    catalogue = Table(
+        {
+            "tile_id": ["RACS_0100+00A", "unknown", "RACS_0000+00A"],
+        }
+    )
+
+    np.testing.assert_array_equal(
+        catalogue_runtime_tile_indices(Model(), catalogue),
+        np.asarray([4, -1, 2], dtype=np.int32),
+    )
 
 
 def test_native_count_log_dispersion_rejects_empty_mask():

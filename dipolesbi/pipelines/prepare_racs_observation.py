@@ -93,6 +93,13 @@ def prepare_reference_observation(
                 "max_reference_fallback_tiles"
             ],
         }
+    paf_interpolation_config = {}
+    if "paf_max_interpolation_gap_minutes" in args:
+        paf_interpolation_config = {
+            "paf_max_interpolation_gap_minutes": args[
+                "paf_max_interpolation_gap_minutes"
+            ],
+        }
     model_config = RacsConfig(
         product=args["racs_epoch"],
         catalogue_path=str(catalogue_path),
@@ -120,6 +127,7 @@ def prepare_reference_observation(
         temperature_fallback=args["temperature_fallback"],
         mask_map=mask,
         **fallback_config,
+        **paf_interpolation_config,
     )
     model = RacsJax(model_config) if use_jax else Racs(model_config)
     model.initialise_data()

@@ -340,7 +340,7 @@ wheels = [
 [[package]]
 name = "catsim"
 version = "0.1.0"
-source = { git = "https://github.com/o-oayda/catsim.git?rev=low2-lookup#e5e2f765994da74397db5585ff47c3e00b31be8d" }
+source = { git = "https://github.com/o-oayda/catsim.git?rev=v0.1.4#b0af56c7e5a3edbb101c4ea118d786f5e4a0bd0f" }
 dependencies = [
     { name = "astropy" },
     { name = "dill" },
@@ -625,7 +625,7 @@ wheels = [
 [[package]]
 name = "dipole-utils"
 version = "0.1.0"
-source = { git = "https://github.com/o-oayda/dipole-utils.git?rev=main#c019cce829d9a034bf77364d94cbe362cf0dc66f" }
+source = { git = "https://github.com/o-oayda/dipole-utils.git?rev=v0.1.0#c0d86abc829c4e2db86bf8cce961d1dfa80ce132" }
 dependencies = [
     { name = "astropy" },
     { name = "corner" },
@@ -701,10 +701,10 @@ requires-dist = [
     { name = "anesthetic", specifier = "<=2.10.3" },
     { name = "astropy", specifier = ">=7.0.2,<8.0.0" },
     { name = "blackjax", git = "https://github.com/handley-lab/blackjax?rev=95e93ed93e726b95143b2f4a9582888621625f52" },
-    { name = "catsim", git = "https://github.com/o-oayda/catsim.git?rev=low2-lookup" },
+    { name = "catsim", git = "https://github.com/o-oayda/catsim.git?rev=v0.1.4" },
     { name = "corner", specifier = ">=2.2.3,<3.0.0" },
     { name = "dill", specifier = ">=0.4.0,<0.5.0" },
-    { name = "dipole-utils", git = "https://github.com/o-oayda/dipole-utils.git?rev=main" },
+    { name = "dipole-utils", git = "https://github.com/o-oayda/dipole-utils.git?rev=v0.1.0" },
     { name = "dynesty", specifier = ">=2.1.5,<3.0.0" },
     { name = "emcee", specifier = ">=3.1.6,<4.0.0" },
     { name = "harmonic", specifier = ">=1.3.0,<2.0.0" },

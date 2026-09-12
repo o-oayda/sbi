@@ -153,6 +153,11 @@ properties:
         type: integer
         minimum: 1
 
+      paf_max_interpolation_gap_minutes:
+        description: Maximum time gap, in minutes, allowed when interpolating PAF temperatures.
+        type: number
+        exclusiveMinimum: 0
+
       summary_features:
         type: array
         uniqueItems: true

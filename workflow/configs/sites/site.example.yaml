@@ -20,3 +20,9 @@ data_locations:
     path: /path/to/RACS-low2_sources_45arcsec_patched.fits
   racs_low2_paf_temperatures:
     path: /path/to/paf_temps/mid1
+  racs_low1_catalogue:
+    path: /path/to/AS110_Derived_Catalogue_racs_dr1_sources_galacticcut_v2021_08_v02_5725.csv
+  racs_low1_paf_temperatures:
+    path: /path/to/paf_temps/low1
+  racs_low1_noise_maps:
+    path: /path/to/racs/noisemaps

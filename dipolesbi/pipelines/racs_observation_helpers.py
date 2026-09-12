@@ -62,7 +62,7 @@ def load_catalogue(catalogue_path: str | Path) -> Table:
     path = Path(catalogue_path).expanduser()
     if not path.is_file():
         raise FileNotFoundError(f"Catalogue does not exist: {path}")
-    return Table.read(path, unit_parse_strict="silent")
+    return Table.read(path)
 
 
 def load_reference_observation(

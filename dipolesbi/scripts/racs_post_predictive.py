@@ -11,7 +11,10 @@ from dipoleutils.utils.data_loader import DataLoader
 from dipoleutils.utils.samples import CatalogueToMap
 from dipoleutils.utils.mask import Masker
 from dipoleutils.utils.plotting import plot_binned_mean, plot_binned_quantile
-from dipolesbi.pipelines.summary_stats import _flux_temperature_edges
+from dipolesbi.pipelines.summary_stats import (
+    _flux_temperature_edges,
+    catalogue_runtime_tile_indices,
+)
 from dipolesbi.tools.plotting import smooth_map
 import healpy as hp
 import matplotlib.pyplot as plt
@@ -58,11 +61,7 @@ def build_temperature_corrected_real_sample(model, flux_min, temp_beta):
     product = model.product
     cat = DataLoader(*product.data_loader_args).load().copy()
 
-    sbid = np.asarray(cat[product.columns.tile_id], dtype=np.int64)
-    tile_indices = np.array(
-        [model._tile_index_from_sbid.get(int(source_sbid), -1) for source_sbid in sbid],
-        dtype=np.int32,
-    )
+    tile_indices = catalogue_runtime_tile_indices(model, cat)
 
     temperature = np.full(len(cat), np.nan, dtype=np.float64)
     valid_tile = tile_indices >= 0
