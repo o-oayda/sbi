@@ -381,12 +381,70 @@ def _catalogue_view(
             "Local-source cross-matching was requested, but catalogue column "
             f"{source_name_column!r} is missing."
         )
-    view.crossmatch_local_sources(
+    cut_catalogue = view.get_catalogue()
+    coordinate_columns = (product.columns.ra, product.columns.dec)
+    missing_coordinates = [
+        column for column in coordinate_columns if column not in cut_catalogue.colnames
+    ]
+    if missing_coordinates:
+        raise ValueError(
+            "Local-source cross-matching was requested, but catalogue coordinate "
+            f"column(s) {missing_coordinates!r} are missing."
+        )
+
+    row_column = "__dipolesbi_crossmatch_row"
+    crossmatch_catalogue = Table(
+        {
+            row_column: np.arange(len(cut_catalogue), dtype=np.int64),
+            "ra": cut_catalogue[product.columns.ra],
+            "dec": cut_catalogue[product.columns.dec],
+            source_name_column: cut_catalogue[source_name_column],
+        }
+    )
+    crossmatch_view = CatalogueToMap(crossmatch_catalogue)
+    crossmatch_view.crossmatch_local_sources(
         "equatorial",
         radius=local_source_crossmatch_radius_arcsec,
         source_name_A_column=source_name_column,
     )
-    return view
+    retained_rows = np.asarray(
+        crossmatch_view.get_catalogue()[row_column],
+        dtype=np.int64,
+    )
+    return CatalogueToMap(cut_catalogue[retained_rows])
+
+
+def _product_density_map(
+    catalogue_view: CatalogueToMap,
+    product: RacsProductSpec,
+    *,
+    nside: int,
+) -> np.ndarray:
+    """Bin a catalogue using the coordinates declared by its Catsim product."""
+    catalogue = catalogue_view.get_catalogue()
+    coordinate_columns = (product.columns.ra, product.columns.dec)
+    missing_coordinates = [
+        column for column in coordinate_columns if column not in catalogue.colnames
+    ]
+    if missing_coordinates:
+        raise ValueError(
+            "Density-map construction requires catalogue coordinate column(s) "
+            f"{missing_coordinates!r}."
+        )
+
+    coordinate_view = CatalogueToMap(
+        Table(
+            {
+                "ra": catalogue[product.columns.ra],
+                "dec": catalogue[product.columns.dec],
+            }
+        )
+    )
+    return coordinate_view.make_density_map(
+        coordinate_system="equatorial",
+        nside=nside,
+        nest=True,
+    )
 
 
 def build_real_sample(
@@ -416,10 +474,10 @@ def build_real_sample(
         flux_min,
         local_source_crossmatch_radius_arcsec,
     )
-    density_map = map_catalogue.make_density_map(
-        coordinate_system="equatorial",
+    density_map = _product_density_map(
+        map_catalogue,
+        product,
         nside=model.nside,
-        nest=True,
     ).astype("float32")
 
     native_mask = model.mask_map.astype(np.bool_, copy=False)

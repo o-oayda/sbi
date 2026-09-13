@@ -174,17 +174,29 @@ def test_catalogue_view_forwards_local_crossmatch_radius(monkeypatch):
     calls = []
     catalogue = Table(
         {
+            "RA": [20.0],
+            "DEC": [-10.0],
+            "cDEC": [30.0],
             "Total_flux": [10.0],
             "Source_Name": ["RACS-source"],
         }
     )
-    monkeypatch.setattr(CatalogueToMap, "make_cut", lambda *args, **kwargs: None)
+
+    def record_crossmatch(self, coordinate_system, radius, source_name_A_column):
+        calls.append(
+            (
+                coordinate_system,
+                radius,
+                source_name_A_column,
+                list(self.get_catalogue()["ra"]),
+                list(self.get_catalogue()["dec"]),
+            )
+        )
+
     monkeypatch.setattr(
         CatalogueToMap,
         "crossmatch_local_sources",
-        lambda self, coordinate_system, radius, source_name_A_column: calls.append(
-            (coordinate_system, radius, source_name_A_column)
-        ),
+        record_crossmatch,
     )
 
     _catalogue_view(
@@ -194,7 +206,7 @@ def test_catalogue_view_forwards_local_crossmatch_radius(monkeypatch):
         local_source_crossmatch_radius_arcsec=7.5,
     )
 
-    assert calls == [("equatorial", 7.5, "Source_Name")]
+    assert calls == [("equatorial", 7.5, "Source_Name", [20.0], [30.0])]
 
 
 def test_catalogue_view_can_disable_local_crossmatch(monkeypatch):
@@ -212,6 +224,36 @@ def test_catalogue_view_can_disable_local_crossmatch(monkeypatch):
         minimum_flux=5.0,
         local_source_crossmatch_radius_arcsec=None,
     )
+
+
+def test_product_density_map_uses_catsim_declination_column():
+    catalogue = Table(
+        {
+            "RA": [0.0],
+            "Dec": [-60.0],
+            "Dec_corr": [60.0],
+            "Total_flux": [10.0],
+        }
+    )
+    model = SimpleNamespace(
+        product=RACS_PRODUCTS["low3"],
+        nside=1,
+        mask_map=np.ones(hp.nside2npix(1), dtype=bool),
+        downscale_nside=None,
+    )
+
+    observation, _ = observation_helpers.build_real_sample(
+        model,
+        catalogue,
+        flux_min=5.0,
+        local_source_crossmatch_radius_arcsec=None,
+        save_map_plot=False,
+    )
+
+    corrected_pixel = hp.ang2pix(1, 0.0, 60.0, lonlat=True, nest=True)
+    uncorrected_pixel = hp.ang2pix(1, 0.0, -60.0, lonlat=True, nest=True)
+    assert observation[corrected_pixel] == 1.0
+    assert observation[uncorrected_pixel] == 0.0
 
 
 def test_catalogue_view_requires_source_name_column_for_crossmatch(monkeypatch):
