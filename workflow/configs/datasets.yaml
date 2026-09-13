@@ -63,6 +63,7 @@ datasets:
     type: file_collection
     description: RACS LOW3 survey noise map used by the flux-error lookup.
     manifest: ../data-manifests/racs_low2_noise_maps.yaml
+    source: Internal file
 
   racs_low1_catalogue:
     type: file
