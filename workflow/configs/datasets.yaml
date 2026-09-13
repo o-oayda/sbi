@@ -2,7 +2,7 @@ datasets:
   racs_mid1_catalogue:
     type: file
     description: RACS mid1 source catalogue used for the reference observation.
-    sha256: b0a90cacd3c24e552c00c422f82a1e53f8d53824a50bdd04b03ce66b4ffa998e
+    sha256: a3eeba1fb5df389b1b7ec536076d23265d12d639b8489c4de29a44e44d88696a
     source: Internal file
 
   racs_mid1_paf_temperatures:
