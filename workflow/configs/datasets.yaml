@@ -1,8 +1,8 @@
 datasets:
   racs_mid1_catalogue:
     type: file
-    description: RACS mid1 source catalogue used for the reference observation.
-    sha256: a3eeba1fb5df389b1b7ec536076d23265d12d639b8489c4de29a44e44d88696a
+    description: RACS mid1 source catalogue with the corrected declination column and total flux (error) in mJy.
+    sha256: 142312a8b0cc522f0c451ac76384ac58d002b23564f8402d59cd6b61b0bf93ac
     source: Internal file
 
   racs_mid1_paf_temperatures:
