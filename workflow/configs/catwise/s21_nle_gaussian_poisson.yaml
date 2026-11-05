@@ -1,0 +1,17 @@
+schema_version: 1
+experiment_id: s21_nle_gaussian_poisson
+observation: observation.yaml
+model: model.yaml
+priors: priors.yaml
+inference: inference.yaml
+execution:
+  backend: jax
+  requested_simulations: 50000
+  n_rounds: 15
+  seed: 0
+  jax_batch_size: 10
+  chunk_size: 25000
+  jax_platforms: cuda
+  threads: 1
+  mem_mb: 64000
+  no_ui: true

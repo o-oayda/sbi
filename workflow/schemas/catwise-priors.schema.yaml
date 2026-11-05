@@ -1,0 +1,44 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+type: object
+required:
+- parameters
+- reference_theta
+- fixed_parameters
+additionalProperties: false
+properties:
+  parameters:
+    type: array
+    minItems: 6
+    maxItems: 6
+    items:
+      type: object
+      required:
+      - short_name
+      - simulator_kwarg
+      - low
+      - high
+      - dist_type
+      additionalProperties: false
+      properties:
+        short_name:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+        simulator_kwarg:
+          type: string
+          minLength: 1
+        low: &id001
+          type: number
+        high: *id001
+        dist_type:
+          enum:
+          - uniform
+          - polar
+  reference_theta:
+    type: object
+    minProperties: 6
+    maxProperties: 6
+    additionalProperties: *id001
+  fixed_parameters:
+    type: object
+    additionalProperties: *id001
+    maxProperties: 0

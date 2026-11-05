@@ -43,5 +43,8 @@ fiducial_*
 workflow/configs/sites/*.yaml
 !workflow/configs/sites/site.example.yaml
 
+# Private CatWISE site configuration (copy site.example.yaml to site.local.yaml).
+workflow/configs/catwise/site.local*.yaml
+
 # temporary until docs locked in
 docs/*

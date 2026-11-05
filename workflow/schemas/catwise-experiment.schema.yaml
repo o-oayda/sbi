@@ -1,0 +1,69 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+type: object
+required:
+- schema_version
+- experiment_id
+- observation
+- model
+- priors
+- inference
+- execution
+additionalProperties: false
+properties:
+  schema_version:
+    const: 1
+  experiment_id:
+    type: string
+    pattern: ^[A-Za-z0-9][A-Za-z0-9_.-]*$
+  observation:
+    type: string
+    minLength: 1
+  model:
+    type: string
+    minLength: 1
+  priors:
+    type: string
+    minLength: 1
+  inference:
+    type: string
+    minLength: 1
+  execution:
+    type: object
+    required:
+    - backend
+    - requested_simulations
+    - n_rounds
+    - seed
+    - jax_batch_size
+    - chunk_size
+    - jax_platforms
+    - threads
+    - mem_mb
+    - no_ui
+    additionalProperties: false
+    properties:
+      backend:
+        enum:
+        - jax
+        - numpy
+      requested_simulations: &id001
+        type: integer
+        minimum: 1
+      n_rounds: *id001
+      seed:
+        type: integer
+        minimum: 0
+      jax_batch_size: *id001
+      chunk_size: *id001
+      jax_platforms:
+        enum:
+        - cpu
+        - cuda
+      threads:
+        type: integer
+        minimum: 1
+      mem_mb:
+        type: integer
+        minimum: 1
+      no_ui:
+        type: boolean

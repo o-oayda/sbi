@@ -1,0 +1,6 @@
+paths:
+  s21_catalogue: /path/to/catwise_agns_masked_final_w1lt16p5_alpha.fits
+  s21_mask: /path/to/catsim/data/mask/S21_CatWISE_Mask_nside64.npy
+  source_catalogue: null
+  hashgrid_cache: null
+  output_root: /path/to/catwise-results

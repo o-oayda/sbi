@@ -1,0 +1,14 @@
+model_identifier: free_gauss_extra_err
+cat_w1_max: 17.0
+cat_w12_min: 0.5
+magnitude_error_dist: gaussian
+use_float32: false
+use_common_extra_error: true
+generate_correlated_points: false
+use_noecl_mask: false
+add_confusion_noise: false
+max_cluster_children_per_parent: 6
+cluster_r0_arcsec: 100.0
+cluster_r_cut_arcsec: 20.0
+store_final_samples: false
+simulate_clustering: poisson

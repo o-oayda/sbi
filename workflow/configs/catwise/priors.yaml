@@ -1,0 +1,39 @@
+parameters:
+- short_name: N
+  simulator_kwarg: log10_n_initial_samples
+  low: 7.477121254719663
+  high: 7.6020599913279625
+  dist_type: uniform
+- short_name: etaWX
+  simulator_kwarg: w1_extra_error
+  low: 0
+  high: 8
+  dist_type: uniform
+- short_name: D
+  simulator_kwarg: observer_speed
+  low: 0
+  high: 8
+  dist_type: uniform
+- short_name: phi
+  simulator_kwarg: dipole_longitude
+  low: 0
+  high: 360
+  dist_type: uniform
+- short_name: theta
+  simulator_kwarg: dipole_latitude
+  low: -90
+  high: 90
+  dist_type: polar
+- short_name: lambda_clus
+  simulator_kwarg: lambda_clus
+  low: 0
+  high: 8
+  dist_type: uniform
+reference_theta:
+  log10_n_initial_samples: 7.552
+  w1_extra_error: 4.0
+  observer_speed: 2.0
+  dipole_longitude: 220.0
+  dipole_latitude: 45.0
+  lambda_clus: 0.0
+fixed_parameters: {}

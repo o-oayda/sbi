@@ -1,0 +1,29 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+type: object
+required:
+- paths
+additionalProperties: false
+properties:
+  paths:
+    type: object
+    required:
+    - s21_catalogue
+    - s21_mask
+    - output_root
+    additionalProperties: false
+    properties:
+      s21_catalogue:
+        type: string
+        minLength: 1
+      s21_mask:
+        type: string
+        minLength: 1
+      source_catalogue: &id001
+        type:
+        - string
+        - 'null'
+        minLength: 1
+      hashgrid_cache: *id001
+      output_root:
+        type: string
+        minLength: 1

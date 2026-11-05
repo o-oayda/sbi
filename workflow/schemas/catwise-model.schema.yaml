@@ -1,0 +1,50 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+type: object
+required:
+- model_identifier
+- cat_w1_max
+- cat_w12_min
+- magnitude_error_dist
+- use_float32
+- use_common_extra_error
+- generate_correlated_points
+- use_noecl_mask
+- add_confusion_noise
+- max_cluster_children_per_parent
+- cluster_r0_arcsec
+- cluster_r_cut_arcsec
+- store_final_samples
+- simulate_clustering
+additionalProperties: false
+properties:
+  model_identifier:
+    const: free_gauss_extra_err
+  cat_w1_max:
+    type: number
+  cat_w12_min:
+    type: number
+  magnitude_error_dist:
+    const: gaussian
+  use_float32:
+    const: false
+  use_common_extra_error:
+    const: true
+  generate_correlated_points:
+    const: false
+  use_noecl_mask:
+    type: boolean
+  add_confusion_noise:
+    const: false
+  max_cluster_children_per_parent:
+    type: integer
+    minimum: 0
+  cluster_r0_arcsec:
+    type: number
+    exclusiveMinimum: 0
+  cluster_r_cut_arcsec:
+    type: number
+    minimum: 0
+  store_final_samples:
+    type: boolean
+  simulate_clustering:
+    const: poisson

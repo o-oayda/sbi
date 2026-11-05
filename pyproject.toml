@@ -28,6 +28,7 @@ dependencies = [
     "anesthetic (<= 2.10.3)",
     "pytest (>=9.0.1,<10.0.0)",
     "pyyaml (>=6.0.3,<7.0.0)",
+    "jsonschema (>=4,<5)",
     "catsim",
     "dipole-utils",
     "importlib-resources (==6.5.2)",
@@ -41,6 +42,10 @@ dipolesbi-generate-racs-mask = "dipolesbi.pipelines.generate_racs_mask:main"
 dipolesbi-prepare-racs-observation = "dipolesbi.pipelines.prepare_racs_observation:main"
 dipolesbi-infer-racs = "dipolesbi.pipelines.based_racs:main"
 dipolesbi-package-racs-analysis = "dipolesbi.pipelines.package_racs_analysis:main"
+dipolesbi-catwise-config = "dipolesbi.pipelines.catwise_config:main"
+dipolesbi-prepare-catwise-observation = "dipolesbi.pipelines.prepare_catwise_observation:main"
+dipolesbi-infer-catwise = "dipolesbi.pipelines.based_catwise:main"
+dipolesbi-package-catwise-analysis = "dipolesbi.pipelines.package_catwise_analysis:main"
 
 [project.optional-dependencies]
 cuda = [
@@ -64,10 +69,26 @@ cuda = [
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
+[tool.poetry]
+include = [
+    { path = "workflow/schemas/catwise-*.yaml", format = ["sdist", "wheel"] },
+    { path = "workflow/configs/catwise/s21_nle_gaussian_poisson.yaml", format = ["sdist", "wheel"] },
+    { path = "workflow/configs/catwise/observation.yaml", format = ["sdist", "wheel"] },
+    { path = "workflow/configs/catwise/model.yaml", format = ["sdist", "wheel"] },
+    { path = "workflow/configs/catwise/priors.yaml", format = ["sdist", "wheel"] },
+    { path = "workflow/configs/catwise/inference.yaml", format = ["sdist", "wheel"] },
+    { path = "workflow/configs/catwise/site.example.yaml", format = ["sdist", "wheel"] },
+]
+
 [dependency-groups]
 dev = [
     "snakemake>=9,<10",
 ]
+
+[tool.black]
+line-length = 88
+skip-string-normalization = true
+target-version = ["py312"]
 
 [tool.uv.sources]
 catsim = { git = "https://github.com/o-oayda/catsim.git", rev = "overhaul-catwise" }

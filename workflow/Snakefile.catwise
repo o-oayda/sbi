@@ -1,0 +1,183 @@
+include: "catwise_configuration.smk"
+
+
+rule all:
+    input:
+        ARCHIVE,
+        CHECKSUM,
+
+
+rule resolve_catwise_experiment:
+    input:
+        configs=CONFIG_PATHS,
+        schemas=CONFIG_SCHEMAS,
+        implementation=CONFIG_IMPLEMENTATION,
+        lock=SOFTWARE_LOCK,
+    output:
+        config=RESOLVED_CONFIG,
+    params:
+        resolved=fingerprint(RUN, CONFIG_IMPLEMENTATION + CONFIG_SCHEMAS),
+    run:
+        destination = Path(output.config)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(yaml.safe_dump(RUN, sort_keys=False), encoding="utf-8")
+
+
+rule validate_catwise_data:
+    input:
+        catalogue=CATALOGUE,
+        mask=INPUT_MASK,
+        observation_config=OBSERVATION_CONFIG,
+        implementation=VALIDATION_IMPLEMENTATION,
+        lock=SOFTWARE_LOCK,
+    output:
+        report=VALIDATION_REPORT,
+    params:
+        output_dir=OBSERVATION_DIR,
+        scientific_fingerprint=VALIDATION_FINGERPRINT,
+    log:
+        f"{OBSERVATION_DIR}/validation.log",
+    shell:
+        """
+        mkdir -p {params.output_dir:q}
+        JAX_PLATFORMS={EXECUTION[jax_platforms]:q} PYTHONPATH={PYTHONPATH:q} \
+            {PYTHON:q} -m dipolesbi.pipelines.prepare_catwise_observation validate \
+            --experiment {EXPERIMENT_PATH:q} --site {SITE_PATH:q} \
+            --output {output.report:q} > {log:q} 2>&1
+        """
+
+
+rule generate_catwise_mask:
+    input:
+        validation=rules.validate_catwise_data.output.report,
+        mask=INPUT_MASK,
+        observation_config=OBSERVATION_CONFIG,
+        implementation=MASK_IMPLEMENTATION,
+        lock=SOFTWARE_LOCK,
+    output:
+        mask=NATIVE_MASK,
+        plot=f"{OBSERVATION_DIR}/mask.png",
+    params:
+        output_dir=OBSERVATION_DIR,
+        scientific_fingerprint=MASK_FINGERPRINT,
+    log:
+        f"{OBSERVATION_DIR}/mask-generation.log",
+    shell:
+        """
+        mkdir -p {params.output_dir:q}
+        JAX_PLATFORMS={EXECUTION[jax_platforms]:q} PYTHONPATH={PYTHONPATH:q} \
+            {PYTHON:q} -m dipolesbi.pipelines.prepare_catwise_observation mask \
+            --experiment {EXPERIMENT_PATH:q} --site {SITE_PATH:q} \
+            --output {output.mask:q} --plot-output {output.plot:q} > {log:q} 2>&1
+        """
+
+
+rule prepare_catwise_observation:
+    input:
+        validation=rules.validate_catwise_data.output.report,
+        mask=rules.generate_catwise_mask.output.mask,
+        catalogue=CATALOGUE,
+        observation_config=OBSERVATION_CONFIG,
+        implementation=PREPARATION_IMPLEMENTATION,
+        lock=SOFTWARE_LOCK,
+    output:
+        observation=PREPARED_OBSERVATION,
+        native=NATIVE_OBSERVATION,
+        plot=f"{OBSERVATION_DIR}/reference_observation_native.png",
+    params:
+        output_dir=OBSERVATION_DIR,
+        scientific_fingerprint=PREPARATION_FINGERPRINT,
+    threads:
+        EXECUTION["threads"]
+    resources:
+        mem_mb=EXECUTION["mem_mb"],
+    log:
+        f"{OBSERVATION_DIR}/preparation.log",
+    shell:
+        """
+        mkdir -p {params.output_dir:q}
+        JAX_PLATFORMS={EXECUTION[jax_platforms]:q} PYTHONPATH={PYTHONPATH:q} \
+            {PYTHON:q} -m dipolesbi.pipelines.prepare_catwise_observation prepare \
+            --experiment {EXPERIMENT_PATH:q} --site {SITE_PATH:q} \
+            --mask-path {input.mask:q} --output-dir {params.output_dir:q} \
+            > {log:q} 2>&1
+        """
+
+
+rule infer_catwise:
+    input:
+        resolved=rules.resolve_catwise_experiment.output.config,
+        observation=rules.prepare_catwise_observation.output.observation,
+        native_observation=rules.prepare_catwise_observation.output.native,
+        native_mask=rules.generate_catwise_mask.output.mask,
+        validation=rules.validate_catwise_data.output.report,
+        catalogue=CATALOGUE,
+        source_catalogue=SOURCE_CATALOGUE,
+        mask=INPUT_MASK,
+        configs=CONFIG_PATHS,
+        implementation=INFERENCE_IMPLEMENTATION,
+        lock=SOFTWARE_LOCK,
+    output:
+        samples=f"{RESULT_DIR}/samples_rnd-{LAST_ROUND}.csv",
+        evidence=f"{RESULT_DIR}/epoch_lnZ.npy",
+        checkpoint=f"{RESULT_DIR}/nflow_checkpoint_r{LAST_ROUND}.npz",
+        observation=f"{RESULT_DIR}/reference_observation.npz",
+        prepared_observation=f"{RESULT_DIR}/prepared_observation.npz",
+        native_observation=f"{RESULT_DIR}/reference_observation_native.npz",
+        native_mask=f"{RESULT_DIR}/native_mask.npy",
+        model_config=f"{RESULT_DIR}/model_config.json",
+        configs=f"{RESULT_DIR}/configs.txt",
+        resolved=f"{RESULT_DIR}/experiment.resolved.yaml",
+        validation=f"{RESULT_DIR}/validation-report.yaml",
+        command=f"{RESULT_DIR}/run_command.txt",
+        software_state=f"{RESULT_DIR}/software-state.yaml",
+    params:
+        output_dir=RESULT_DIR,
+        scientific_fingerprint=INFERENCE_FINGERPRINT,
+    threads:
+        EXECUTION["threads"]
+    resources:
+        mem_mb=EXECUTION["mem_mb"],
+    log:
+        f"{RESULT_DIR}/inference.log",
+    shell:
+        """
+        mkdir -p {params.output_dir:q}
+        JAX_PLATFORMS={EXECUTION[jax_platforms]:q} PYTHONPATH={PYTHONPATH:q} \
+            {PYTHON:q} -m dipolesbi.pipelines.based_catwise \
+            --experiment {EXPERIMENT_PATH:q} --site {SITE_PATH:q} \
+            --reference-observation {input.observation:q} --out-dir {params.output_dir:q} \
+            --repository-root {REPOSITORY_ROOT:q} \
+            > {log:q} 2>&1
+        """
+
+
+rule package_catwise_analysis:
+    input:
+        results=rules.infer_catwise.output,
+        observation=rules.prepare_catwise_observation.output,
+        mask=rules.generate_catwise_mask.output.mask,
+        validation=rules.validate_catwise_data.output.report,
+        resolved=rules.resolve_catwise_experiment.output.config,
+        configs=CONFIG_PATHS,
+        implementation=PACKAGING_IMPLEMENTATION,
+        project=str(REPOSITORY_ROOT / "pyproject.toml"),
+        lock=SOFTWARE_LOCK,
+    output:
+        archive=ARCHIVE,
+        checksum=CHECKSUM,
+    params:
+        output_dir=ARTIFACT_DIR,
+        scientific_fingerprint=PACKAGING_FINGERPRINT,
+    log:
+        f"{ARTIFACT_DIR}/packaging.log",
+    shell:
+        """
+        mkdir -p {params.output_dir:q}
+        JAX_PLATFORMS={EXECUTION[jax_platforms]:q} PYTHONPATH={PYTHONPATH:q} \
+            {PYTHON:q} -m dipolesbi.pipelines.package_catwise_analysis \
+            --experiment {EXPERIMENT_PATH:q} --site {SITE_PATH:q} \
+            --result-dir {RESULT_DIR:q} --observation-dir {OBSERVATION_DIR:q} \
+            --repository-root {REPOSITORY_ROOT:q} \
+            --output-dir {params.output_dir:q} > {log:q} 2>&1
+        """

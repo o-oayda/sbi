@@ -39,6 +39,7 @@ poetry install
 ## Documentation
 
 - [PyTorch CUDA 12.8 Setup](PYTORCH_SETUP.md) - Detailed GPU setup instructions
+- [S21 CatWISE NLE workflow](workflow/configs/catwise/README.md) - Explicit scientific/site configuration, observation validation, workflow dry runs and analysis archives
 - Project structure and usage documentation coming soon
 
 ## Inspecting posterior results
