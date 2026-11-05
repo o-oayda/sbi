@@ -340,7 +340,7 @@ wheels = [
 [[package]]
 name = "catsim"
 version = "0.1.0"
-source = { git = "https://github.com/o-oayda/catsim.git?rev=v0.1.4#b0af56c7e5a3edbb101c4ea118d786f5e4a0bd0f" }
+source = { git = "https://github.com/o-oayda/catsim.git?rev=overhaul-catwise#9a7254b0d6f94fa2f1be5245656df98b1a73a3d1" }
 dependencies = [
     { name = "astropy" },
     { name = "dill" },
@@ -701,7 +701,7 @@ requires-dist = [
     { name = "anesthetic", specifier = "<=2.10.3" },
     { name = "astropy", specifier = ">=7.0.2,<8.0.0" },
     { name = "blackjax", git = "https://github.com/handley-lab/blackjax?rev=95e93ed93e726b95143b2f4a9582888621625f52" },
-    { name = "catsim", git = "https://github.com/o-oayda/catsim.git?rev=v0.1.4" },
+    { name = "catsim", git = "https://github.com/o-oayda/catsim.git?rev=overhaul-catwise" },
     { name = "corner", specifier = ">=2.2.3,<3.0.0" },
     { name = "dill", specifier = ">=0.4.0,<0.5.0" },
     { name = "dipole-utils", git = "https://github.com/o-oayda/dipole-utils.git?rev=v0.1.0" },

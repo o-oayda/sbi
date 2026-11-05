@@ -18,6 +18,14 @@ import matplotlib.pyplot as plt
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        '--source_catalogue_path',
+        help='Source CatWISE FITS catalogue; checksum-verified when rebuilding the hashgrid.'
+    )
+    parser.add_argument(
+        '--hashgrid_cache_dir',
+        help='Directory for generated CatWISE hashgrids (defaults to the user cache).'
+    )
+    parser.add_argument(
         '--mode',
         type=str,
         nargs='+',
@@ -743,6 +751,8 @@ if __name__ == '__main__':
             base_mask_version=args.catwise_version,
             generate_correlated_points=USE_CLUSTERS,
             s21_catalogue_path='/home/oliver/Documents/catsim/src/catsim/data/catwise_agns_masked_final_w1lt16p5_alpha.fits',
+            source_catalogue_path=args.source_catalogue_path,
+            hashgrid_cache_dir=args.hashgrid_cache_dir,
             use_noecl_mask=NOECL_MASK,
             add_confusion_noise=ADD_CONFUSION,
             max_cluster_children_per_parent=args.max_children

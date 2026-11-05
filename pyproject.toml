@@ -70,5 +70,5 @@ dev = [
 ]
 
 [tool.uv.sources]
-catsim = { git = "https://github.com/o-oayda/catsim.git", rev = "v0.1.4" }
+catsim = { git = "https://github.com/o-oayda/catsim.git", rev = "overhaul-catwise" }
 dipole-utils = { git = "https://github.com/o-oayda/dipole-utils.git", rev = "v0.1.0" }
