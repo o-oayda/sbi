@@ -79,7 +79,9 @@ def test_representative_contract_resolves_without_data_files(configs):
     assert run["fixed_parameters"] == {}
     assert run["paths"]["source_catalogue"] is None
     assert run["paths"]["hashgrid_cache"] is None
-    assert run["paths"]["s21_catalogue"] == str(site.parent.parent / "inputs/s21.fits")
+    assert run["paths"]["s21_catalogue"] == str(
+        site.parent.parent / "inputs/s21.fits"
+    )
     assert not Path(run["paths"]["s21_catalogue"]).exists()
     multiround = run["inference"]["multiround"]
     assert multiround["simulation_budget"] == 50_000
@@ -119,9 +121,9 @@ def test_all_inference_dataclass_inputs_are_materialized(configs):
         "effective_simulations"
     }
     assert set(inference["multiround"]) == expected
-    assert inference["flow"]["architecture"] == 4 * ["MAF"] + ["surjective_MAF"] + 6 * [
-        "MAF"
-    ]
+    assert inference["flow"]["architecture"] == 4 * ["MAF"] + [
+        "surjective_MAF"
+    ] + 6 * ["MAF"]
     assert inference["training"]["learning_rate"] == 1e-4
     assert inference["training"]["min_lr_ratio"] == 1.0
     assert inference["flow"]["decoder_n_layers"] == 4
@@ -139,7 +141,10 @@ def test_configurable_ecliptic_mask_requires_matching_model_flag(configs):
     )
     with pytest.raises(CatwiseConfigError, match="disagrees"):
         load_catwise_run(experiment, site)
-    edit(experiment.parent / "model.yaml", lambda c: c.update(use_noecl_mask=True))
+    edit(
+        experiment.parent / "model.yaml",
+        lambda c: c.update(use_noecl_mask=True),
+    )
     run = load_catwise_run(experiment, site)
     assert run["observation"]["mask_north_ecliptic"] is False
     assert run["model"]["use_noecl_mask"] is True
@@ -162,9 +167,14 @@ def test_configurable_ecliptic_mask_requires_matching_model_flag(configs):
         ("priors.yaml", "fixed_parameters", {"observer_speed": 2}),
     ],
 )
-def test_rejects_unsupported_or_unknown_science(configs, filename, field, value):
+def test_rejects_unsupported_or_unknown_science(
+    configs, filename, field, value
+):
     experiment, site = configs
-    edit(experiment.parent / filename, lambda config: config.update({field: value}))
+    edit(
+        experiment.parent / filename,
+        lambda config: config.update({field: value}),
+    )
     with pytest.raises(CatwiseConfigError):
         load_catwise_run(experiment, site)
 
@@ -187,10 +197,16 @@ def test_rejects_invalid_execution(configs, update, match):
 
 def test_semantic_prior_and_observation_errors(configs):
     experiment, site = configs
-    edit(experiment.parent / "priors.yaml", lambda c: c["parameters"][1].update(low=9))
+    edit(
+        experiment.parent / "priors.yaml",
+        lambda c: c["parameters"][1].update(low=9),
+    )
     with pytest.raises(CatwiseConfigError, match="low < high"):
         load_catwise_run(experiment, site)
-    edit(experiment.parent / "priors.yaml", lambda c: c["parameters"][1].update(low=0))
+    edit(
+        experiment.parent / "priors.yaml",
+        lambda c: c["parameters"][1].update(low=0),
+    )
     edit(experiment.parent / "observation.yaml", lambda c: c.update(w1_min=17))
     with pytest.raises(CatwiseConfigError, match="w1_max"):
         load_catwise_run(experiment, site)
@@ -209,8 +225,14 @@ def test_missing_files_and_yaml_fail_with_configuration_error(configs):
 @pytest.mark.parametrize(
     "update,match",
     [
-        (lambda c: c["reference_theta"].update(observer_speed=float("nan")), "finite"),
-        (lambda c: c["reference_theta"].update(observer_speed=20), "outside prior"),
+        (
+            lambda c: c["reference_theta"].update(observer_speed=float("nan")),
+            "finite",
+        ),
+        (
+            lambda c: c["reference_theta"].update(observer_speed=20),
+            "outside prior",
+        ),
         (lambda c: c["parameters"].reverse(), "must follow"),
     ],
 )
@@ -231,7 +253,9 @@ def test_rejects_a_flow_flag_that_scenario_would_silently_overwrite(configs):
         load_catwise_run(experiment, site)
 
 
-def test_cli_outputs_reviewable_resolved_yaml_without_heavy_imports(configs, tmp_path):
+def test_cli_outputs_reviewable_resolved_yaml_without_heavy_imports(
+    configs, tmp_path
+):
     output = tmp_path / "resolved.yaml"
     assert (
         main(
@@ -247,7 +271,9 @@ def test_cli_outputs_reviewable_resolved_yaml_without_heavy_imports(configs, tmp
         == 0
     )
     assert (
-        yaml.safe_load(output.read_text())["execution"]["effective_simulations"]
+        yaml.safe_load(output.read_text())["execution"][
+            "effective_simulations"
+        ]
         == 49_995
     )
     result = subprocess.run(

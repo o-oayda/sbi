@@ -20,7 +20,10 @@ from dipolesbi.pipelines.catwise_components import (
     build_scenario,
     make_model_sim_wrapper,
 )
-from dipolesbi.pipelines.catwise_config import CatwiseConfigError, load_catwise_run
+from dipolesbi.pipelines.catwise_config import (
+    CatwiseConfigError,
+    load_catwise_run,
+)
 from dipolesbi.pipelines.prepare_catwise_observation import (
     build_native_retain_mask,
     load_prepared_observation,
@@ -53,7 +56,9 @@ def run_inference(
     x0, mask, metadata = load_prepared_observation(run, prepared)
     report = validate_catwise_inputs(run)
     native_mask = build_native_retain_mask(run, report=report)
-    from dipolesbi.pipelines.package_catwise_analysis import capture_software_state
+    from dipolesbi.pipelines.package_catwise_analysis import (
+        capture_software_state,
+    )
 
     software_state = capture_software_state(repository_root or Path.cwd())
     output = (
@@ -67,7 +72,9 @@ def run_inference(
     )
     resolved = deepcopy(run)
     resolved['inference']['multiround']['plot_save_dir'] = str(output)
-    load_simulations = resolved['inference']['multiround'].get('load_simulations')
+    load_simulations = resolved['inference']['multiround'].get(
+        'load_simulations'
+    )
     resolved['inference']['multiround']['simulation_path'] = (
         str(output / load_simulations / 'data')
         if load_simulations is not None
@@ -81,7 +88,9 @@ def run_inference(
     model = (CatwiseJax if backend == 'jax' else Catwise)(config)
     model.initialise_data()
     simulator_mask = model.mask_map if backend == 'jax' else model.native_mask
-    if simulator_mask is None or not np.array_equal(simulator_mask, native_mask):
+    if simulator_mask is None or not np.array_equal(
+        simulator_mask, native_mask
+    ):
         raise DataValidationError(
             'Simulator native mask does not match the validated observation mask.'
         )
@@ -119,10 +128,14 @@ def run_inference(
         encoding='utf-8',
     )
     _copy_if_different(prepared, output / 'prepared_observation.npz')
-    _copy_if_different(prepared.parent / 'native_mask.npy', output / 'native_mask.npy')
+    _copy_if_different(
+        prepared.parent / 'native_mask.npy', output / 'native_mask.npy'
+    )
     native_observation = prepared.parent / 'reference_observation_native.npz'
     if native_observation.is_file():
-        _copy_if_different(native_observation, output / native_observation.name)
+        _copy_if_different(
+            native_observation, output / native_observation.name
+        )
     inferer = MultiRoundInferer(
         'NLE',
         prior,
@@ -157,7 +170,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.no_ui:
             run['execution']['no_ui'] = True
         command = (
-            sys.orig_argv if argv is None else [sys.executable, '-m', __name__, *argv]
+            sys.orig_argv
+            if argv is None
+            else [sys.executable, '-m', __name__, *argv]
         )
         run_inference(
             run,

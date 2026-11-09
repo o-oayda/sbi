@@ -86,7 +86,7 @@ dev = [
 ]
 
 [tool.black]
-line-length = 88
+line-length = 79
 skip-string-normalization = true
 target-version = ["py312"]
 

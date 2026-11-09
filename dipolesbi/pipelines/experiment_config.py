@@ -10,7 +10,6 @@ from typing import Any
 
 import yaml
 
-
 _EXPERIMENT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 
@@ -55,7 +54,9 @@ def _resolve_inherited_config(
         current = current.resolve(strict=True)
         if current in stack:
             cycle = " -> ".join(item.stem for item in (*stack, current))
-            raise ExperimentConfigError(f"Experiment inheritance cycle: {cycle}")
+            raise ExperimentConfigError(
+                f"Experiment inheritance cycle: {cycle}"
+            )
         try:
             with current.open(encoding="utf-8") as stream:
                 raw = yaml.safe_load(stream)

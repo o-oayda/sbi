@@ -18,7 +18,9 @@ from dipolesbi.pipelines.package_catwise_analysis import (
 
 @pytest.fixture
 def analysis(tmp_path, monkeypatch):
-    root, result, observation = [tmp_path / name for name in ("repo", "result", "obs")]
+    root, result, observation = [
+        tmp_path / name for name in ("repo", "result", "obs")
+    ]
     for directory in (root, result, observation):
         directory.mkdir()
     for name in (
@@ -100,7 +102,9 @@ def analysis(tmp_path, monkeypatch):
         (observation / "reference_observation_native.npz").read_bytes()
     )
     np.savez_compressed(
-        result / "reference_observation.npz", x0=[1.0, np.nan], mask=[True, False]
+        result / "reference_observation.npz",
+        x0=[1.0, np.nan],
+        mask=[True, False],
     )
     np.savez_compressed(
         result / "prepared_observation.npz",
@@ -135,7 +139,9 @@ def analysis(tmp_path, monkeypatch):
 def test_archive_records_products_science_and_checksums(analysis):
     run, kwargs = analysis
     archive = package_catwise_analysis(run, **kwargs)
-    manifest = verify_catwise_archive(archive, expected_experiment_id="tiny-s21")
+    manifest = verify_catwise_archive(
+        archive, expected_experiment_id="tiny-s21"
+    )
     assert manifest["source"]["dirty"] is True
     assert manifest["source"]["commit"] == "abc123"
     assert manifest["packaging_source"]["commit"] == "newer-packaging-commit"
@@ -160,7 +166,9 @@ def test_archive_records_products_science_and_checksums(analysis):
 def test_missing_final_checkpoint_fails_before_writing(analysis):
     run, kwargs = analysis
     (kwargs["result_dir"] / "nflow_checkpoint_r1.npz").unlink()
-    with pytest.raises(CatwisePackagingError, match="Missing required.*checkpoint"):
+    with pytest.raises(
+        CatwisePackagingError, match="Missing required.*checkpoint"
+    ):
         package_catwise_analysis(run, **kwargs)
     assert not kwargs["output_dir"].exists()
 
@@ -187,9 +195,9 @@ def test_changed_prepared_input_rejected(analysis):
 
 def test_changed_native_observation_rejected(analysis):
     run, kwargs = analysis
-    (kwargs["observation_dir"] / "reference_observation_native.npz").write_bytes(
-        b"changed native observation"
-    )
+    (
+        kwargs["observation_dir"] / "reference_observation_native.npz"
+    ).write_bytes(b"changed native observation")
     with pytest.raises(
         CatwisePackagingError,
         match="changed after inference: .*reference_observation_native",
@@ -202,7 +210,8 @@ def test_missing_inference_native_observation_rejected(analysis):
     run, kwargs = analysis
     (kwargs["result_dir"] / "reference_observation_native.npz").unlink()
     with pytest.raises(
-        CatwisePackagingError, match="Missing required.*reference_observation_native"
+        CatwisePackagingError,
+        match="Missing required.*reference_observation_native",
     ):
         package_catwise_analysis(run, **kwargs)
 
@@ -223,7 +232,9 @@ def test_inference_used_different_observation_rejected(analysis):
         x0=[9.0, np.nan],
         mask=[True, False],
     )
-    with pytest.raises(CatwisePackagingError, match="Inference reference x0 differs"):
+    with pytest.raises(
+        CatwisePackagingError, match="Inference reference x0 differs"
+    ):
         package_catwise_analysis(run, **kwargs)
 
 
@@ -238,7 +249,9 @@ def test_runtime_output_override_can_be_packaged(analysis):
     saved = deepcopy(run)
     saved["inference"]["multiround"].update(
         load_simulations="resume",
-        simulation_path=str(kwargs["result_dir"].resolve() / "resume" / "data"),
+        simulation_path=str(
+            kwargs["result_dir"].resolve() / "resume" / "data"
+        ),
     )
     (kwargs["result_dir"] / "experiment.resolved.yaml").write_text(
         yaml.safe_dump(saved)
@@ -254,7 +267,8 @@ def test_changed_inference_environment_rejected(analysis):
     run, kwargs = analysis
     (kwargs["repository_root"] / "uv.lock").write_text("changed lock\n")
     with pytest.raises(
-        CatwisePackagingError, match="Environment file changed after inference: uv.lock"
+        CatwisePackagingError,
+        match="Environment file changed after inference: uv.lock",
     ):
         package_catwise_analysis(run, **kwargs)
 
@@ -262,5 +276,7 @@ def test_changed_inference_environment_rejected(analysis):
 def test_missing_inference_software_state_rejected(analysis):
     run, kwargs = analysis
     (kwargs["result_dir"] / "software-state.yaml").unlink()
-    with pytest.raises(CatwisePackagingError, match="Missing required.*software-state"):
+    with pytest.raises(
+        CatwisePackagingError, match="Missing required.*software-state"
+    ):
         package_catwise_analysis(run, **kwargs)

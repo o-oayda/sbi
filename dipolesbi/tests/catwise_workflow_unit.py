@@ -12,7 +12,10 @@ import pytest
 from astropy.table import Table
 import yaml
 
-from dipolesbi.pipelines.catwise_config import DEFAULT_EXPERIMENT, load_catwise_run
+from dipolesbi.pipelines.catwise_config import (
+    DEFAULT_EXPERIMENT,
+    load_catwise_run,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 SNAKEFILE = ROOT / "workflow/Snakefile.catwise"
@@ -51,7 +54,9 @@ def workflow_case(tmp_path):
     edit(
         configs / "observation.yaml",
         lambda c: c.update(
-            catalogue_sha256=hashlib.sha256(catalogue.read_bytes()).hexdigest(),
+            catalogue_sha256=hashlib.sha256(
+                catalogue.read_bytes()
+            ).hexdigest(),
             mask_sha256=hashlib.sha256(mask.read_bytes()).hexdigest(),
         ),
     )
@@ -76,7 +81,8 @@ def workflow_case(tmp_path):
         "work": work,
         "output_root": output_root,
         "catalogue": catalogue,
-        "observation_dir": output_root / "derived/observations/s21_ds4_log_dispersion",
+        "observation_dir": output_root
+        / "derived/observations/s21_ds4_log_dispersion",
         "cache": tmp_path / "cache",
     }
 
@@ -177,7 +183,11 @@ def test_real_preparation_is_noop_then_scopes_seed_prior_and_resource_changes(
         )
     ]
     for filename in ("mask.png", "reference_observation_native.png"):
-        assert (directory / filename).read_bytes().startswith(b'\x89PNG\r\n\x1a\n')
+        assert (
+            (directory / filename)
+            .read_bytes()
+            .startswith(b'\x89PNG\r\n\x1a\n')
+        )
     timestamps = {path: path.stat().st_mtime_ns for path in outputs}
     resolved = (
         case["output_root"]
@@ -191,7 +201,10 @@ def test_real_preparation_is_noop_then_scopes_seed_prior_and_resource_changes(
         assert observation["mask"][-1]
         assert np.isfinite(observation["x0"][-1])
     code, output = snakemake(
-        case, "resolve_catwise_experiment", "prepare_catwise_observation", dry_run=True
+        case,
+        "resolve_catwise_experiment",
+        "prepare_catwise_observation",
+        dry_run=True,
     )
     assert code == 0, output
     assert "Nothing to be done" in output

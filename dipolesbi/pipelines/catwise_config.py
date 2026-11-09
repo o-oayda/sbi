@@ -37,7 +37,9 @@ def _read_yaml(path: Path) -> tuple[dict[str, Any], str]:
             f"Cannot read configuration {path}: {error}"
         ) from error
     if not isinstance(value, dict):
-        raise CatwiseConfigError(f"Configuration must be a YAML mapping: {path}")
+        raise CatwiseConfigError(
+            f"Configuration must be a YAML mapping: {path}"
+        )
     return value, hashlib.sha256(contents).hexdigest()
 
 
@@ -72,16 +74,22 @@ def _resolve_path(value: str, directory: Path) -> Path:
 
 def _validate_science(run: dict[str, Any]) -> None:
     observation = run["observation"]
-    if run["model"]["use_noecl_mask"] != (not observation["mask_north_ecliptic"]):
+    if run["model"]["use_noecl_mask"] != (
+        not observation["mask_north_ecliptic"]
+    ):
         raise CatwiseConfigError(
             "model.use_noecl_mask disagrees with observation.mask_north_ecliptic"
         )
     if observation["w1_min"] >= observation["w1_max"]:
         raise CatwiseConfigError("observation.w1_max must exceed w1_min")
     if run["model"]["cat_w1_max"] < observation["w1_max"]:
-        raise CatwiseConfigError("model.cat_w1_max must cover observation.w1_max")
+        raise CatwiseConfigError(
+            "model.cat_w1_max must cover observation.w1_max"
+        )
     if run["model"]["cat_w12_min"] > observation["w12_min"]:
-        raise CatwiseConfigError("model.cat_w12_min must cover observation.w12_min")
+        raise CatwiseConfigError(
+            "model.cat_w12_min must cover observation.w12_min"
+        )
 
     expected = [
         ("N", "log10_n_initial_samples", "uniform"),
@@ -92,7 +100,8 @@ def _validate_science(run: dict[str, Any]) -> None:
         ("lambda_clus", "lambda_clus", "uniform"),
     ]
     actual = [
-        (p["short_name"], p["simulator_kwarg"], p["dist_type"]) for p in run["priors"]
+        (p["short_name"], p["simulator_kwarg"], p["dist_type"])
+        for p in run["priors"]
     ]
     if actual != expected:
         raise CatwiseConfigError(
@@ -105,7 +114,9 @@ def _validate_science(run: dict[str, Any]) -> None:
             "reference_theta must contain exactly the sampled parameters"
         )
     if kwargs & set(run["fixed_parameters"]):
-        raise CatwiseConfigError("fixed_parameters cannot override sampled parameters")
+        raise CatwiseConfigError(
+            "fixed_parameters cannot override sampled parameters"
+        )
     for prior in run["priors"]:
         low, high = prior["low"], prior["high"]
         if low >= high:
@@ -118,7 +129,9 @@ def _validate_science(run: dict[str, Any]) -> None:
                 f"reference_theta outside prior {prior['short_name']}"
             )
         if prior["dist_type"] == "polar" and not -90 <= low < high <= 90:
-            raise CatwiseConfigError("Polar latitude prior must stay within [-90, 90]")
+            raise CatwiseConfigError(
+                "Polar latitude prior must stay within [-90, 90]"
+            )
 
     execution = run["execution"]
     if execution["requested_simulations"] < execution["n_rounds"]:
@@ -130,15 +143,24 @@ def _validate_science(run: dict[str, Any]) -> None:
         inference["multiround"]["jax_ns_n_delete"]
         >= inference["multiround"]["jax_ns_n_live"]
     ):
-        raise CatwiseConfigError("jax_ns_n_delete must be smaller than jax_ns_n_live")
+        raise CatwiseConfigError(
+            "jax_ns_n_delete must be smaller than jax_ns_n_live"
+        )
     if inference["data_transform"]["kind"] != "zscore":
-        raise CatwiseConfigError("S21 NLE requires the explicit zscore data transform")
+        raise CatwiseConfigError(
+            "S21 NLE requires the explicit zscore data transform"
+        )
     if inference["theta_transform"]["kind"] != "dipole_cartesian":
         raise CatwiseConfigError(
             "S21 NLE requires the dipole_cartesian theta transform"
         )
-    if inference["training"]["min_n_iter"] > inference["training"]["max_n_iter"]:
-        raise CatwiseConfigError("training.min_n_iter must not exceed max_n_iter")
+    if (
+        inference["training"]["min_n_iter"]
+        > inference["training"]["max_n_iter"]
+    ):
+        raise CatwiseConfigError(
+            "training.min_n_iter must not exceed max_n_iter"
+        )
     flow = inference["flow"]
     if (
         flow["embed_target_transform_in_flow"]
@@ -159,7 +181,9 @@ def _validate_science(run: dict[str, Any]) -> None:
         "surjective_MAF" in flow["architecture"]
         and flow["data_reduction_factor"] is None
     ):
-        raise CatwiseConfigError("surjective_MAF requires data_reduction_factor")
+        raise CatwiseConfigError(
+            "surjective_MAF requires data_reduction_factor"
+        )
     if inference["multiround"]["dequantise_data"]:
         raise CatwiseConfigError(
             "The continuous native log_dispersion summary cannot be dequantised"
@@ -190,7 +214,9 @@ def load_catwise_run(
     experiment = read(experiment_path, "experiment")
     site = read(site_path, "site")
     layers = {
-        kind: read(_resolve_path(experiment[kind], experiment_path.parent), kind)
+        kind: read(
+            _resolve_path(experiment[kind], experiment_path.parent), kind
+        )
         for kind in ("observation", "model", "priors", "inference")
     }
     run = {
@@ -215,7 +241,10 @@ def load_catwise_run(
                 **site["paths"],
             }.items()
         },
-        "provenance": {"config_paths": list(sources), "config_sha256": sources},
+        "provenance": {
+            "config_paths": list(sources),
+            "config_sha256": sources,
+        },
     }
     _validate_science(run)
     execution = run["execution"]
@@ -230,7 +259,9 @@ def load_catwise_run(
         prng_integer_seed=execution["seed"],
         reference_theta=deepcopy(run["reference_theta"]),
         plot_save_dir=str(
-            Path(run["paths"]["output_root"]) / "results" / run["experiment_id"]
+            Path(run["paths"]["output_root"])
+            / "results"
+            / run["experiment_id"]
         ),
         map_ndim=12 * run["observation"]["downscale_nside"] ** 2,
         summary_ndim=1,
@@ -242,7 +273,9 @@ def load_catwise_run(
     multiround = run["inference"]["multiround"]
     if multiround["load_simulations"] is not None:
         multiround["simulation_path"] = str(
-            Path(multiround["plot_save_dir"]) / multiround["load_simulations"] / "data"
+            Path(multiround["plot_save_dir"])
+            / multiround["load_simulations"]
+            / "data"
         )
     return run
 
@@ -252,7 +285,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--experiment", type=Path, default=DEFAULT_EXPERIMENT)
     parser.add_argument("--site", type=Path, required=True)
     parser.add_argument(
-        "--output", type=Path, help="Write resolved YAML instead of printing it"
+        "--output",
+        type=Path,
+        help="Write resolved YAML instead of printing it",
     )
     args = parser.parse_args(argv)
     try:

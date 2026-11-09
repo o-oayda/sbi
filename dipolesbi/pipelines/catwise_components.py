@@ -8,7 +8,11 @@ import numpy as np
 from catsim import CatwiseConfig
 from catsim.utils.healsphere import downgrade_ignore_nan
 
-from dipolesbi.tools.configs import DataTransformSpec, Scenario, ThetaTransformSpec
+from dipolesbi.tools.configs import (
+    DataTransformSpec,
+    Scenario,
+    ThetaTransformSpec,
+)
 from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.priors_np import DipolePriorNP
 
@@ -48,7 +52,11 @@ def build_scenario(
     if inference['mode'] != 'NLE' or inference['scenario'] != 'anynside_nle':
         raise ValueError('Only the anynside NLE scenario is supported.')
     mr = dict(inference['multiround'])
-    for key in ('simulations_per_round', 'effective_simulations', 'simulation_path'):
+    for key in (
+        'simulations_per_round',
+        'effective_simulations',
+        'simulation_path',
+    ):
         mr.pop(key, None)
     mr.update(
         prng_integer_seed=execution['seed'],
@@ -61,7 +69,9 @@ def build_scenario(
     if data.get('embedding_config') is not None:
         from dipolesbi.tools.configs import EmbeddingNetConfig
 
-        data['embedding_config'] = EmbeddingNetConfig(**data['embedding_config'])
+        data['embedding_config'] = EmbeddingNetConfig(
+            **data['embedding_config']
+        )
     return Scenario.anynside_nle(
         nside=run['observation']['downscale_nside'],
         theta_prior=prior.to_jax(),
@@ -80,13 +90,17 @@ def process_native_sample(native_map, native_mask, observation):
     native_mask = np.asarray(native_mask, dtype=bool)
     expected = 12 * observation['native_nside'] ** 2
     if native_map.shape != (expected,) or native_mask.shape != (expected,):
-        raise ValueError(f'Native map and mask must both have shape ({expected},).')
+        raise ValueError(
+            f'Native map and mask must both have shape ({expected},).'
+        )
     if observation['native_count_summary'] != 'log_dispersion':
         raise ValueError('Only log_dispersion native summary is supported.')
     valid = native_mask & np.isfinite(native_map)
     counts = np.rint(native_map[valid]).astype(np.float64)
     if counts.size < 2 or np.any(counts < 0):
-        raise ValueError('Native counts must contain at least two nonnegative pixels.')
+        raise ValueError(
+            'Native counts must contain at least two nonnegative pixels.'
+        )
     mean = float(np.mean(counts))
     if mean <= 0:
         raise ValueError('Native count mean must be positive.')
@@ -100,12 +114,16 @@ def process_native_sample(native_map, native_mask, observation):
     mask = np.asarray(mask, dtype=bool)
     coarse[~mask] = np.nan
     return (
-        np.concatenate((coarse, np.array([np.log(dispersion)], dtype=np.float32))),
+        np.concatenate(
+            (coarse, np.array([np.log(dispersion)], dtype=np.float32))
+        ),
         np.concatenate((mask, np.ones(1, dtype=bool))),
     )
 
 
-def make_model_sim_wrapper(model, run: Mapping[str, Any], expected_native_mask=None):
+def make_model_sim_wrapper(
+    model, run: Mapping[str, Any], expected_native_mask=None
+):
     """Adapt either catsim backend to the inferer's batched simulator interface."""
     obs, execution = run['observation'], run['execution']
     fixed = dict(run['fixed_parameters'])
@@ -122,8 +140,12 @@ def make_model_sim_wrapper(model, run: Mapping[str, Any], expected_native_mask=N
     )
 
     def process(x, mask):
-        if expected_mask is not None and not np.array_equal(mask, expected_mask):
-            raise ValueError('Simulator native mask does not match the observed mask.')
+        if expected_mask is not None and not np.array_equal(
+            mask, expected_mask
+        ):
+            raise ValueError(
+                'Simulator native mask does not match the observed mask.'
+            )
         return process_native_sample(x, mask, obs)
 
     def wrapper(npkey, params, noise=True, ui=None):
@@ -149,7 +171,9 @@ def make_model_sim_wrapper(model, run: Mapping[str, Any], expected_native_mask=N
             if value.ndim == 0:
                 return np.full(n, value.item())
             if value.shape != (n,):
-                raise ValueError(f'Simulator parameter must be scalar or shape ({n},).')
+                raise ValueError(
+                    f'Simulator parameter must be scalar or shape ({n},).'
+                )
             return value
 
         theta = {k: batch(v) for k, v in {**fixed, **arrays}.items()}
@@ -166,7 +190,9 @@ def make_model_sim_wrapper(model, run: Mapping[str, Any], expected_native_mask=N
                 show_progress=ui is None,
             )
             if len(maps) != n or len(masks) != n:
-                raise ValueError('Simulator returned an unexpected batch size.')
+                raise ValueError(
+                    'Simulator returned an unexpected batch size.'
+                )
             results = [process(x, mask) for x, mask in zip(maps, masks)]
         elif execution['backend'] == 'numpy':
             if not isinstance(npkey, NPKey):
@@ -175,7 +201,11 @@ def make_model_sim_wrapper(model, run: Mapping[str, Any], expected_native_mask=N
                 process(
                     *model.generate_dipole(
                         **{
-                            k: (None if k in fixed and fixed[k] is None else v[i])
+                            k: (
+                                None
+                                if k in fixed and fixed[k] is None
+                                else v[i]
+                            )
                             for k, v in theta.items()
                         },
                         rng_key=npkey.fold_in(i),
@@ -184,7 +214,11 @@ def make_model_sim_wrapper(model, run: Mapping[str, Any], expected_native_mask=N
                 for i in range(n)
             ]
         else:
-            raise ValueError(f"Unknown simulator backend: {execution['backend']}")
-        return np.stack([x for x, _ in results]), np.stack([m for _, m in results])
+            raise ValueError(
+                f"Unknown simulator backend: {execution['backend']}"
+            )
+        return np.stack([x for x, _ in results]), np.stack(
+            [m for _, m in results]
+        )
 
     return wrapper

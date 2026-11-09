@@ -8,7 +8,6 @@ from typing import Any
 
 import numpy as np
 
-
 MODEL_CONFIG_SCHEMA_VERSION = 1
 NDARRAY_TYPE_TAG = "ndarray"
 OMITTED_FIELD_NAMES = frozenset({"mask_map"})
@@ -32,7 +31,9 @@ def _json_ready(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_json_ready(v) for v in value]
     if _is_dataclass_instance(value):
-        if type(value).__module__ == "catsim.racs_products" and hasattr(value, "key"):
+        if type(value).__module__ == "catsim.racs_products" and hasattr(
+            value, "key"
+        ):
             return getattr(value, "key")
         return _config_fields_json_ready(value)
     if isinstance(value, Path):
@@ -52,7 +53,9 @@ def _json_ready(value: Any) -> Any:
             return _json_ready(item())
         except ValueError:
             pass
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable.")
+    raise TypeError(
+        f"Object of type {type(value).__name__} is not JSON serializable."
+    )
 
 
 def _decode_json_value(value: Any) -> Any:
@@ -62,11 +65,15 @@ def _decode_json_value(value: Any) -> Any:
             shape = value.get("shape")
             data = value.get("data")
             if not isinstance(dtype, str):
-                raise ValueError("ndarray model config field is missing a valid dtype.")
+                raise ValueError(
+                    "ndarray model config field is missing a valid dtype."
+                )
             if not isinstance(shape, list) or not all(
                 isinstance(dim, int) for dim in shape
             ):
-                raise ValueError("ndarray model config field is missing a valid shape.")
+                raise ValueError(
+                    "ndarray model config field is missing a valid shape."
+                )
             array = np.array(data, dtype=np.dtype(dtype))
             return array.reshape(tuple(shape))
         return {k: _decode_json_value(v) for k, v in value.items()}
@@ -114,7 +121,9 @@ def load_model_config(path: str | Path) -> object:
     if not isinstance(class_name, str) or not class_name:
         raise ValueError("model config JSON is missing a valid class_name.")
     if not isinstance(fields, dict):
-        raise ValueError("model config JSON is missing a valid fields mapping.")
+        raise ValueError(
+            "model config JSON is missing a valid fields mapping."
+        )
 
     module = importlib.import_module(class_module)
     config_type = getattr(module, class_name)
