@@ -62,10 +62,7 @@ SOURCE_CATALOGUE = (
     else [RUN["paths"]["source_catalogue"]]
 )
 CONFIG_PATHS = RUN["provenance"]["config_paths"]
-RAW_EXPERIMENT = yaml.safe_load(Path(EXPERIMENT_PATH).read_text())
-OBSERVATION_CONFIG = str(
-    (Path(EXPERIMENT_PATH).parent / RAW_EXPERIMENT["observation"]).resolve()
-)
+OBSERVATION_CONFIG = RUN["provenance"]["config_layers"]["observation"]
 CATSIM_ROOT = Path(find_spec("catsim").origin).parent
 
 
@@ -74,7 +71,10 @@ def files(*names):
 
 
 SOFTWARE_LOCK = str(REPOSITORY_ROOT / "uv.lock")
-CONFIG_IMPLEMENTATION = files("dipolesbi/pipelines/catwise_config.py")
+CONFIG_IMPLEMENTATION = files(
+    "dipolesbi/pipelines/catwise_config.py",
+    "dipolesbi/pipelines/experiment_config.py",
+)
 CONFIG_SCHEMAS = sorted(
     str(path)
     for path in (REPOSITORY_ROOT / "workflow/schemas").glob(

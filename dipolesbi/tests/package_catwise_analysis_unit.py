@@ -280,3 +280,25 @@ def test_missing_inference_software_state_rejected(analysis):
         CatwisePackagingError, match="Missing required.*software-state"
     ):
         package_catwise_analysis(run, **kwargs)
+
+
+def test_archive_includes_inherited_config_sources(analysis):
+    run, kwargs = analysis
+    base = kwargs['repository_root'] / 'base.yaml'
+    base.write_text('execution:\n  seed: 0\n')
+    run['provenance']['config_paths'].append(str(base))
+    run['provenance']['config_sha256'][str(base)] = sha256(base)
+    (kwargs['result_dir'] / 'experiment.resolved.yaml').write_text(
+        yaml.safe_dump(run)
+    )
+    archive = package_catwise_analysis(run, **kwargs)
+    with zipfile.ZipFile(archive) as bundle:
+        member = next(
+            name for name in bundle.namelist() if name.endswith('-base.yaml')
+        )
+        assert bundle.read(member) == base.read_bytes()
+    base.write_text('execution:\n  seed: 1\n')
+    with pytest.raises(
+        CatwisePackagingError, match='changed since resolution'
+    ):
+        package_catwise_analysis(run, **kwargs)

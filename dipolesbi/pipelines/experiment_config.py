@@ -1,4 +1,4 @@
-"""Resolve inherited RACS experiment configurations."""
+"""Resolve inherited workflow configurations."""
 
 from __future__ import annotations
 
@@ -103,6 +103,18 @@ def resolve_experiment_config(
         path,
         config_dir=experiment_dir,
         config_kind="experiment",
+        error_type=ExperimentConfigError,
+    )
+
+
+def resolve_config(
+    path: str | Path, *, config_kind: str = "configuration"
+) -> tuple[dict[str, Any], tuple[Path, ...]]:
+    """Resolve a sibling-file inheritance tree for any workflow config layer."""
+    return _resolve_inherited_config(
+        path,
+        config_dir=None,
+        config_kind=config_kind,
         error_type=ExperimentConfigError,
     )
 

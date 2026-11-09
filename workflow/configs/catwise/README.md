@@ -124,3 +124,56 @@ python -c 'from dipolesbi.pipelines.package_catwise_analysis import verify_catwi
 Check the archive as a whole with `sha256sum -c` on its sidecar from the archive
 directory. Member verification checks the internal inventory and checksums;
 the external sidecar provides the checksum of the whole ZIP.
+
+## Configuration inheritance
+
+All CatWISE config layers, including experiment and site files, support the same
+`extends` convention as RACS. The parent is a sibling YAML basename without the
+`.yaml` suffix. For example, a new seed variant can contain only:
+
+```yaml
+extends: s21_nle_base
+experiment_id: s21_nle_gaussian_poisson_seed1
+execution:
+  seed: 1
+```
+
+The parent supplies the common observation, inference config, budget, seed,
+batching, resources, and remaining execution settings. Model, observation,
+inference and prior layers can likewise extend a sibling base file.
+
+Mappings merge recursively; child values override parent values. Lists and
+scalars replace their parent values. This includes null: it is a value, not a
+request to delete a mapping key. Multiple levels are supported; missing parents,
+invalid parent names and cycles are rejected. Paths stay relative to the selected
+config's directory, as before; parents are siblings in that same directory.
+Schema and scientific validation run on the complete merged values.
+
+Priors may be written as ordered lists (the existing format) or mappings keyed
+by their short names. The named mapping form supports overriding one bound or
+adding a parameter without repeating the whole prior list:
+
+```yaml
+extends: priors_base
+parameters:
+  lambda_clus:
+    simulator_kwarg: lambda_clus
+    low: 0
+    high: 8
+    dist_type: uniform
+reference_theta:
+  lambda_clus: 0.0
+```
+
+`priors_base.yaml` holds N, etaWX, speed and dipole direction, with their reference
+values. `priors.yaml` adds Poisson clustering. Other supported variants can
+reuse that common base. Existing parameter order is preserved and newly introduced
+names append to it. The resolved output always uses an ordered parameter list,
+so simulator and inference interfaces do not change. A child supplying a list
+replaces the full inherited parameter mapping/list.
+
+The inspection command emits all effective settings without `extends` keys.
+`provenance.config_layers` records each layer's parent-first source paths;
+every source is hashed, tracked as a workflow dependency, and included in the
+analysis archive. Observation rules track only the observation's inheritance
+tree, so model/prior/experiment changes do not invalidate the observed map.

@@ -78,6 +78,8 @@ include = [
     { path = "workflow/configs/catwise/priors.yaml", format = ["sdist", "wheel"] },
     { path = "workflow/configs/catwise/inference.yaml", format = ["sdist", "wheel"] },
     { path = "workflow/configs/catwise/site.example.yaml", format = ["sdist", "wheel"] },
+    { path = "workflow/configs/catwise/s21_nle_base.yaml", format = ["sdist", "wheel"] },
+    { path = "workflow/configs/catwise/priors_base.yaml", format = ["sdist", "wheel"] },
 ]
 
 [dependency-groups]

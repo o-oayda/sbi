@@ -12,6 +12,8 @@ import pytest
 from astropy.table import Table
 import yaml
 
+from dipolesbi.pipelines.experiment_config import resolve_config
+
 from dipolesbi.pipelines.catwise_config import (
     DEFAULT_EXPERIMENT,
     load_catwise_run,
@@ -22,7 +24,12 @@ SNAKEFILE = ROOT / "workflow/Snakefile.catwise"
 
 
 def edit(path, update):
-    value = yaml.safe_load(path.read_text())
+    value, _ = resolve_config(path)
+    if isinstance(value.get("parameters"), dict):
+        value["parameters"] = [
+            {"short_name": key, **entry}
+            for key, entry in value["parameters"].items()
+        ]
     update(value)
     path.write_text(yaml.safe_dump(value, sort_keys=False))
 
@@ -248,3 +255,22 @@ def test_checksum_failure_blocks_mask_and_observation_creation(workflow_case):
     assert "checksum mismatch for catalogue" in log.read_text()
     assert not (case["observation_dir"] / "native_mask.npy").exists()
     assert not (case["observation_dir"] / "reference_observation.npz").exists()
+
+
+def test_inherited_observation_parent_is_a_workflow_input(workflow_case):
+    case = workflow_case
+    directory = case['experiment'].parent
+    observation = directory / 'observation.yaml'
+    parent = directory / 'observation_base.yaml'
+    observation.rename(parent)
+    observation.write_text('extends: observation_base\n')
+    code, output = snakemake(case, 'prepare_catwise_observation')
+    assert code == 0, output
+    code, output = snakemake(case, 'prepare_catwise_observation', dry_run=True)
+    assert code == 0, output
+    assert 'Nothing to be done' in output
+    edit(parent, lambda c: c.update(downscale_nside=2))
+    code, output = snakemake(case, 'prepare_catwise_observation', dry_run=True)
+    assert code == 0, output
+    assert str(parent) in output
+    assert 'rule prepare_catwise_observation:' in output

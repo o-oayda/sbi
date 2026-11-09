@@ -10,6 +10,8 @@ import sys
 import pytest
 import yaml
 
+from dipolesbi.pipelines.experiment_config import resolve_config
+
 from dipolesbi.pipelines.catwise_config import (
     CatwiseConfigError,
     DEFAULT_EXPERIMENT,
@@ -38,7 +40,12 @@ def configs(tmp_path):
 
 
 def edit(path, update):
-    value = yaml.safe_load(path.read_text())
+    value, _ = resolve_config(path)
+    if isinstance(value.get("parameters"), dict):
+        value["parameters"] = [
+            {"short_name": key, **entry}
+            for key, entry in value["parameters"].items()
+        ]
     update(value)
     path.write_text(yaml.safe_dump(value, sort_keys=False))
 
@@ -290,3 +297,145 @@ def test_cli_outputs_reviewable_resolved_yaml_without_heavy_imports(
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_shipped_experiment_tracks_and_hashes_all_parents(configs):
+    experiment, site = configs
+    run = load_catwise_run(experiment, site)
+    layers = run['provenance']['config_layers']
+    assert [Path(p).name for p in layers['experiment']] == [
+        's21_nle_base.yaml',
+        's21_nle_gaussian_poisson.yaml',
+    ]
+    assert [Path(p).name for p in layers['model']] == [
+        'model.yaml',
+    ]
+    assert [Path(p).name for p in layers['priors']] == [
+        'priors_base.yaml',
+        'priors.yaml',
+    ]
+    sources = run['provenance']['config_paths']
+    assert len(sources) == len(set(sources))
+    for layer_sources in layers.values():
+        assert set(layer_sources) <= set(sources)
+    for name in sources:
+        assert (
+            run['provenance']['config_sha256'][name]
+            == hashlib.sha256(Path(name).read_bytes()).hexdigest()
+        )
+    assert 'extends' not in run['model']
+
+
+@pytest.mark.parametrize(
+    'kind,override',
+    [
+        ('observation', {'downscale_nside': 2}),
+        ('model', {'max_cluster_children_per_parent': 5}),
+        ('inference', {'training': {'patience': 5}}),
+        ('priors', {'parameters': {'etaWX': {'high': 4.0}}}),
+    ],
+)
+def test_scientific_layers_deep_merge_before_validation(
+    configs, kind, override
+):
+    experiment, site = configs
+    child = experiment.parent / f'{kind}_child.yaml'
+    child.write_text(yaml.safe_dump({'extends': kind, **override}))
+    edit(experiment, lambda c: c.update({kind: child.name}))
+    run = load_catwise_run(experiment, site)
+    if kind == 'observation':
+        assert run[kind]['downscale_nside'] == 2
+        assert run['inference']['multiround']['map_ndim'] == 48
+    elif kind == 'model':
+        assert run[kind]['max_cluster_children_per_parent'] == 5
+        assert run[kind]['magnitude_error_dist'] == 'gaussian'
+    elif kind == 'inference':
+        assert run[kind]['training']['patience'] == 5
+        assert run[kind]['training']['learning_rate'] == 1.0e-4
+    else:
+        assert run[kind][1]['high'] == 4.0
+        assert run[kind][1]['low'] == 0.0
+        assert [p['short_name'] for p in run[kind]] == [
+            'N',
+            'etaWX',
+            'D',
+            'phi',
+            'theta',
+            'lambda_clus',
+        ]
+    assert run['provenance']['config_layers'][kind][-1] == str(child)
+
+
+def test_multilevel_experiment_and_site_inheritance(configs):
+    experiment, site = configs
+    directory = experiment.parent
+    (directory / 'middle.yaml').write_text(
+        yaml.safe_dump(
+            {
+                'extends': experiment.stem,
+                'execution': {'chunk_size': 1024},
+            }
+        )
+    )
+    child = directory / 'child.yaml'
+    child.write_text(
+        yaml.safe_dump(
+            {
+                'extends': 'middle',
+                'experiment_id': 'child',
+                'execution': {'seed': 2},
+            }
+        )
+    )
+    site_child = directory / 'site_child.yaml'
+    site_child.write_text(
+        yaml.safe_dump(
+            {
+                'extends': site.stem,
+                'paths': {'hashgrid_cache': './hashgrid'},
+            }
+        )
+    )
+    run = load_catwise_run(child, site_child)
+    assert run['execution']['chunk_size'] == 1024
+    assert run['execution']['seed'] == 2
+    assert run['execution']['n_rounds'] == 15
+    assert run['paths']['hashgrid_cache'] == str(directory / 'hashgrid')
+    assert run['paths']['s21_mask'].endswith('/inputs/mask.npy')
+    assert len(run['provenance']['config_layers']['experiment']) == 4
+    assert len(run['provenance']['config_layers']['site']) == 2
+
+
+@pytest.mark.parametrize('parent', ['missing_parent', '../outside', ['model']])
+def test_invalid_or_missing_inheritance_is_a_config_error(configs, parent):
+    experiment, site = configs
+    child = experiment.parent / 'model_child.yaml'
+    child.write_text(yaml.safe_dump({'extends': parent}))
+    edit(experiment, lambda c: c.update(model=child.name))
+    with pytest.raises(CatwiseConfigError):
+        load_catwise_run(experiment, site)
+
+
+def test_cycles_report_the_inheritance_chain(configs):
+    experiment, site = configs
+    (experiment.parent / 'a.yaml').write_text('extends: b\n')
+    (experiment.parent / 'b.yaml').write_text('extends: a\n')
+    edit(experiment, lambda c: c.update(model='a.yaml'))
+    with pytest.raises(CatwiseConfigError, match='a -> b -> a'):
+        load_catwise_run(experiment, site)
+
+
+def test_named_prior_mismatch_rejected(configs):
+    experiment, site = configs
+    child = experiment.parent / 'bad_priors.yaml'
+    child.write_text(
+        yaml.safe_dump(
+            {
+                'extends': 'priors',
+                'parameters': {'etaWX': {'short_name': 'wrong'}},
+            }
+        )
+    )
+    edit(experiment, lambda c: c.update(priors=child.name))
+    with pytest.raises(CatwiseConfigError, match='matching name'):
+        load_catwise_run(experiment, site)

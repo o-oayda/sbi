@@ -17,6 +17,11 @@ from typing import Any
 from jsonschema import Draft202012Validator
 import yaml
 
+from dipolesbi.pipelines.experiment_config import (
+    ExperimentConfigError,
+    resolve_config,
+)
+
 SCHEMA_DIR = Path(__file__).resolve().parents[2] / "workflow" / "schemas"
 DEFAULT_EXPERIMENT = (
     Path(__file__).resolve().parents[2]
@@ -198,17 +203,41 @@ def load_catwise_run(
     Scientific layer filenames are relative to the experiment YAML. Site paths
     are relative to the site YAML. ``source_catalogue`` and ``hashgrid_cache``
     are optional; null preserves catsim's existing cache discovery behavior.
+    Each layer may extend a sibling YAML by basename. Parent mappings are merged
+    before validation; lists and scalar values are replaced by child values.
     The requested budget remains 50,000 for the representative run, while
     ``effective_simulations`` reports its 15 floor-divided rounds (49,995).
     """
     experiment_path = Path(experiment_path).expanduser().resolve()
     site_path = Path(site_path).expanduser().resolve()
     sources: dict[str, str] = {}
+    config_layers: dict[str, list[str]] = {}
 
     def read(path: Path, kind: str) -> dict[str, Any]:
-        value, digest = _read_yaml(path)
+        try:
+            value, inherited_paths = resolve_config(path, config_kind=kind)
+        except OSError as error:
+            raise CatwiseConfigError(
+                f"Cannot read configuration {path}: {error}"
+            ) from error
+        except ExperimentConfigError as error:
+            raise CatwiseConfigError(str(error)) from error
+        if kind == "priors" and isinstance(value.get("parameters"), dict):
+            parameters = []
+            for name, entry in value["parameters"].items():
+                if not isinstance(entry, dict) or (
+                    "short_name" in entry and entry["short_name"] != name
+                ):
+                    raise CatwiseConfigError(
+                        f"{path}: prior {name} needs a mapping with a matching name"
+                    )
+                parameters.append({**entry, "short_name": name})
+            value["parameters"] = parameters
         _validate(value, kind, path)
-        sources[str(path)] = digest
+        config_layers[kind] = [str(parent) for parent in inherited_paths]
+        for parent in inherited_paths:
+            _, digest = _read_yaml(parent)
+            sources[str(parent)] = digest
         return value
 
     experiment = read(experiment_path, "experiment")
@@ -244,6 +273,7 @@ def load_catwise_run(
         "provenance": {
             "config_paths": list(sources),
             "config_sha256": sources,
+            "config_layers": config_layers,
         },
     }
     _validate_science(run)
