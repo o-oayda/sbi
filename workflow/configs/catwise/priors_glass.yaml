@@ -1,0 +1,3 @@
+extends: priors_base
+fixed_parameters:
+  lambda_clus: 0.0

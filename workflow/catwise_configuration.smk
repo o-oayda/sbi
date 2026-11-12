@@ -53,6 +53,14 @@ NATIVE_OBSERVATION = str(
 )
 ARCHIVE = str(Path(ARTIFACT_DIR) / f"{RUN['experiment_id']}.zip")
 CHECKSUM = ARCHIVE + ".sha256"
+GLASS_DIAGNOSTIC_OUTPUTS = (
+    [
+        str(Path(RESULT_DIR) / filename)
+        for filename in ("glass_power_spectrum.png", "glass_power_spectra.npz")
+    ]
+    if RUN["model"]["position_model"] == "glass"
+    else []
+)
 LAST_ROUND = EXECUTION["n_rounds"] - 1
 CATALOGUE = RUN["paths"]["s21_catalogue"]
 INPUT_MASK = RUN["paths"]["s21_mask"]
@@ -98,6 +106,9 @@ INFERENCE_IMPLEMENTATION = (
     PREPARATION_IMPLEMENTATION
     + files(
         "dipolesbi/pipelines/based_catwise.py",
+        "dipolesbi/pipelines/catwise_diagnostics.py",
+        "dipolesbi/tools/plotting.py",
+        "dipolesbi/tools/maps.py",
         "dipolesbi/pipelines/package_catwise_analysis.py",
         "dipolesbi/tools/configs.py",
         "dipolesbi/tools/multiround_inferer.py",
@@ -123,6 +134,22 @@ PACKAGING_IMPLEMENTATION = (
     files("dipolesbi/pipelines/package_catwise_analysis.py")
     + CONFIG_IMPLEMENTATION
 )
+
+# GLASS and user-supplied named function implementations affect simulations,
+# but do not change the authoritative observed map.
+if RUN["model"]["position_model"] == "glass":
+    INFERENCE_IMPLEMENTATION.append(str(CATSIM_ROOT / "glass.py"))
+    for field in ("glass_dndz", "glass_bias"):
+        module_name = RUN["model"][field].split(":", 1)[0]
+        try:
+            callable_spec = find_spec(module_name)
+        except (ImportError, ValueError) as error:
+            raise WorkflowError(
+                f"Cannot locate {field} module: {module_name}"
+            ) from error
+        if callable_spec is None or callable_spec.origin is None:
+            raise WorkflowError(f"Cannot locate {field} source: {module_name}")
+        INFERENCE_IMPLEMENTATION.append(callable_spec.origin)
 
 
 def fingerprint(mapping, implementation):

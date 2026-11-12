@@ -42,11 +42,24 @@ def run(backend='jax'):
             'source_catalogue': None,
             'hashgrid_cache': None,
         },
-        'execution': {'backend': backend, 'chunk_size': 25, 'jax_batch_size': 2},
+        'execution': {
+            'backend': backend,
+            'chunk_size': 25,
+            'jax_batch_size': 2,
+        },
         'fixed_parameters': {},
         'priors': [
             dict(
-                zip(('short_name', 'simulator_kwarg', 'low', 'high', 'dist_type'), row)
+                zip(
+                    (
+                        'short_name',
+                        'simulator_kwarg',
+                        'low',
+                        'high',
+                        'dist_type',
+                    ),
+                    row,
+                )
             )
             for row in entries
         ],
@@ -56,9 +69,18 @@ def run(backend='jax'):
 def test_config_and_prior():
     cfg = build_catwise_config(run())
     assert cfg.downscale_nside is None
-    assert cfg.use_common_extra_error and cfg.max_cluster_children_per_parent == 6
+    assert (
+        cfg.use_common_extra_error and cfg.max_cluster_children_per_parent == 6
+    )
     prior = build_prior(run())
-    assert prior.prior_names == ['N', 'etaWX', 'D', 'phi', 'theta', 'lambda_clus']
+    assert prior.prior_names == [
+        'N',
+        'etaWX',
+        'D',
+        'phi',
+        'theta',
+        'lambda_clus',
+    ]
     assert prior.prior_dict['theta']['dist_type'] == 'polar'
 
 
@@ -92,11 +114,17 @@ def test_adapters_apply_cuts_and_identical_processing(backend):
 
         def batch_generate_dipole(self, theta, key, batch_size, show_progress):
             self.calls.append(theta)
-            return np.tile(np.arange(48) + 1.0, (2, 1)), np.ones((2, 48), dtype=bool)
+            return np.tile(np.arange(48) + 1.0, (2, 1)), np.ones(
+                (2, 48), dtype=bool
+            )
 
     fake = Fake()
-    wrapper = make_model_sim_wrapper(fake, run(backend), np.ones(48, dtype=bool))
-    x, mask = wrapper(NPKey.from_seed(4), {'w1_extra_error': np.array([2.0, 3.0])})
+    wrapper = make_model_sim_wrapper(
+        fake, run(backend), np.ones(48, dtype=bool)
+    )
+    x, mask = wrapper(
+        NPKey.from_seed(4), {'w1_extra_error': np.array([2.0, 3.0])}
+    )
     assert x.shape == mask.shape == (2, 13)
     assert np.array_equal(x[0], x[1])
     assert np.all(fake.calls[0]['w1_max'] == 16.4)
@@ -117,7 +145,8 @@ def test_scenario_uses_resolved_contract(tmp_path):
 
     cfg = run()
     config_path = (
-        Path(__file__).resolve().parents[2] / 'workflow/configs/catwise/inference.yaml'
+        Path(__file__).resolve().parents[2]
+        / 'workflow/configs/catwise/inference.yaml'
     )
     cfg['inference'] = yaml.safe_load(config_path.read_text())
     cfg['inference']['multiround'].update(
@@ -135,3 +164,118 @@ def test_scenario_uses_resolved_contract(tmp_path):
     assert scenario.multiround.reference_theta == cfg['reference_theta']
     assert scenario.flow.architecture.count('surjective_MAF') == 1
     assert scenario.training.learning_rate == 1e-4
+
+
+def test_numpy_adapter_passes_allocated_worker_count(monkeypatch):
+    import dipolesbi.pipelines.catwise_components as components
+
+    config = run('numpy')
+    config['execution']['threads'] = 4
+    calls = {}
+
+    def dispatch(theta, model_callable, *, n_workers, rng_key, ui):
+        from joblib.parallel import get_active_backend
+
+        backend, _ = get_active_backend()
+        calls.update(
+            workers=n_workers,
+            inner_threads=backend.inner_max_num_threads,
+            theta=theta,
+            ui=ui,
+        )
+        result = model_callable(
+            **{name: values[0] for name, values in theta.items()},
+            rng_key=rng_key.fold_in(0),
+        )
+        return np.tile(result[0], (4, 1)), np.tile(result[1], (4, 1))
+
+    class Model:
+        downscale_nside = None
+
+        def generate_dipole(self, **kwargs):
+            return np.arange(48) + 1.0, np.ones(48, dtype=bool)
+
+    monkeypatch.setattr(components, 'batch_simulate', dispatch)
+    wrapper = make_model_sim_wrapper(Model(), config)
+    values, mask = wrapper(NPKey.from_seed(7), {'observer_speed': np.ones(4)})
+    assert values.shape == mask.shape == (4, 13)
+    assert calls['workers'] == 4
+    assert calls['inner_threads'] == 1
+    assert np.all(calls['theta']['w1_max'] == 16.4)
+
+
+def test_numpy_pool_preserves_seeds_order_and_single_draw_shape(
+    tmp_path, monkeypatch
+):
+    import json
+    import os
+    import time
+    from pathlib import Path
+
+    monkeypatch.setenv('OMP_NUM_THREADS', '32')
+    monkeypatch.setenv('OPENBLAS_NUM_THREADS', '32')
+
+    class Model:
+        downscale_nside = None
+
+        def __init__(self, directory):
+            self.directory = str(directory)
+
+        def generate_dipole(self, rng_key, observer_speed, **kwargs):
+            info = {
+                'pid': os.getpid(),
+                'omp': os.environ.get('OMP_NUM_THREADS'),
+                'blas': os.environ.get('OPENBLAS_NUM_THREADS'),
+            }
+            Path(self.directory, f'{os.getpid()}.json').write_text(
+                json.dumps(info)
+            )
+            time.sleep(0.05)
+            counts = (
+                rng_key.poisson(lam=4.0, shape=(48,)) + observer_speed + 1.0
+            )
+            return counts, np.ones(48, dtype=bool)
+
+    config = run('numpy')
+    directory = tmp_path / 'workers'
+    directory.mkdir()
+    model = Model(directory)
+    params = {'observer_speed': np.arange(8, dtype=float)}
+    key = NPKey.from_seed(42)
+    parallel = make_model_sim_wrapper(model, config, n_workers=2)
+    parallel_x, parallel_mask = parallel(key, params)
+    workers = [
+        json.loads(path.read_text()) for path in directory.glob('*.json')
+    ]
+    assert len(workers) == 2
+    assert all(worker['pid'] != os.getpid() for worker in workers)
+    assert all(worker['omp'] == worker['blas'] == '1' for worker in workers)
+    serial = make_model_sim_wrapper(model, config, n_workers=1)
+    serial_x, serial_mask = serial(key, params)
+    np.testing.assert_array_equal(parallel_x, serial_x)
+    np.testing.assert_array_equal(parallel_mask, serial_mask)
+    single_x, single_mask = parallel(key, {'observer_speed': np.array([0.0])})
+    assert single_x.shape == single_mask.shape == (1, 13)
+    np.testing.assert_array_equal(single_x[0], serial_x[0])
+
+
+@pytest.mark.parametrize('workers', [0, -1, True, 1.5])
+def test_numpy_worker_count_must_be_positive_integer(workers):
+    with pytest.raises(ValueError, match='positive integer'):
+        make_model_sim_wrapper(object(), run('numpy'), n_workers=workers)
+
+
+@pytest.mark.parametrize('n', [1, 2])
+def test_numpy_dispatch_preserves_parameter_dtype(n):
+    class Model:
+        downscale_nside = None
+
+        def generate_dipole(self, observer_speed, **kwargs):
+            assert isinstance(observer_speed, np.float32)
+            return np.arange(48) + 1.0, np.ones(48, dtype=bool)
+
+    wrapper = make_model_sim_wrapper(Model(), run('numpy'), n_workers=1)
+    x, mask = wrapper(
+        NPKey.from_seed(8), {'observer_speed': np.ones(n, dtype=np.float32)}
+    )
+    assert x.shape == mask.shape == (n, 13)

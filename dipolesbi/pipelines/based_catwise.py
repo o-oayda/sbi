@@ -30,6 +30,10 @@ from dipolesbi.pipelines.prepare_catwise_observation import (
     validate_catwise_inputs,
 )
 from dipolesbi.pipelines.validate_racs_data import DataValidationError
+from dipolesbi.pipelines.catwise_diagnostics import (
+    save_density_diagnostics,
+    save_glass_diagnostics,
+)
 from dipolesbi.tools.multiround_inferer import MultiRoundInferer
 
 
@@ -45,6 +49,7 @@ def run_inference(
     *,
     command: list[str] | None = None,
     repository_root: str | Path | None = None,
+    n_workers: int | None = None,
 ) -> None:
     """Validate the observation and simulator mask, then run NLE.
 
@@ -61,6 +66,18 @@ def run_inference(
     )
 
     software_state = capture_software_state(repository_root or Path.cwd())
+    workers = run['execution']['threads'] if n_workers is None else n_workers
+    if (
+        isinstance(workers, bool)
+        or not isinstance(workers, int)
+        or workers < 1
+    ):
+        raise ValueError(
+            'NumPy simulation worker count must be a positive integer.'
+        )
+    software_state['numpy_simulation_workers'] = (
+        workers if run['execution']['backend'] == 'numpy' else None
+    )
     output = (
         Path(
             output_dir
@@ -97,8 +114,13 @@ def run_inference(
     prior = build_prior(resolved)
     scenario = build_scenario(resolved, prior, str(output))
     simulator = make_model_sim_wrapper(
-        model, resolved, expected_native_mask=native_mask
+        model, resolved, expected_native_mask=native_mask, n_workers=workers
     )
+    if backend == 'numpy':
+        print(
+            f'NumPy simulation workers: {workers}; one BLAS/OpenMP thread per worker.',
+            flush=True,
+        )
 
     output.mkdir(parents=True, exist_ok=True)
     (output / 'software-state.yaml').write_text(
@@ -136,6 +158,9 @@ def run_inference(
         _copy_if_different(
             native_observation, output / native_observation.name
         )
+    save_density_diagnostics(native_observation, output)
+    if config.position_model == 'glass':
+        save_glass_diagnostics(model._glass_model, output)
     inferer = MultiRoundInferer(
         'NLE',
         prior,
@@ -164,6 +189,11 @@ def main(argv: list[str] | None = None) -> int:
         help='Source checkout containing pyproject.toml, uv.lock and Git metadata.',
     )
     parser.add_argument('--no-ui', action='store_true')
+    parser.add_argument(
+        '--n-workers',
+        type=int,
+        help='NumPy simulation processes; defaults to execution.threads.',
+    )
     args = parser.parse_args(argv)
     try:
         run = load_catwise_run(args.experiment, args.site)
@@ -180,6 +210,7 @@ def main(argv: list[str] | None = None) -> int:
             args.out_dir,
             command=command,
             repository_root=args.repository_root,
+            n_workers=args.n_workers,
         )
     except (
         CatwiseConfigError,
@@ -187,6 +218,7 @@ def main(argv: list[str] | None = None) -> int:
         FileNotFoundError,
         KeyError,
         ValueError,
+        ImportError,
     ) as error:
         parser.error(str(error))
     return 0

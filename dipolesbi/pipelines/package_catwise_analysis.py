@@ -16,7 +16,10 @@ import zipfile
 import numpy as np
 import yaml
 
-from dipolesbi.pipelines.catwise_config import DEFAULT_EXPERIMENT, load_catwise_run
+from dipolesbi.pipelines.catwise_config import (
+    DEFAULT_EXPERIMENT,
+    load_catwise_run,
+)
 
 
 class CatwisePackagingError(ValueError):
@@ -33,11 +36,17 @@ def sha256(path: Path) -> str:
 
 def capture_software_state(root: str | Path | None = None) -> dict[str, Any]:
     """Record the source state and environment identities at inference startup."""
-    root = Path(root).expanduser().resolve() if root is not None else Path.cwd()
+    root = (
+        Path(root).expanduser().resolve() if root is not None else Path.cwd()
+    )
 
     def git(*args: str) -> str:
         result = subprocess.run(
-            ["git", *args], cwd=root, capture_output=True, text=True, check=False
+            ["git", *args],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if result.returncode:
             raise CatwisePackagingError(
@@ -77,6 +86,8 @@ def _payload_paths(
                 "experiment.resolved.yaml",
                 "validation-report.yaml",
                 "software-state.yaml",
+                "reference_observation_native.png",
+                "reference_observation_native_smoothed.png",
             )
         },
         **{
@@ -90,6 +101,9 @@ def _payload_paths(
         "software/pyproject.toml": root / "pyproject.toml",
         "software/uv.lock": root / "uv.lock",
     }
+    if run.get("model", {}).get("position_model") == "glass":
+        for name in ("glass_power_spectrum.png", "glass_power_spectra.npz"):
+            paths[f"results/{name}"] = result / name
     for index, source in enumerate(run["provenance"]["config_paths"]):
         path = Path(source)
         paths[f"configs/{index:02d}-{path.name}"] = path
@@ -159,18 +173,24 @@ def _payload_paths(
             )
     try:
         with (
-            np.load(result / "reference_observation.npz", allow_pickle=False) as used,
+            np.load(
+                result / "reference_observation.npz", allow_pickle=False
+            ) as used,
             np.load(
                 result / "prepared_observation.npz", allow_pickle=False
             ) as prepared,
         ):
             for field in ("x0", "mask"):
-                if not np.array_equal(used[field], prepared[field], equal_nan=True):
+                if not np.array_equal(
+                    used[field], prepared[field], equal_nan=True
+                ):
                     raise CatwisePackagingError(
                         f"Inference reference {field} differs from prepared input"
                     )
             if "metadata_json" not in prepared.files:
-                raise CatwisePackagingError("Prepared input is missing metadata_json")
+                raise CatwisePackagingError(
+                    "Prepared input is missing metadata_json"
+                )
     except (OSError, KeyError, ValueError) as error:
         if isinstance(error, CatwisePackagingError):
             raise
@@ -199,10 +219,14 @@ def package_catwise_analysis(
     ):
         raise CatwisePackagingError("Invalid experiment ID")
     root = (
-        Path(repository_root).expanduser().resolve() if repository_root else Path.cwd()
+        Path(repository_root).expanduser().resolve()
+        if repository_root
+        else Path.cwd()
     )
     paths = _payload_paths(run, Path(result_dir), Path(observation_dir), root)
-    source = yaml.safe_load((Path(result_dir) / "software-state.yaml").read_text())
+    source = yaml.safe_load(
+        (Path(result_dir) / "software-state.yaml").read_text()
+    )
     if (
         not isinstance(source, dict)
         or not isinstance(source.get("commit"), str)
@@ -221,7 +245,9 @@ def package_catwise_analysis(
             )
     packaging_source = capture_software_state(root)
     payload = {name: path.read_bytes() for name, path in paths.items()}
-    payload["software/git-state.yaml"] = yaml.safe_dump(source, sort_keys=True).encode()
+    payload["software/git-state.yaml"] = yaml.safe_dump(
+        source, sort_keys=True
+    ).encode()
     manifest = {
         "format_version": 1,
         "workflow": "catwise-s21-nle",
@@ -240,7 +266,9 @@ def package_catwise_analysis(
     payload["artifact-manifest.yaml"] = yaml.safe_dump(
         manifest, sort_keys=True
     ).encode()
-    output = Path(output_dir) if output_dir else root / "artifacts" / experiment_id
+    output = (
+        Path(output_dir) if output_dir else root / "artifacts" / experiment_id
+    )
     output.mkdir(parents=True, exist_ok=True)
     archive = output / f"{experiment_id}.zip"
     temporary = None
@@ -278,7 +306,8 @@ def verify_catwise_archive(
             if len(names) != len(set(names)):
                 raise CatwisePackagingError("Duplicate archive members")
             if any(
-                PurePosixPath(name).is_absolute() or ".." in PurePosixPath(name).parts
+                PurePosixPath(name).is_absolute()
+                or ".." in PurePosixPath(name).parts
                 for name in names
             ):
                 raise CatwisePackagingError("Unsafe archive member")
@@ -288,7 +317,9 @@ def verify_catwise_archive(
                 or manifest.get("format_version") != 1
                 or manifest.get("workflow") != "catwise-s21-nle"
             ):
-                raise CatwisePackagingError("Invalid CatWISE artifact manifest")
+                raise CatwisePackagingError(
+                    "Invalid CatWISE artifact manifest"
+                )
             if (
                 expected_experiment_id is not None
                 and manifest.get("experiment_id") != expected_experiment_id
@@ -296,10 +327,12 @@ def verify_catwise_archive(
                 raise CatwisePackagingError("Incorrect experiment ID")
             members = manifest["files"]
             declared = [entry["archive_path"] for entry in members]
-            if len(declared) != len(set(declared)) or set(names) != set(declared) | {
-                "artifact-manifest.yaml"
-            }:
-                raise CatwisePackagingError("Archive inventory differs from manifest")
+            if len(declared) != len(set(declared)) or set(names) != set(
+                declared
+            ) | {"artifact-manifest.yaml"}:
+                raise CatwisePackagingError(
+                    "Archive inventory differs from manifest"
+                )
             for entry in members:
                 data = bundle.read(entry["archive_path"])
                 if (
@@ -310,8 +343,16 @@ def verify_catwise_archive(
                         f"Checksum mismatch: {entry['archive_path']}"
                     )
             return manifest
-    except (OSError, KeyError, TypeError, zipfile.BadZipFile, yaml.YAMLError) as error:
-        raise CatwisePackagingError(f"Invalid analysis archive: {error}") from error
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        zipfile.BadZipFile,
+        yaml.YAMLError,
+    ) as error:
+        raise CatwisePackagingError(
+            f"Invalid analysis archive: {error}"
+        ) from error
 
 
 def main(argv: list[str] | None = None) -> int:

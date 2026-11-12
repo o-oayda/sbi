@@ -10,6 +10,7 @@ import numpy as np
 
 MODEL_CONFIG_SCHEMA_VERSION = 1
 NDARRAY_TYPE_TAG = "ndarray"
+CALLABLE_TYPE_TAG = "python_callable"
 OMITTED_FIELD_NAMES = frozenset({"mask_map"})
 
 
@@ -47,6 +48,22 @@ def _json_ready(value: Any) -> Any:
         }
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
+    if callable(value):
+        module_name = getattr(value, "__module__", None)
+        qualified_name = getattr(value, "__qualname__", "")
+        if module_name and qualified_name and "<" not in qualified_name:
+            imported = importlib.import_module(module_name)
+            for name in qualified_name.split("."):
+                imported = getattr(imported, name)
+            if imported is value:
+                return {
+                    "__type__": CALLABLE_TYPE_TAG,
+                    "module": module_name,
+                    "qualname": qualified_name,
+                }
+        raise TypeError(
+            "Model config callables must be importable named functions."
+        )
     item = getattr(value, "item", None)
     if callable(item):
         try:
@@ -60,6 +77,24 @@ def _json_ready(value: Any) -> Any:
 
 def _decode_json_value(value: Any) -> Any:
     if isinstance(value, dict):
+        if value.get("__type__") == CALLABLE_TYPE_TAG:
+            module_name, qualified_name = value.get("module"), value.get(
+                "qualname"
+            )
+            if not isinstance(module_name, str) or not isinstance(
+                qualified_name, str
+            ):
+                raise ValueError(
+                    "Callable model config field needs module and qualname."
+                )
+            imported = importlib.import_module(module_name)
+            for name in qualified_name.split("."):
+                imported = getattr(imported, name)
+            if not callable(imported):
+                raise ValueError(
+                    "Callable model config field does not resolve to a callable."
+                )
+            return imported
         if value.get("__type__") == NDARRAY_TYPE_TAG:
             dtype = value.get("dtype")
             shape = value.get("shape")

@@ -28,6 +28,23 @@ DEFAULT_EXPERIMENT = (
     / "workflow/configs/catwise/s21_nle_gaussian_poisson.yaml"
 )
 
+GLASS_DEFAULTS = {
+    "position_model": "isotropic",
+    "glass_dndz": "catsim.configs:default_glass_dndz",
+    "glass_bias": "catsim.configs:default_glass_bias",
+    "glass_shell_edges": [index * 0.1 for index in range(36)],
+    "glass_lmax": 128,
+    "glass_ncorr": 3,
+    "glass_cosmology": {
+        "H0": 67.4,
+        "ombh2": 0.0224,
+        "omch2": 0.120,
+        "tau": 0.054,
+        "As": 2e-9,
+        "ns": 0.96,
+    },
+}
+
 
 class CatwiseConfigError(ValueError):
     """An invalid or inconsistent CatWISE configuration."""
@@ -102,15 +119,44 @@ def _validate_science(run: dict[str, Any]) -> None:
         ("D", "observer_speed", "uniform"),
         ("phi", "dipole_longitude", "uniform"),
         ("theta", "dipole_latitude", "polar"),
-        ("lambda_clus", "lambda_clus", "uniform"),
     ]
+    clustering = run["model"]["simulate_clustering"]
+    if clustering == "poisson":
+        expected.append(("lambda_clus", "lambda_clus", "uniform"))
+    expected_fixed = {} if clustering == "poisson" else {"lambda_clus": 0.0}
+    if run["fixed_parameters"] != expected_fixed:
+        raise CatwiseConfigError(
+            "Disabling additional clustering requires fixed_parameters: {lambda_clus: 0.0}; "
+            "Poisson clustering requires an empty fixed_parameters mapping"
+        )
+    if run["model"]["position_model"] == "glass":
+        if run["execution"]["backend"] != "numpy":
+            raise CatwiseConfigError(
+                "GLASS positions require execution.backend: numpy"
+            )
+        if clustering is not None:
+            raise CatwiseConfigError(
+                "GLASS cannot be combined with additional Poisson clustering"
+            )
+        edges = run["model"]["glass_shell_edges"]
+        if any(high <= low for low, high in zip(edges, edges[1:])):
+            raise CatwiseConfigError(
+                "glass_shell_edges must be strictly increasing"
+            )
+        if run["model"]["glass_lmax"] > 3 * observation["native_nside"] - 1:
+            raise CatwiseConfigError(
+                "glass_lmax must not exceed 3 * native_nside - 1"
+            )
+        if run["model"]["glass_cosmology"]["H0"] <= 0:
+            raise CatwiseConfigError("glass_cosmology.H0 must be positive")
     actual = [
         (p["short_name"], p["simulator_kwarg"], p["dist_type"])
         for p in run["priors"]
     ]
     if actual != expected:
         raise CatwiseConfigError(
-            "priors.parameters must follow N, etaWX, D, phi, theta, lambda_clus "
+            "priors.parameters must follow N, etaWX, D, phi, theta "
+            "and lambda_clus only when Poisson clustering is enabled, "
             "with their S21 simulator arguments and distributions"
         )
     kwargs = {p["simulator_kwarg"] for p in run["priors"]}
@@ -248,11 +294,18 @@ def load_catwise_run(
         )
         for kind in ("observation", "model", "priors", "inference")
     }
+    model = deepcopy(GLASS_DEFAULTS)
+    supplied_model = layers["model"]
+    model.update(supplied_model)
+    model["glass_cosmology"] = {
+        **GLASS_DEFAULTS["glass_cosmology"],
+        **supplied_model.get("glass_cosmology", {}),
+    }
     run = {
         "schema_version": experiment["schema_version"],
         "experiment_id": experiment["experiment_id"],
         "observation": layers["observation"],
-        "model": layers["model"],
+        "model": model,
         "priors": layers["priors"]["parameters"],
         "reference_theta": layers["priors"]["reference_theta"],
         "fixed_parameters": layers["priors"]["fixed_parameters"],
@@ -267,6 +320,7 @@ def load_catwise_run(
             for key, value in {
                 "source_catalogue": None,
                 "hashgrid_cache": None,
+                "glass_cache": None,
                 **site["paths"],
             }.items()
         },

@@ -1,10 +1,13 @@
 """Components shared by CatWISE observation preparation and inference."""
 
 from collections.abc import Mapping
+from functools import partial
+import importlib
 from typing import Any
 
 import jax
 import numpy as np
+from joblib import parallel_config
 from catsim import CatwiseConfig
 from catsim.utils.healsphere import downgrade_ignore_nan
 
@@ -15,6 +18,7 @@ from dipolesbi.tools.configs import (
 )
 from dipolesbi.tools.np_rngkey import NPKey
 from dipolesbi.tools.priors_np import DipolePriorNP
+from dipolesbi.tools.utils import batch_simulate
 
 
 def build_prior(run: Mapping[str, Any]) -> DipolePriorNP:
@@ -31,8 +35,24 @@ def build_catwise_config(run: Mapping[str, Any]) -> CatwiseConfig:
     """Configure a native-resolution simulator; shared processing follows it."""
     model = dict(run['model'])
     clustering = model.pop('simulate_clustering')
-    if clustering != 'poisson':
-        raise ValueError('Only Poisson clustering is supported.')
+    if clustering not in ('poisson', None):
+        raise ValueError('Clustering must be poisson or null.')
+    for field in ('glass_dndz', 'glass_bias'):
+        if field in model:
+            module_name, qualified_name = model[field].split(':', 1)
+            try:
+                value = importlib.import_module(module_name)
+                for name in qualified_name.split('.'):
+                    value = getattr(value, name)
+            except (ImportError, AttributeError) as error:
+                raise ValueError(
+                    f'Cannot resolve {field}: {model[field]}'
+                ) from error
+            if not callable(value):
+                raise ValueError(f'{field} must resolve to a callable.')
+            model[field] = value
+    if 'glass_shell_edges' in model:
+        model['glass_shell_edges'] = tuple(model['glass_shell_edges'])
     paths, obs, execution = run['paths'], run['observation'], run['execution']
     return CatwiseConfig(
         **model,
@@ -42,6 +62,7 @@ def build_catwise_config(run: Mapping[str, Any]) -> CatwiseConfig:
         s21_catalogue_path=paths['s21_catalogue'],
         source_catalogue_path=paths.get('source_catalogue'),
         hashgrid_cache_dir=paths.get('hashgrid_cache'),
+        glass_cache_dir=paths.get('glass_cache'),
     )
 
 
@@ -121,11 +142,50 @@ def process_native_sample(native_map, native_mask, observation):
     )
 
 
+def _simulate_numpy_sample(
+    model,
+    observation,
+    expected_native_mask,
+    none_parameters,
+    *,
+    rng_key,
+    **parameters,
+):
+    """Generate and reduce one prepared model draw inside a process worker."""
+    parameters = {
+        name: (
+            None
+            if name in none_parameters
+            else np.asarray(value).reshape(())[()]
+        )
+        for name, value in parameters.items()
+    }
+    native_map, native_mask = model.generate_dipole(
+        **parameters, rng_key=rng_key
+    )
+    if expected_native_mask is not None and not np.array_equal(
+        native_mask, expected_native_mask
+    ):
+        raise ValueError(
+            'Simulator native mask does not match the observed mask.'
+        )
+    return process_native_sample(native_map, native_mask, observation)
+
+
 def make_model_sim_wrapper(
-    model, run: Mapping[str, Any], expected_native_mask=None
+    model, run: Mapping[str, Any], expected_native_mask=None, *, n_workers=None
 ):
     """Adapt either catsim backend to the inferer's batched simulator interface."""
     obs, execution = run['observation'], run['execution']
+    workers = execution.get('threads', 1) if n_workers is None else n_workers
+    if (
+        isinstance(workers, bool)
+        or not isinstance(workers, int)
+        or workers < 1
+    ):
+        raise ValueError(
+            'NumPy simulation worker count must be a positive integer.'
+        )
     fixed = dict(run['fixed_parameters'])
     cuts = {name: obs[name] for name in ('w1_min', 'w1_max', 'w12_min')}
     if fixed.keys() & cuts.keys():
@@ -137,6 +197,13 @@ def make_model_sim_wrapper(
         None
         if expected_native_mask is None
         else np.asarray(expected_native_mask, dtype=bool)
+    )
+    numpy_simulator = partial(
+        _simulate_numpy_sample,
+        model,
+        obs,
+        expected_mask,
+        frozenset(name for name, value in fixed.items() if value is None),
     )
 
     def process(x, mask):
@@ -197,22 +264,18 @@ def make_model_sim_wrapper(
         elif execution['backend'] == 'numpy':
             if not isinstance(npkey, NPKey):
                 npkey = NPKey.from_jax(npkey)
-            results = [
-                process(
-                    *model.generate_dipole(
-                        **{
-                            k: (
-                                None
-                                if k in fixed and fixed[k] is None
-                                else v[i]
-                            )
-                            for k, v in theta.items()
-                        },
-                        rng_key=npkey.fold_in(i),
-                    )
+            # Snakemake sets BLAS/OpenMP limits to the rule's core allocation.
+            # Override those limits inside each process to avoid N x N threads.
+            with parallel_config(backend='loky', inner_max_num_threads=1):
+                x, mask = batch_simulate(
+                    theta,
+                    numpy_simulator,
+                    n_workers=min(workers, n),
+                    rng_key=npkey,
+                    ui=ui,
                 )
-                for i in range(n)
-            ]
+            # batch_simulate returns vectors for one draw and matrices otherwise.
+            return np.atleast_2d(x), np.atleast_2d(mask)
         else:
             raise ValueError(
                 f"Unknown simulator backend: {execution['backend']}"

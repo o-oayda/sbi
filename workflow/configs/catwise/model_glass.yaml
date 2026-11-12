@@ -1,0 +1,51 @@
+extends: model
+simulate_clustering: null
+position_model: glass
+glass_dndz: catsim.configs:default_glass_dndz
+glass_bias: catsim.configs:default_glass_bias
+glass_shell_edges:
+- 0.0
+- 0.1
+- 0.2
+- 0.3
+- 0.4
+- 0.5
+- 0.6
+- 0.7
+- 0.8
+- 0.9
+- 1.0
+- 1.1
+- 1.2
+- 1.3
+- 1.4
+- 1.5
+- 1.6
+- 1.7
+- 1.8
+- 1.9
+- 2.0
+- 2.1
+- 2.2
+- 2.3
+- 2.4
+- 2.5
+- 2.6
+- 2.7
+- 2.8
+- 2.9
+- 3.0
+- 3.1
+- 3.2
+- 3.3
+- 3.4
+- 3.5
+glass_lmax: 128
+glass_ncorr: 3
+glass_cosmology:
+  H0: 67.4
+  ombh2: 0.0224
+  omch2: 0.12
+  tau: 0.054
+  As: 2.0e-09
+  ns: 0.96

@@ -131,6 +131,9 @@ rule infer_catwise:
         validation=f"{RESULT_DIR}/validation-report.yaml",
         command=f"{RESULT_DIR}/run_command.txt",
         software_state=f"{RESULT_DIR}/software-state.yaml",
+        raw_density_plot=f"{RESULT_DIR}/reference_observation_native.png",
+        smoothed_density_plot=f"{RESULT_DIR}/reference_observation_native_smoothed.png",
+        glass_diagnostics=GLASS_DIAGNOSTIC_OUTPUTS,
     params:
         output_dir=RESULT_DIR,
         scientific_fingerprint=INFERENCE_FINGERPRINT,
@@ -147,6 +150,7 @@ rule infer_catwise:
             {PYTHON:q} -m dipolesbi.pipelines.based_catwise \
             --experiment {EXPERIMENT_PATH:q} --site {SITE_PATH:q} \
             --reference-observation {input.observation:q} --out-dir {params.output_dir:q} \
+            --n-workers {threads} \
             --repository-root {REPOSITORY_ROOT:q} \
             > {log:q} 2>&1
         """

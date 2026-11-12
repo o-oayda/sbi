@@ -75,6 +75,8 @@ def analysis(tmp_path, monkeypatch):
         "model_config.json",
         "configs.txt",
         "run_command.txt",
+        "reference_observation_native.png",
+        "reference_observation_native_smoothed.png",
     ):
         (result / name).write_bytes(b"tiny scientific payload\n")
     (result / "experiment.resolved.yaml").write_text(yaml.safe_dump(run))
@@ -302,3 +304,21 @@ def test_archive_includes_inherited_config_sources(analysis):
         CatwisePackagingError, match='changed since resolution'
     ):
         package_catwise_analysis(run, **kwargs)
+
+
+def test_glass_archive_includes_spectrum_plot_and_input_snapshot(analysis):
+    run, kwargs = analysis
+    run['model'] = {'position_model': 'glass'}
+    (kwargs['result_dir'] / 'experiment.resolved.yaml').write_text(
+        yaml.safe_dump(run)
+    )
+    for name in ('glass_power_spectrum.png', 'glass_power_spectra.npz'):
+        (kwargs['result_dir'] / name).write_bytes(b'spectrum diagnostic')
+    archive = package_catwise_analysis(run, **kwargs)
+    with zipfile.ZipFile(archive) as bundle:
+        for name in (
+            'glass_power_spectrum.png',
+            'glass_power_spectra.npz',
+            'reference_observation_native_smoothed.png',
+        ):
+            assert f'results/{name}' in bundle.namelist()

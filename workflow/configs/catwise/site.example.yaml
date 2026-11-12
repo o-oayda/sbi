@@ -4,3 +4,4 @@ paths:
   source_catalogue: null
   hashgrid_cache: null
   output_root: /path/to/catwise-results
+  glass_cache: null

@@ -47,4 +47,52 @@ properties:
   store_final_samples:
     type: boolean
   simulate_clustering:
-    const: poisson
+    enum:
+    - poisson
+    - null
+  position_model:
+    enum:
+    - isotropic
+    - glass
+  glass_dndz:
+    type: string
+    pattern: ^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*:[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$
+  glass_bias:
+    type: string
+    pattern: ^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*:[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$
+  glass_shell_edges:
+    type: array
+    minItems: 2
+    items:
+      type: number
+      minimum: 0
+  glass_lmax:
+    type: integer
+    minimum: 1
+  glass_ncorr:
+    type:
+    - integer
+    - 'null'
+    minimum: 0
+  glass_cosmology:
+    type: object
+    additionalProperties: false
+    properties:
+      H0:
+        type: number
+        minimum: 0
+      ombh2:
+        type: number
+        minimum: 0
+      omch2:
+        type: number
+        minimum: 0
+      tau:
+        type: number
+        minimum: 0
+      As:
+        type: number
+        minimum: 0
+      ns:
+        type: number
+        minimum: 0

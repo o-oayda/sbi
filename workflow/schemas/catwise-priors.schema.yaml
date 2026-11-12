@@ -8,7 +8,7 @@ additionalProperties: false
 properties:
   parameters:
     type: array
-    minItems: 6
+    minItems: 5
     maxItems: 6
     items:
       type: object
@@ -35,10 +35,12 @@ properties:
           - polar
   reference_theta:
     type: object
-    minProperties: 6
+    minProperties: 5
     maxProperties: 6
     additionalProperties: *id001
   fixed_parameters:
     type: object
-    additionalProperties: *id001
-    maxProperties: 0
+    additionalProperties: false
+    properties:
+      lambda_clus:
+        const: 0.0

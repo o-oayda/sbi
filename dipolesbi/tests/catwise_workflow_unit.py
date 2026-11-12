@@ -163,6 +163,7 @@ def test_complete_dag_declares_all_stages_and_products(workflow_case):
     assert "--repository-root" in output
     assert "JAX_PLATFORMS=cpu" in output
     assert "-m dipolesbi.pipelines.based_catwise" in output
+    assert "reference_observation_native_smoothed.png" in output
     run = load_catwise_run(workflow_case["experiment"], workflow_case["site"])
     assert run["inference"]["multiround"]["plot_save_dir"] == str(
         workflow_case["output_root"] / "results/s21_nle_gaussian_poisson"
@@ -257,6 +258,45 @@ def test_checksum_failure_blocks_mask_and_observation_creation(workflow_case):
     assert not (case["observation_dir"] / "reference_observation.npz").exists()
 
 
+def test_glass_experiment_reuses_preparation_and_tracks_glass_settings(
+    workflow_case,
+):
+    case = workflow_case
+    code, output = snakemake(case, 'prepare_catwise_observation')
+    assert code == 0, output
+    case['experiment'] = (
+        case['experiment'].parent / 's21_nle_gaussian_glass.yaml'
+    )
+    edit(
+        case['experiment'],
+        lambda c: c['execution'].update(jax_platforms='cpu'),
+    )
+    code, output = snakemake(case, dry_run=True)
+    assert code == 0, output
+    assert 'rule infer_catwise:' in output
+    assert 's21_nle_gaussian_glass.zip' in output
+    assert 'glass_power_spectrum.png' in output
+    assert 'glass_power_spectra.npz' in output
+    assert 'glass.py' in output
+    for rule in (
+        'validate_catwise_data',
+        'generate_catwise_mask',
+        'prepare_catwise_observation',
+    ):
+        assert f'rule {rule}:' not in output
+    resolved = load_catwise_run(case['experiment'], case['site'])
+    assert resolved['execution']['backend'] == 'numpy'
+    assert len(resolved['priors']) == 5
+    edit(
+        case['experiment'].parent / 'model_glass.yaml',
+        lambda c: c.update(glass_lmax=64),
+    )
+    code, output = snakemake(case, dry_run=True)
+    assert code == 0, output
+    assert 'rule infer_catwise:' in output
+    assert 'rule prepare_catwise_observation:' not in output
+
+
 def test_inherited_observation_parent_is_a_workflow_input(workflow_case):
     case = workflow_case
     directory = case['experiment'].parent
@@ -274,3 +314,22 @@ def test_inherited_observation_parent_is_a_workflow_input(workflow_case):
     assert code == 0, output
     assert str(parent) in output
     assert 'rule prepare_catwise_observation:' in output
+
+
+def test_numpy_worker_count_uses_snakemake_allocation(workflow_case):
+    case = workflow_case
+    edit(
+        case['experiment'],
+        lambda c: c['execution'].update(backend='numpy', threads=32),
+    )
+    code, output = snakemake(case, dry_run=True)
+    assert code == 0, output
+    # The test launcher offers one core, so Snakemake scales a 32-core request down.
+    assert (
+        load_catwise_run(case['experiment'], case['site'])['execution'][
+            'threads'
+        ]
+        == 32
+    )
+    assert '--n-workers 1' in output
+    assert '--n-workers 32' not in output

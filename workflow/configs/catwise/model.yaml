@@ -12,3 +12,4 @@ cluster_r0_arcsec: 100.0
 cluster_r_cut_arcsec: 20.0
 store_final_samples: false
 simulate_clustering: poisson
+position_model: isotropic
