@@ -48,6 +48,9 @@ dipolesbi-infer-catwise = "dipolesbi.pipelines.based_catwise:main"
 dipolesbi-package-catwise-analysis = "dipolesbi.pipelines.package_catwise_analysis:main"
 
 [project.optional-dependencies]
+glass = [
+    "catsim[glass]",
+]
 cuda = [
     "jax-cuda12-pjrt (==0.6.2)",
     "jax-cuda12-plugin[with-cuda] (==0.6.2)",
@@ -78,6 +81,9 @@ include = [
     { path = "workflow/configs/catwise/priors.yaml", format = ["sdist", "wheel"] },
     { path = "workflow/configs/catwise/inference.yaml", format = ["sdist", "wheel"] },
     { path = "workflow/configs/catwise/site.example.yaml", format = ["sdist", "wheel"] },
+    { path = "workflow/configs/catwise/s21_nle_gaussian_glass.yaml", format = ["sdist", "wheel"] },
+    { path = "workflow/configs/catwise/model_glass.yaml", format = ["sdist", "wheel"] },
+    { path = "workflow/configs/catwise/priors_glass.yaml", format = ["sdist", "wheel"] },
     { path = "workflow/configs/catwise/s21_nle_base.yaml", format = ["sdist", "wheel"] },
     { path = "workflow/configs/catwise/priors_base.yaml", format = ["sdist", "wheel"] },
 ]
