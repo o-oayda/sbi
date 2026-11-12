@@ -1,7 +1,7 @@
 schema_version: 1
 observation: observation.yaml
 model: model.yaml
-priors: priors.yaml
+priors: priors_poisson.yaml
 inference: inference.yaml
 execution:
   backend: jax

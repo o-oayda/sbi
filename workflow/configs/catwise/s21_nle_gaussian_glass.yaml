@@ -1,8 +1,7 @@
 extends: s21_nle_base
 experiment_id: s21_nle_gaussian_glass
-observation: observation_glass.yaml
 model: model_glass.yaml
-priors: priors_glass.yaml
+priors: priors_no_extra_clustering.yaml
 execution:
   backend: numpy
   jax_platforms: cpu

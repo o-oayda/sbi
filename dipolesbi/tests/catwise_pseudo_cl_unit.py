@@ -9,6 +9,7 @@ import yaml
 
 from dipolesbi.pipelines.catwise_components import process_native_sample
 from dipolesbi.pipelines.catwise_config import (
+    CatwiseConfigError,
     DEFAULT_EXPERIMENT,
     load_catwise_run,
 )
@@ -37,15 +38,14 @@ def test_summary_appends_spectrum_and_keeps_mask():
     observation = {
         'native_nside': 8,
         'downscale_nside': 4,
-        'native_count_summary': 'log_dispersion',
-        'native_pseudo_cl': True,
+        'native_summaries': ['log_dispersion', 'pseudo_cl'],
         'pseudo_cl_range': [2, 12],
     }
     counts = np.random.default_rng(4).poisson(10, hp.nside2npix(8))
     mask = np.ones(counts.size, dtype=bool)
     actual, retain = process_native_sample(counts, mask, observation)
     baseline, baseline_mask = process_native_sample(
-        counts, mask, {**observation, 'native_pseudo_cl': False}
+        counts, mask, {**observation, 'native_summaries': ['log_dispersion']}
     )
     np.testing.assert_array_equal(actual[:193], baseline)
     np.testing.assert_array_equal(retain[:193], baseline_mask)
@@ -58,7 +58,7 @@ def test_summary_appends_spectrum_and_keeps_mask():
 
 def test_glass_summary_range_follows_model():
     run = load_catwise_run(
-        DEFAULT_EXPERIMENT.parent / 's21_nle_gaussian_glass.yaml',
+        DEFAULT_EXPERIMENT.parent / 's21_nle_gaussian_glass_with_cls.yaml',
         DEFAULT_EXPERIMENT.parent / 'site.example.yaml',
     )
     assert run['observation']['pseudo_cl_range'] == [
@@ -90,7 +90,8 @@ def test_custom_multipoles_change_summary_dimension(tmp_path):
     model.update(glass_lmin=5, glass_lmax=20)
     model_path.write_text(yaml.safe_dump(model))
     run = load_catwise_run(
-        configs / 's21_nle_gaussian_glass.yaml', configs / 'site.example.yaml'
+        configs / 's21_nle_gaussian_glass_with_cls.yaml',
+        configs / 'site.example.yaml',
     )
     assert run['observation']['pseudo_cl_range'] == [5, 20]
     assert run['inference']['multiround']['summary_ndim'] == 17
@@ -108,3 +109,67 @@ def test_poisson_summary_lists_only_enabled_components():
     ]
     assert run['summary']['total_ndim'] == 193
     assert run['summary']['native_summary_ndim'] == 1
+
+
+@pytest.mark.parametrize(
+    'name, summaries, ndim, prior_file',
+    [
+        (
+            's21_nle_gaussian_poisson',
+            ['log_dispersion'],
+            193,
+            'priors_poisson.yaml',
+        ),
+        (
+            's21_nle_gaussian_glass',
+            ['log_dispersion'],
+            193,
+            'priors_no_extra_clustering.yaml',
+        ),
+        (
+            's21_nle_gaussian_glass_with_cls',
+            ['log_dispersion', 'pseudo_cl'],
+            320,
+            'priors_no_extra_clustering.yaml',
+        ),
+    ],
+)
+def test_named_experiments_expose_complete_native_selection(
+    name, summaries, ndim, prior_file
+):
+    run = load_catwise_run(
+        DEFAULT_EXPERIMENT.parent / f'{name}.yaml',
+        DEFAULT_EXPERIMENT.parent / 'site.example.yaml',
+    )
+    assert run['experiment_id'] == name
+    assert run['observation']['native_summaries'] == summaries
+    assert run['summary']['total_ndim'] == ndim
+    assert run['provenance']['config_layers']['priors'][-1].endswith(
+        prior_file
+    )
+    assert 'native_count_summary' not in run['observation']
+    assert 'native_pseudo_cl' not in run['observation']
+    assert 'native_count_summary' not in run['inference']['multiround']
+
+
+@pytest.mark.parametrize(
+    'summaries',
+    [
+        [],
+        ['pseudo_cl'],
+        ['pseudo_cl', 'log_dispersion'],
+        ['log_dispersion', 'log_dispersion'],
+        ['unknown'],
+    ],
+)
+def test_invalid_native_summary_selections_are_rejected(tmp_path, summaries):
+    configs = tmp_path / 'configs'
+    shutil.copytree(DEFAULT_EXPERIMENT.parent, configs)
+    observation_path = configs / 'observation.yaml'
+    observation = yaml.safe_load(observation_path.read_text())
+    observation['native_summaries'] = summaries
+    observation_path.write_text(yaml.safe_dump(observation))
+    with pytest.raises(CatwiseConfigError, match='native_summaries'):
+        load_catwise_run(
+            configs / DEFAULT_EXPERIMENT.name, configs / 'site.example.yaml'
+        )

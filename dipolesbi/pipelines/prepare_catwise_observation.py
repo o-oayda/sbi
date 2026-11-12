@@ -99,7 +99,7 @@ def observation_metadata(
         "base_mask_version",
         "native_nside",
         "downscale_nside",
-        "native_count_summary",
+        "native_summaries",
         "w1_min",
         "w1_max",
         "w12_min",
@@ -107,7 +107,7 @@ def observation_metadata(
     )
     coarse_npix = hp.nside2npix(obs["downscale_nside"])
     extra = {}
-    if obs.get("native_pseudo_cl", False):
+    if "pseudo_cl" in obs["native_summaries"]:
         lo, hi = obs["pseudo_cl_range"]
         extra = {
             "pseudo_cl": {
@@ -261,7 +261,7 @@ def load_prepared_observation(
             "Prepared native mask does not match the run."
         )
     nsummary = 1
-    if run["observation"].get("native_pseudo_cl", False):
+    if "pseudo_cl" in run["observation"]["native_summaries"]:
         lo, hi = run["observation"]["pseudo_cl_range"]
         nsummary += hi - lo + 1
     nfeatures = hp.nside2npix(run["observation"]["downscale_nside"]) + nsummary

@@ -1,0 +1,3 @@
+extends: s21_nle_gaussian_glass
+experiment_id: s21_nle_gaussian_glass_with_cls
+observation: observation-with-cls.yaml

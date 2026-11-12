@@ -74,6 +74,7 @@ def build_scenario(
     if inference['mode'] != 'NLE' or inference['scenario'] != 'anynside_nle':
         raise ValueError('Only the anynside NLE scenario is supported.')
     mr = dict(inference['multiround'])
+    mr['native_count_summary'] = 'log_dispersion'
     for key in (
         'simulations_per_round',
         'effective_simulations',
@@ -115,8 +116,11 @@ def process_native_sample(native_map, native_mask, observation):
         raise ValueError(
             f'Native map and mask must both have shape ({expected},).'
         )
-    if observation['native_count_summary'] != 'log_dispersion':
-        raise ValueError('Only log_dispersion native summary is supported.')
+    if observation['native_summaries'] not in (
+        ['log_dispersion'],
+        ['log_dispersion', 'pseudo_cl'],
+    ):
+        raise ValueError('Unsupported native_summaries selection or order.')
     valid = native_mask & np.isfinite(native_map)
     counts = np.rint(native_map[valid]).astype(np.float64)
     if counts.size < 2 or np.any(counts < 0):
@@ -136,7 +140,7 @@ def process_native_sample(native_map, native_mask, observation):
     mask = np.asarray(mask, dtype=bool)
     coarse[~mask] = np.nan
     summaries = [np.array([np.log(dispersion)], dtype=np.float32)]
-    if observation.get('native_pseudo_cl', False):
+    if 'pseudo_cl' in observation['native_summaries']:
         from dipolesbi.pipelines.catwise_pseudo_cl import native_pseudo_cl
 
         summaries.append(

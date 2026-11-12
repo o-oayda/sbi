@@ -261,7 +261,7 @@ def describe_summary(observation: dict[str, Any]) -> dict[str, Any]:
         },
     ]
     total_ndim = map_ndim + 1
-    if observation.get("native_pseudo_cl", False):
+    if "pseudo_cl" in observation["native_summaries"]:
         lo, hi = observation["pseudo_cl_range"]
         components.append(
             {
@@ -375,9 +375,11 @@ def load_catwise_run(
             "config_layers": config_layers,
         },
     }
-    if run["observation"].get("native_pseudo_cl", False):
+    if "pseudo_cl" in run["observation"]["native_summaries"]:
         if model["position_model"] != "glass":
-            raise CatwiseConfigError("native_pseudo_cl requires a GLASS model")
+            raise CatwiseConfigError(
+                "The pseudo_cl native summary requires a GLASS model"
+            )
         run["observation"]["pseudo_cl_range"] = [
             model["glass_lmin"],
             model["glass_lmax"],
@@ -404,7 +406,6 @@ def load_catwise_run(
         ),
         map_ndim=map_ndim,
         summary_ndim=total_ndim - map_ndim,
-        native_count_summary=run["observation"]["native_count_summary"],
         simulations_per_round=per_round,
         effective_simulations=execution["effective_simulations"],
         simulation_path=None,

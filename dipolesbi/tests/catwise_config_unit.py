@@ -56,7 +56,7 @@ def test_representative_contract_resolves_without_data_files(configs):
     assert run["observation"]["catalogue_version"] == "S21"
     assert run["observation"]["native_nside"] == 64
     assert run["observation"]["downscale_nside"] == 4
-    assert run["observation"]["native_count_summary"] == "log_dispersion"
+    assert run["observation"]["native_summaries"] == ["log_dispersion"]
     assert run["model"]["max_cluster_children_per_parent"] == 6
     assert run["model"]["simulate_clustering"] == "poisson"
     assert run["execution"] == {
@@ -124,9 +124,10 @@ def test_all_inference_dataclass_inputs_are_materialized(configs):
             set(inference[section])
             == {f.name for f in fields(cls) if f.init} - supplied_elsewhere
         )
-    expected = {f.name for f in fields(MultiRoundInfererConfig)} | {
-        "effective_simulations"
-    }
+    # The scalar flag belongs to the legacy runtime adapter, not YAML science.
+    expected = {f.name for f in fields(MultiRoundInfererConfig)} - {
+        "native_count_summary"
+    } | {"effective_simulations"}
     assert set(inference["multiround"]) == expected
     assert inference["flow"]["architecture"] == 4 * ["MAF"] + [
         "surjective_MAF"
@@ -171,7 +172,7 @@ def test_configurable_ecliptic_mask_requires_matching_model_flag(configs):
         ("model.yaml", "use_common_extra_error", False),
         ("model.yaml", "simulate_clustering", "other"),
         ("inference.yaml", "mode", "NPE"),
-        ("priors.yaml", "fixed_parameters", {"observer_speed": 2}),
+        ("priors_poisson.yaml", "fixed_parameters", {"observer_speed": 2}),
     ],
 )
 def test_rejects_unsupported_or_unknown_science(
@@ -205,13 +206,13 @@ def test_rejects_invalid_execution(configs, update, match):
 def test_semantic_prior_and_observation_errors(configs):
     experiment, site = configs
     edit(
-        experiment.parent / "priors.yaml",
+        experiment.parent / "priors_poisson.yaml",
         lambda c: c["parameters"][1].update(low=9),
     )
     with pytest.raises(CatwiseConfigError, match="low < high"):
         load_catwise_run(experiment, site)
     edit(
-        experiment.parent / "priors.yaml",
+        experiment.parent / "priors_poisson.yaml",
         lambda c: c["parameters"][1].update(low=0),
     )
     edit(experiment.parent / "observation.yaml", lambda c: c.update(w1_min=17))
@@ -245,7 +246,7 @@ def test_missing_files_and_yaml_fail_with_configuration_error(configs):
 )
 def test_prior_values_and_order_are_validated(configs, update, match):
     experiment, site = configs
-    edit(experiment.parent / "priors.yaml", update)
+    edit(experiment.parent / "priors_poisson.yaml", update)
     with pytest.raises(CatwiseConfigError, match=match):
         load_catwise_run(experiment, site)
 
@@ -312,7 +313,7 @@ def test_shipped_experiment_tracks_and_hashes_all_parents(configs):
     ]
     assert [Path(p).name for p in layers['priors']] == [
         'priors_base.yaml',
-        'priors.yaml',
+        'priors_poisson.yaml',
     ]
     sources = run['provenance']['config_paths']
     assert len(sources) == len(set(sources))
@@ -340,7 +341,8 @@ def test_scientific_layers_deep_merge_before_validation(
 ):
     experiment, site = configs
     child = experiment.parent / f'{kind}_child.yaml'
-    child.write_text(yaml.safe_dump({'extends': kind, **override}))
+    parent = 'priors_poisson' if kind == 'priors' else kind
+    child.write_text(yaml.safe_dump({'extends': parent, **override}))
     edit(experiment, lambda c: c.update({kind: child.name}))
     run = load_catwise_run(experiment, site)
     if kind == 'observation':
@@ -431,7 +433,7 @@ def test_named_prior_mismatch_rejected(configs):
     child.write_text(
         yaml.safe_dump(
             {
-                'extends': 'priors',
+                'extends': 'priors_poisson',
                 'parameters': {'etaWX': {'short_name': 'wrong'}},
             }
         )

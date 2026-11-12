@@ -40,7 +40,7 @@ def run(tmp_path):
             'mask_sha256': sha256(mask_path),
             'native_nside': 64,
             'downscale_nside': 4,
-            'native_count_summary': 'log_dispersion',
+            'native_summaries': ['log_dispersion'],
             'w1_min': 9.0,
             'w1_max': 16.4,
             'w12_min': 0.8,
@@ -52,7 +52,9 @@ def run(tmp_path):
 def test_mask_order_and_ecliptic_toggle(run):
     retain = build_native_retain_mask(run)
     ring = np.load(run['paths']['s21_mask'])
-    np.testing.assert_array_equal(retain, hp.reorder(ring, r2n=True).astype(bool))
+    np.testing.assert_array_equal(
+        retain, hp.reorder(ring, r2n=True).astype(bool)
+    )
     run['observation']['mask_north_ecliptic'] = True
     expected = retain.copy()
     expected[Mask(nside=64).north_ecliptic_mask()] = False
@@ -136,4 +138,6 @@ def test_preexisting_mask_is_verified_and_not_rewritten(run, tmp_path):
     with pytest.raises(DataValidationError, match='Supplied native mask'):
         prepare_catwise_observation(run, output, mask_path=path)
     with pytest.raises(DataValidationError, match='output_dir/native_mask'):
-        prepare_catwise_observation(run, output, mask_path=tmp_path / 'other.npy')
+        prepare_catwise_observation(
+            run, output, mask_path=tmp_path / 'other.npy'
+        )

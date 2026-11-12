@@ -29,7 +29,7 @@ def analysis(tmp_path, monkeypatch):
         "experiment.yaml",
         "observation.yaml",
         "model.yaml",
-        "priors.yaml",
+        "priors_poisson.yaml",
         "inference.yaml",
         "site.yaml",
     ):
@@ -40,7 +40,7 @@ def analysis(tmp_path, monkeypatch):
             "experiment.yaml",
             "observation.yaml",
             "model.yaml",
-            "priors.yaml",
+            "priors_poisson.yaml",
             "inference.yaml",
             "site.yaml",
         )

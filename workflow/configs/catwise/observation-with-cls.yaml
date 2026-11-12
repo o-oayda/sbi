@@ -1,3 +1,3 @@
 extends: observation
 observation_id: s21_ds4_log_dispersion_pseudo_cl
-native_pseudo_cl: true
+native_summaries: [log_dispersion, pseudo_cl]

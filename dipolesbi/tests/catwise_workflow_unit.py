@@ -222,7 +222,7 @@ def test_real_preparation_is_noop_then_scopes_seed_prior_and_resource_changes(
         lambda c: c["execution"].update(seed=23, threads=2, mem_mb=128000),
     )
     edit(
-        case["experiment"].parent / "priors.yaml",
+        case["experiment"].parent / "priors_poisson.yaml",
         lambda c: c["parameters"][2].update(high=7),
     )
     code, output = snakemake(case, dry_run=True)
@@ -265,7 +265,7 @@ def test_glass_experiment_rebuilds_summary_and_tracks_glass_settings(
     code, output = snakemake(case, 'prepare_catwise_observation')
     assert code == 0, output
     case['experiment'] = (
-        case['experiment'].parent / 's21_nle_gaussian_glass.yaml'
+        case['experiment'].parent / 's21_nle_gaussian_glass_with_cls.yaml'
     )
     edit(
         case['experiment'],
@@ -274,7 +274,7 @@ def test_glass_experiment_rebuilds_summary_and_tracks_glass_settings(
     code, output = snakemake(case, dry_run=True)
     assert code == 0, output
     assert 'rule infer_catwise:' in output
-    assert 's21_nle_gaussian_glass.zip' in output
+    assert 's21_nle_gaussian_glass_with_cls.zip' in output
     assert 'glass_power_spectrum.png' in output
     assert 'glass_power_spectra.npz' in output
     assert 'glass.py' in output

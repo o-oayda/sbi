@@ -31,7 +31,7 @@ def run(backend='jax'):
         'observation': {
             'native_nside': 2,
             'downscale_nside': 1,
-            'native_count_summary': 'log_dispersion',
+            'native_summaries': ['log_dispersion'],
             'base_mask_version': 'S21',
             'w1_min': 9.0,
             'w1_max': 16.4,
@@ -159,6 +159,7 @@ def test_scenario_uses_resolved_contract(tmp_path):
     cfg['execution'].update(seed=7, requested_simulations=10, n_rounds=3)
     cfg['reference_theta'] = {'observer_speed': 2.0}
     scenario = build_scenario(cfg, build_prior(cfg), str(tmp_path))
+    assert scenario.multiround.native_count_summary == 'log_dispersion'
     assert scenario.multiround.simulations_per_round == 3
     assert scenario.multiround.summary_ndim == 1
     assert scenario.multiround.reference_theta == cfg['reference_theta']

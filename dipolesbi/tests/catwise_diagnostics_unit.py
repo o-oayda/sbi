@@ -116,7 +116,7 @@ def test_density_smoothing_uses_existing_utility_and_preserves_mask(tmp_path):
 
 def test_cache_reader_matches_raw_and_discrete_without_camb(tmp_path):
     run = load_catwise_run(
-        DEFAULT_EXPERIMENT.parent / 's21_nle_gaussian_glass.yaml',
+        DEFAULT_EXPERIMENT.parent / 's21_nle_gaussian_glass_with_cls.yaml',
         DEFAULT_EXPERIMENT.parent / 'site.example.yaml',
     )
     run['model'].update(
@@ -162,7 +162,7 @@ def test_cache_reader_matches_raw_and_discrete_without_camb(tmp_path):
 
 def test_cache_reader_does_not_rebuild_missing_spectra(tmp_path):
     run = load_catwise_run(
-        DEFAULT_EXPERIMENT.parent / 's21_nle_gaussian_glass.yaml',
+        DEFAULT_EXPERIMENT.parent / 's21_nle_gaussian_glass_with_cls.yaml',
         DEFAULT_EXPERIMENT.parent / 'site.example.yaml',
     )
     with pytest.raises(ValueError, match='No spectra were recomputed'):

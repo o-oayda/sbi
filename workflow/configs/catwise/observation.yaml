@@ -5,7 +5,7 @@ catalogue_sha256: 1fc8bcfc19da3602037dc7bdaa1a044a1d0c13cc76816b21c9e97e68f01460
 mask_sha256: 2cd7747f0ca93719a5147362b982809ae9f8865a48b67f1bfec772d94460dfe1
 native_nside: 64
 downscale_nside: 4
-native_count_summary: log_dispersion
+native_summaries: [log_dispersion]
 w1_min: 9.0
 w1_max: 16.4
 w12_min: 0.8

@@ -31,7 +31,7 @@ from dipolesbi.tools.model_config_io import (
 def glass_config(tmp_path):
     directory = tmp_path / 'configs'
     shutil.copytree(DEFAULT_EXPERIMENT.parent, directory)
-    experiment = directory / 's21_nle_gaussian_glass.yaml'
+    experiment = directory / 's21_nle_gaussian_glass_with_cls.yaml'
     edit(
         experiment,
         lambda config: config['execution'].update(jax_platforms='cpu'),
@@ -148,12 +148,15 @@ def test_glass_rejects_jax_and_additional_clustering(glass_config):
 
 def test_glass_rejects_lambda_prior_and_requires_explicit_zero(glass_config):
     experiment, site = glass_config
-    edit(experiment, lambda c: c.update(priors='priors.yaml'))
+    edit(experiment, lambda c: c.update(priors='priors_poisson.yaml'))
     with pytest.raises(CatwiseConfigError, match='fixed_parameters'):
         load_catwise_run(experiment, site)
-    edit(experiment, lambda c: c.update(priors='priors_glass.yaml'))
     edit(
-        experiment.parent / 'priors_glass.yaml',
+        experiment,
+        lambda c: c.update(priors='priors_no_extra_clustering.yaml'),
+    )
+    edit(
+        experiment.parent / 'priors_no_extra_clustering.yaml',
         lambda c: c.update(fixed_parameters={}),
     )
     with pytest.raises(CatwiseConfigError, match='fixed_parameters'):
@@ -203,7 +206,7 @@ def test_glass_runner_handoff_uses_five_priors_and_zero_lambda(
 
     _, paths, experiment, site = prepared_run
     run = load_catwise_run(
-        experiment.parent / 's21_nle_gaussian_glass.yaml', site
+        experiment.parent / 's21_nle_gaussian_glass_with_cls.yaml', site
     )
     from dipolesbi.pipelines.prepare_catwise_observation import (
         prepare_catwise_observation,

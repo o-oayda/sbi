@@ -8,7 +8,7 @@ required:
 - mask_sha256
 - native_nside
 - downscale_nside
-- native_count_summary
+- native_summaries
 - w1_min
 - w1_max
 - w12_min
@@ -39,10 +39,11 @@ properties:
     - 16
     - 32
     - 64
-  native_pseudo_cl:
-    type: boolean
-  native_count_summary:
-    const: log_dispersion
+  native_summaries:
+    type: array
+    enum:
+    - [log_dispersion]
+    - [log_dispersion, pseudo_cl]
   w1_min:
     type: number
     minimum: 9
