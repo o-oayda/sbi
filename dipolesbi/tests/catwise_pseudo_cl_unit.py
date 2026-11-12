@@ -155,7 +155,6 @@ def test_named_experiments_expose_complete_native_selection(
 @pytest.mark.parametrize(
     'summaries',
     [
-        [],
         ['pseudo_cl'],
         ['pseudo_cl', 'log_dispersion'],
         ['log_dispersion', 'log_dispersion'],
@@ -173,3 +172,54 @@ def test_invalid_native_summary_selections_are_rejected(tmp_path, summaries):
         load_catwise_run(
             configs / DEFAULT_EXPERIMENT.name, configs / 'site.example.yaml'
         )
+
+
+def test_empty_native_summaries_configures_map_only_inference(tmp_path):
+    from dipolesbi.pipelines.catwise_components import (
+        build_prior,
+        build_scenario,
+    )
+
+    configs = tmp_path / 'configs'
+    shutil.copytree(DEFAULT_EXPERIMENT.parent, configs)
+    observation_path = configs / 'observation.yaml'
+    observation = yaml.safe_load(observation_path.read_text())
+    observation['native_summaries'] = []
+    observation_path.write_text(yaml.safe_dump(observation))
+    run = load_catwise_run(
+        configs / DEFAULT_EXPERIMENT.name, configs / 'site.example.yaml'
+    )
+    assert run['summary']['total_ndim'] == 192
+    assert run['summary']['native_summary_ndim'] == 0
+    assert [part['name'] for part in run['summary']['components']] == [
+        'downscaled_count_map'
+    ]
+    assert run['inference']['multiround']['summary_ndim'] is None
+    scenario = build_scenario(run, build_prior(run), str(tmp_path))
+    assert scenario.multiround.summary_ndim is None
+    assert scenario.multiround.native_count_summary is None
+
+
+def test_empty_native_summaries_skip_statistics(monkeypatch):
+    from catsim.utils.healsphere import downgrade_ignore_nan
+    from dipolesbi.pipelines import catwise_pseudo_cl as module
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError('Native statistics must not be computed.')
+
+    monkeypatch.setattr(module, 'native_pseudo_cl', unexpected)
+    observation = {
+        'native_nside': 8,
+        'downscale_nside': 4,
+        'native_summaries': [],
+    }
+    # Zero dispersion would fail the log-dispersion path.
+    counts = np.ones(hp.nside2npix(8))
+    mask = np.ones(counts.size, dtype=bool)
+    mask[:4] = False
+    counts[~mask] = np.nan
+    result, retain = process_native_sample(counts, mask, observation)
+    expected, expected_mask = downgrade_ignore_nan(counts, mask, 4)
+    assert result.shape == retain.shape == (192,)
+    np.testing.assert_allclose(result, expected, equal_nan=True)
+    np.testing.assert_array_equal(retain, expected_mask)

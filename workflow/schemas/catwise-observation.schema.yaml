@@ -42,6 +42,7 @@ properties:
   native_summaries:
     type: array
     enum:
+    - []
     - [log_dispersion]
     - [log_dispersion, pseudo_cl]
   w1_min:

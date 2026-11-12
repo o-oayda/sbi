@@ -107,17 +107,17 @@ def observation_metadata(
     )
     coarse_npix = hp.nside2npix(obs["downscale_nside"])
     extra = {}
+    if "log_dispersion" in obs["native_summaries"]:
+        extra["log_dispersion"] = coarse_npix
     if "pseudo_cl" in obs["native_summaries"]:
         lo, hi = obs["pseudo_cl_range"]
-        extra = {
-            "pseudo_cl": {
-                "feature_slice": [coarse_npix + 1, coarse_npix + 2 + hi - lo],
-                "ell_min": lo,
-                "ell_max": hi,
-                "estimator": "NaMaster compute_coupled_cell",
-                "shot_noise_subtracted": False,
-                "decoupled": False,
-            }
+        extra["pseudo_cl"] = {
+            "feature_slice": [coarse_npix + 1, coarse_npix + 2 + hi - lo],
+            "ell_min": lo,
+            "ell_max": hi,
+            "estimator": "NaMaster compute_coupled_cell",
+            "shot_noise_subtracted": False,
+            "decoupled": False,
         }
     return {
         "format_version": 1,
@@ -128,7 +128,6 @@ def observation_metadata(
         "coordinates": "Galactic",
         "feature_layout": {
             "coarse_nest_pixels": [0, coarse_npix],
-            "log_dispersion": coarse_npix,
             **extra,
         },
         "selection": "preselected S21 catalogue; w1_min < w1 < w1_max; no colour recut",
@@ -260,10 +259,9 @@ def load_prepared_observation(
         raise DataValidationError(
             "Prepared native mask does not match the run."
         )
-    nsummary = 1
-    if "pseudo_cl" in run["observation"]["native_summaries"]:
-        lo, hi = run["observation"]["pseudo_cl_range"]
-        nsummary += hi - lo + 1
+    from dipolesbi.pipelines.catwise_config import describe_summary
+
+    nsummary = describe_summary(run["observation"])["native_summary_ndim"]
     nfeatures = hp.nside2npix(run["observation"]["downscale_nside"]) + nsummary
     if (
         x.shape != (nfeatures,)

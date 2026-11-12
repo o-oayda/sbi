@@ -254,13 +254,17 @@ def describe_summary(observation: dict[str, Any]) -> dict[str, Any]:
             "ordering": "NEST",
             "feature_slice": [0, map_ndim],
         },
-        {
-            "name": "log_dispersion",
-            "nside": observation["native_nside"],
-            "feature_slice": [map_ndim, map_ndim + 1],
-        },
     ]
-    total_ndim = map_ndim + 1
+    total_ndim = map_ndim
+    if "log_dispersion" in observation["native_summaries"]:
+        components.append(
+            {
+                "name": "log_dispersion",
+                "nside": observation["native_nside"],
+                "feature_slice": [total_ndim, total_ndim + 1],
+            }
+        )
+        total_ndim += 1
     if "pseudo_cl" in observation["native_summaries"]:
         lo, hi = observation["pseudo_cl_range"]
         components.append(
@@ -405,7 +409,7 @@ def load_catwise_run(
             / run["experiment_id"]
         ),
         map_ndim=map_ndim,
-        summary_ndim=total_ndim - map_ndim,
+        summary_ndim=(total_ndim - map_ndim) or None,
         simulations_per_round=per_round,
         effective_simulations=execution["effective_simulations"],
         simulation_path=None,

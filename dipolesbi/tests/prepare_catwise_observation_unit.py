@@ -61,6 +61,20 @@ def test_mask_order_and_ecliptic_toggle(run):
     np.testing.assert_array_equal(build_native_retain_mask(run), expected)
 
 
+def test_prepare_and_reload_without_native_summaries(run, tmp_path):
+    run['observation']['native_summaries'] = []
+    paths = prepare_catwise_observation(run, tmp_path / 'map_only')
+    values, mask, metadata = load_prepared_observation(run, paths['processed'])
+    assert values.shape == mask.shape == (192,)
+    assert metadata['feature_layout'] == {'coarse_nest_pixels': [0, 192]}
+    with np.load(paths['native']) as native:
+        expected, expected_mask = downgrade_ignore_nan(
+            native['x0'], native['mask'], 4
+        )
+    np.testing.assert_allclose(values, expected, equal_nan=True)
+    np.testing.assert_array_equal(mask, expected_mask)
+
+
 def test_prepare_and_reload(run, tmp_path):
     paths = prepare_catwise_observation(run, tmp_path / 'out')
     assert paths['native_plot'].read_bytes().startswith(b'\x89PNG\r\n\x1a\n')
