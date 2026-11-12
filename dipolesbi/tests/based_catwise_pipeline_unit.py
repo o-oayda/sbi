@@ -129,6 +129,8 @@ def test_run_inference_handoff(prepared_run, tmp_path, monkeypatch, backend):
     assert (output / 'reference_observation_native.png').is_file()
     assert (output / 'reference_observation_native_smoothed.png').is_file()
     software = yaml.safe_load((output / 'software-state.yaml').read_text())
+    assert software['jax_backend'] == 'cpu'
+    assert software['jax_devices']
     assert software['numpy_simulation_workers'] == (
         1 if backend == 'numpy' else None
     )

@@ -50,6 +50,19 @@ def edit(path, update):
     path.write_text(yaml.safe_dump(data))
 
 
+@pytest.mark.parametrize(
+    'experiment',
+    ['s21_nle_gaussian_glass.yaml', 's21_nle_gaussian_glass_with_cls.yaml'],
+)
+def test_shipped_glass_uses_cpu_simulations_and_gpu_inference(experiment):
+    run = load_catwise_run(
+        DEFAULT_EXPERIMENT.parent / experiment,
+        DEFAULT_EXPERIMENT.parent / 'site.example.yaml',
+    )
+    assert run['execution']['backend'] == 'numpy'
+    assert run['execution']['jax_platforms'] == 'cuda'
+
+
 def test_glass_config_and_model_roundtrip(glass_config, tmp_path):
     run = load_catwise_run(*glass_config)
     assert run['execution']['backend'] == 'numpy'

@@ -11,6 +11,7 @@ import sys
 from typing import Any, Mapping
 
 import numpy as np
+import jax
 import yaml
 from catsim import Catwise, CatwiseJax
 
@@ -66,6 +67,13 @@ def run_inference(
     )
 
     software_state = capture_software_state(repository_root or Path.cwd())
+    software_state['jax_backend'] = jax.default_backend()
+    software_state['jax_devices'] = [str(device) for device in jax.devices()]
+    print(
+        f"JAX inference backend: {software_state['jax_backend']}; "
+        f"devices: {', '.join(software_state['jax_devices'])}",
+        flush=True,
+    )
     workers = run['execution']['threads'] if n_workers is None else n_workers
     if (
         isinstance(workers, bool)

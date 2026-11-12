@@ -4,5 +4,4 @@ model: model_glass.yaml
 priors: priors_no_extra_clustering.yaml
 execution:
   backend: numpy
-  jax_platforms: cpu
   threads: 32
