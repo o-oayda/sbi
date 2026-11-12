@@ -258,7 +258,7 @@ def test_checksum_failure_blocks_mask_and_observation_creation(workflow_case):
     assert not (case["observation_dir"] / "reference_observation.npz").exists()
 
 
-def test_glass_experiment_reuses_preparation_and_tracks_glass_settings(
+def test_glass_experiment_rebuilds_summary_and_tracks_glass_settings(
     workflow_case,
 ):
     case = workflow_case
@@ -283,10 +283,22 @@ def test_glass_experiment_reuses_preparation_and_tracks_glass_settings(
         'generate_catwise_mask',
         'prepare_catwise_observation',
     ):
-        assert f'rule {rule}:' not in output
+        assert f'rule {rule}:' in output
     resolved = load_catwise_run(case['experiment'], case['site'])
     assert resolved['execution']['backend'] == 'numpy'
     assert len(resolved['priors']) == 5
+    code, output = snakemake(case, 'prepare_catwise_observation')
+    assert code == 0, output
+    directory = (
+        case['output_root']
+        / 'derived/observations'
+        / resolved['observation']['observation_id']
+    )
+    with np.load(directory / 'reference_observation.npz') as data:
+        assert data['x0'].shape == data['mask'].shape == (320,)
+    code, output = snakemake(case, 'prepare_catwise_observation', dry_run=True)
+    assert code == 0, output
+    assert 'Nothing to be done' in output
     edit(
         case['experiment'].parent / 'model_glass.yaml',
         lambda c: c.update(glass_lmax=64),
@@ -294,7 +306,7 @@ def test_glass_experiment_reuses_preparation_and_tracks_glass_settings(
     code, output = snakemake(case, dry_run=True)
     assert code == 0, output
     assert 'rule infer_catwise:' in output
-    assert 'rule prepare_catwise_observation:' not in output
+    assert 'rule prepare_catwise_observation:' in output
 
 
 def test_inherited_observation_parent_is_a_workflow_input(workflow_case):

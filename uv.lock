@@ -741,6 +741,7 @@ cuda = [
 ]
 glass = [
     { name = "catsim", extra = ["glass"] },
+    { name = "pymaster" },
 ]
 
 [package.dev-dependencies]
@@ -782,6 +783,7 @@ requires-dist = [
     { name = "nvidia-nccl-cu12", marker = "extra == 'cuda'", specifier = "==2.28.3" },
     { name = "nvidia-nvjitlink-cu12", marker = "extra == 'cuda'", specifier = "==12.9.86" },
     { name = "nvidia-nvshmem-cu12", marker = "extra == 'cuda'", specifier = "==3.4.5" },
+    { name = "pymaster", marker = "extra == 'glass'", specifier = ">=2.5,<3" },
     { name = "pymc", specifier = ">=5.25.1,<6.0.0" },
     { name = "pytest", specifier = ">=9.0.1,<10.0.0" },
     { name = "pyyaml", specifier = ">=6.0.3,<7.0.0" },
@@ -882,6 +884,23 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b5/ce/e1fd64d36e4a5717bd5e6b2ad188f5eaa2e902fde871ea73a79875793fc9/dpath-2.2.0.tar.gz", hash = "sha256:34f7e630dc55ea3f219e555726f5da4b4b25f2200319c8e6902c394258dd6a3e", size = 28266, upload-time = "2024-06-12T22:08:03.686Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/05/d1/8952806fbf9583004ab479d8f58a9496c3d35f6b6009ddd458bdd9978eaf/dpath-2.2.0-py3-none-any.whl", hash = "sha256:b330a375ded0a0d2ed404440f6c6a715deae5313af40bbb01c8a41d891900576", size = 17618, upload-time = "2024-06-12T22:08:01.881Z" },
+]
+
+[[package]]
+name = "ducc0"
+version = "0.42.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d0/28/e2b293b1744a63dd61465fdefe1b15d1d9bdbf6ff72fca4cb2f629084a14/ducc0-0.42.0.tar.gz", hash = "sha256:4e11c59b53a43355b053aebb2a62ee16eebeed026575f7d216cf09d437ce52ef", size = 370221, upload-time = "2026-10-20T13:55:04.752Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2d/3c/b09b9f83857e1ecef85fefad13cb9d4b7715d40a5468b4a6e2afb73f366d/ducc0-0.42.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:747c2e2245d322511d62b0f5e828707593a307a024374be3598fc1230a39a6e8", size = 2845820, upload-time = "2026-10-20T13:49:55.561Z" },
+    { url = "https://files.pythonhosted.org/packages/97/86/28a77cd679e761fa4344d365735378f4341b6aaa5544d2f5d72385f442f6/ducc0-0.42.0-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:004dfc41e53faad136a3661f6b5547a3dcf7a4e53e0f54711500dcf8d4d251fc", size = 4178914, upload-time = "2026-10-20T13:50:00.12Z" },
+    { url = "https://files.pythonhosted.org/packages/e4/c9/61a3d2c5e92c6ed7d70a77b71b88027128dd210e4f7b9213ee32f69e94a6/ducc0-0.42.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f892474cdced956a63699dd85aeaec4c03f0d3d48f3922caaf99b6b7557f86d3", size = 15388685, upload-time = "2026-10-20T13:50:12.509Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/4b/5ff35d02653676208cb20aecdf14348e23a26af1379a49e720e3c848de32/ducc0-0.42.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:f4aade804b055b71d38670814344b5d219de83a8dfa5b20e34073400bb0f1a0d", size = 5234348, upload-time = "2026-10-20T13:50:18.469Z" },
+    { url = "https://files.pythonhosted.org/packages/92/d0/4699ade3f4169d039a3dd0320e3afc05f7bb066cf9532b35e7eb7f3db26c/ducc0-0.42.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:26168fc91337ab011f4370006bc84b2ff03bda9118482d90f33317deac280922", size = 16503394, upload-time = "2026-10-20T13:50:30.785Z" },
+    { url = "https://files.pythonhosted.org/packages/53/80/11e20bc8d088f283066896ad28bc7c866c73a9b9de82964f063c396434c6/ducc0-0.42.0-cp312-cp312-win_amd64.whl", hash = "sha256:df22eca1b1988c461b52d90f0711cb87cfe4658ececb7b55dd3e6e4a3eafdb38", size = 2154642, upload-time = "2026-10-20T13:50:34.511Z" },
 ]
 
 [[package]]
@@ -2698,6 +2717,16 @@ sdist = { url = "https://files.pythonhosted.org/packages/c3/b2/bc9c9196916376152
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl", hash = "sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176", size = 1231151, upload-time = "2026-03-29T13:29:30.038Z" },
 ]
+
+[[package]]
+name = "pymaster"
+version = "2.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ducc0" },
+    { name = "healpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/95/45/470858f2a6a3f5133955bb87aed978a5e921d4052aea1c19718e6b72f0ae/pymaster-2.6.tar.gz", hash = "sha256:056a09bc8631cf338e93ef14d8c70272ad9554ef10498d919e920994531c57a2", size = 33707181, upload-time = "2025-12-16T09:18:28.905Z" }
 
 [[package]]
 name = "pymc"

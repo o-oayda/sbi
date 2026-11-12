@@ -100,7 +100,8 @@ MASK_IMPLEMENTATION = VALIDATION_IMPLEMENTATION + [
     str(CATSIM_ROOT / "utils/healsphere.py")
 ]
 PREPARATION_IMPLEMENTATION = MASK_IMPLEMENTATION + files(
-    "dipolesbi/pipelines/catwise_components.py"
+    "dipolesbi/pipelines/catwise_components.py",
+    "dipolesbi/pipelines/catwise_pseudo_cl.py",
 )
 INFERENCE_IMPLEMENTATION = (
     PREPARATION_IMPLEMENTATION

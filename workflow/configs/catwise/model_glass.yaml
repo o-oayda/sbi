@@ -40,6 +40,7 @@ glass_shell_edges:
 - 3.3
 - 3.4
 - 3.5
+glass_lmin: 2
 glass_lmax: 128
 glass_ncorr: 3
 glass_cosmology:

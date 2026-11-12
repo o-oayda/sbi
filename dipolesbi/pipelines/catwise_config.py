@@ -33,6 +33,7 @@ GLASS_DEFAULTS = {
     "glass_dndz": "catsim.configs:default_glass_dndz",
     "glass_bias": "catsim.configs:default_glass_bias",
     "glass_shell_edges": [index * 0.1 for index in range(36)],
+    "glass_lmin": 2,
     "glass_lmax": 128,
     "glass_ncorr": 3,
     "glass_cosmology": {
@@ -138,6 +139,8 @@ def _validate_science(run: dict[str, Any]) -> None:
             raise CatwiseConfigError(
                 "GLASS cannot be combined with additional Poisson clustering"
             )
+        if run["model"]["glass_lmin"] > run["model"]["glass_lmax"]:
+            raise CatwiseConfigError("glass_lmin must not exceed glass_lmax")
         edges = run["model"]["glass_shell_edges"]
         if any(high <= low for low, high in zip(edges, edges[1:])):
             raise CatwiseConfigError(
@@ -241,6 +244,48 @@ def _validate_science(run: dict[str, Any]) -> None:
         )
 
 
+def describe_summary(observation: dict[str, Any]) -> dict[str, Any]:
+    """Describe the complete ordered vector, including all native summaries."""
+    map_ndim = 12 * observation["downscale_nside"] ** 2
+    components = [
+        {
+            "name": "downscaled_count_map",
+            "nside": observation["downscale_nside"],
+            "ordering": "NEST",
+            "feature_slice": [0, map_ndim],
+        },
+        {
+            "name": "log_dispersion",
+            "nside": observation["native_nside"],
+            "feature_slice": [map_ndim, map_ndim + 1],
+        },
+    ]
+    total_ndim = map_ndim + 1
+    if observation.get("native_pseudo_cl", False):
+        lo, hi = observation["pseudo_cl_range"]
+        components.append(
+            {
+                "name": "pseudo_cl",
+                "nside": observation["native_nside"],
+                "ell_min": lo,
+                "ell_max": hi,
+                "binned": False,
+                "estimator": "NaMaster compute_coupled_cell",
+                "mask_coupled": True,
+                "shot_noise_subtracted": False,
+                "feature_slice": [total_ndim, total_ndim + hi - lo + 1],
+            }
+        )
+        total_ndim += hi - lo + 1
+    return {
+        "components": components,
+        "total_ndim": total_ndim,
+        "map_ndim": map_ndim,
+        "native_summary_ndim": total_ndim - map_ndim,
+        "feature_slice_convention": "zero-based, stop exclusive",
+    }
+
+
 def load_catwise_run(
     experiment_path: str | Path, site_path: str | Path
 ) -> dict[str, Any]:
@@ -330,7 +375,17 @@ def load_catwise_run(
             "config_layers": config_layers,
         },
     }
+    if run["observation"].get("native_pseudo_cl", False):
+        if model["position_model"] != "glass":
+            raise CatwiseConfigError("native_pseudo_cl requires a GLASS model")
+        run["observation"]["pseudo_cl_range"] = [
+            model["glass_lmin"],
+            model["glass_lmax"],
+        ]
     _validate_science(run)
+    run["summary"] = describe_summary(run["observation"])
+    map_ndim = run["summary"]["map_ndim"]
+    total_ndim = run["summary"]["total_ndim"]
     execution = run["execution"]
     per_round = execution["requested_simulations"] // execution["n_rounds"]
     execution.update(
@@ -347,8 +402,8 @@ def load_catwise_run(
             / "results"
             / run["experiment_id"]
         ),
-        map_ndim=12 * run["observation"]["downscale_nside"] ** 2,
-        summary_ndim=1,
+        map_ndim=map_ndim,
+        summary_ndim=total_ndim - map_ndim,
         native_count_summary=run["observation"]["native_count_summary"],
         simulations_per_round=per_round,
         effective_simulations=execution["effective_simulations"],

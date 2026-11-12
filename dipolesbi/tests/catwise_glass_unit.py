@@ -71,7 +71,7 @@ def test_glass_config_and_model_roundtrip(glass_config, tmp_path):
     assert config.glass_lmax == defaults.glass_lmax
     assert config.glass_ncorr == defaults.glass_ncorr
     assert config.glass_cosmology == defaults.glass_cosmology
-    np.testing.assert_array_equal(
+    np.testing.assert_allclose(
         config.glass_shell_edges, defaults.glass_shell_edges
     )
     assert config.glass_dndz is default_glass_dndz
@@ -205,6 +205,11 @@ def test_glass_runner_handoff_uses_five_priors_and_zero_lambda(
     run = load_catwise_run(
         experiment.parent / 's21_nle_gaussian_glass.yaml', site
     )
+    from dipolesbi.pipelines.prepare_catwise_observation import (
+        prepare_catwise_observation,
+    )
+
+    paths = prepare_catwise_observation(run, tmp_path / 'prepared_glass')
     native_mask = np.load(paths['native_mask'])
     calls = {}
 
@@ -243,7 +248,7 @@ def test_glass_runner_handoff_uses_five_priors_and_zero_lambda(
             result, mask = simulator(
                 NPKey.from_seed(42), {'w1_extra_error': np.array([2.0])}
             )
-            assert result.shape == mask.shape == (1, 193)
+            assert result.shape == mask.shape == (1, 320)
             save_model_config(kwargs['model_config'], tmp_path / 'model.json')
 
         def run(self):

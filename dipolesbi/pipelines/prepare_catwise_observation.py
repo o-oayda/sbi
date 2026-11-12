@@ -28,7 +28,9 @@ def validate_catwise_inputs(run: Mapping[str, Any]) -> dict[str, Any]:
         observation["catalogue_version"] != "S21"
         or observation["base_mask_version"] != "S21"
     ):
-        raise DataValidationError("Only the S21 catalogue and S21 mask are supported.")
+        raise DataValidationError(
+            "Only the S21 catalogue and S21 mask are supported."
+        )
     if observation["native_nside"] != 64:
         raise DataValidationError("The S21 mask requires native_nside=64.")
     files = {}
@@ -51,9 +53,13 @@ def validate_catwise_inputs(run: Mapping[str, Any]) -> dict[str, Any]:
         )
     for name in ("w1", "l", "b"):
         if not np.issubdtype(table[name].dtype, np.number):
-            raise DataValidationError(f"Catalogue column {name} must be numeric.")
+            raise DataValidationError(
+                f"Catalogue column {name} must be numeric."
+            )
     mask = np.load(files["mask"]["path"], allow_pickle=False)
-    if mask.shape != (hp.nside2npix(64),) or not np.all((mask == 0) | (mask == 1)):
+    if mask.shape != (hp.nside2npix(64),) or not np.all(
+        (mask == 0) | (mask == 1)
+    ):
         raise DataValidationError(
             "S21 mask must be a binary, one-dimensional nside=64 map."
         )
@@ -100,6 +106,19 @@ def observation_metadata(
         "mask_north_ecliptic",
     )
     coarse_npix = hp.nside2npix(obs["downscale_nside"])
+    extra = {}
+    if obs.get("native_pseudo_cl", False):
+        lo, hi = obs["pseudo_cl_range"]
+        extra = {
+            "pseudo_cl": {
+                "feature_slice": [coarse_npix + 1, coarse_npix + 2 + hi - lo],
+                "ell_min": lo,
+                "ell_max": hi,
+                "estimator": "NaMaster compute_coupled_cell",
+                "shot_noise_subtracted": False,
+                "decoupled": False,
+            }
+        }
     return {
         "format_version": 1,
         "observation": {key: obs[key] for key in keys},
@@ -110,6 +129,7 @@ def observation_metadata(
         "feature_layout": {
             "coarse_nest_pixels": [0, coarse_npix],
             "log_dispersion": coarse_npix,
+            **extra,
         },
         "selection": "preselected S21 catalogue; w1_min < w1 < w1_max; no colour recut",
     }
@@ -120,7 +140,10 @@ def _atomic_save(path: Path, writer) -> None:
     temporary = None
     try:
         with tempfile.NamedTemporaryFile(
-            dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
         ) as stream:
             temporary = Path(stream.name)
             writer(stream)
@@ -165,8 +188,12 @@ def prepare_catwise_observation(
                 "Supplied mask must be output_dir/native_mask.npy."
             )
         supplied_mask = np.load(mask_path, allow_pickle=False)
-        if supplied_mask.dtype != np.bool_ or not np.array_equal(supplied_mask, retain):
-            raise DataValidationError("Supplied native mask does not match the run.")
+        if supplied_mask.dtype != np.bool_ or not np.array_equal(
+            supplied_mask, retain
+        ):
+            raise DataValidationError(
+                "Supplied native mask does not match the run."
+            )
         retain = supplied_mask
     table = Table.read(report["files"]["catalogue"]["path"], format="fits")
     selected = (table["w1"] > obs["w1_min"]) & (table["w1"] < obs["w1_max"])
@@ -177,9 +204,9 @@ def prepare_catwise_observation(
         lonlat=True,
         nest=True,
     )
-    native = np.bincount(pixels, minlength=hp.nside2npix(obs["native_nside"])).astype(
-        np.float32
-    )
+    native = np.bincount(
+        pixels, minlength=hp.nside2npix(obs["native_nside"])
+    ).astype(np.float32)
     native[~retain] = np.nan
     x, mask = process_native_sample(native, retain, obs)
     metadata = json.dumps(observation_metadata(run, report), sort_keys=True)
@@ -191,7 +218,8 @@ def prepare_catwise_observation(
     }
     if mask_path is None:
         _atomic_save(
-            paths["native_mask"], lambda f: np.save(f, retain, allow_pickle=False)
+            paths["native_mask"],
+            lambda f: np.save(f, retain, allow_pickle=False),
         )
     _atomic_save(
         paths["native"],
@@ -201,7 +229,9 @@ def prepare_catwise_observation(
     )
     _atomic_save(
         paths["processed"],
-        lambda f: np.savez_compressed(f, x0=x, mask=mask, metadata_json=metadata),
+        lambda f: np.savez_compressed(
+            f, x0=x, mask=mask, metadata_json=metadata
+        ),
     )
     save_healpix_plot(paths["native_plot"], native)
     return paths
@@ -224,10 +254,22 @@ def load_prepared_observation(
         )
     native_mask = np.load(path.parent / "native_mask.npy", allow_pickle=False)
     expected_mask = build_native_retain_mask(run, report=report)
-    if native_mask.dtype != np.bool_ or not np.array_equal(native_mask, expected_mask):
-        raise DataValidationError("Prepared native mask does not match the run.")
-    nfeatures = hp.nside2npix(run["observation"]["downscale_nside"]) + 1
-    if x.shape != (nfeatures,) or mask.shape != (nfeatures,) or mask.dtype != np.bool_:
+    if native_mask.dtype != np.bool_ or not np.array_equal(
+        native_mask, expected_mask
+    ):
+        raise DataValidationError(
+            "Prepared native mask does not match the run."
+        )
+    nsummary = 1
+    if run["observation"].get("native_pseudo_cl", False):
+        lo, hi = run["observation"]["pseudo_cl_range"]
+        nsummary += hi - lo + 1
+    nfeatures = hp.nside2npix(run["observation"]["downscale_nside"]) + nsummary
+    if (
+        x.shape != (nfeatures,)
+        or mask.shape != (nfeatures,)
+        or mask.dtype != np.bool_
+    ):
         raise DataValidationError(
             "Prepared observation has incompatible feature or mask shape."
         )
@@ -239,7 +281,7 @@ def load_prepared_observation(
         run["observation"]["downscale_nside"],
     )
     expected_processed_mask = np.concatenate(
-        (np.asarray(coarse_mask, dtype=bool), [True])
+        (np.asarray(coarse_mask, dtype=bool), np.ones(nsummary, dtype=bool))
     )
     if not np.array_equal(mask, expected_processed_mask):
         raise DataValidationError(
@@ -284,13 +326,22 @@ def main() -> None:
             write_report(args.output, validate_catwise_inputs(run))
         elif args.command == "mask":
             retain = build_native_retain_mask(run)
-            _atomic_save(args.output, lambda f: np.save(f, retain, allow_pickle=False))
+            _atomic_save(
+                args.output, lambda f: np.save(f, retain, allow_pickle=False)
+            )
             save_healpix_plot(
                 args.plot_output or args.output.parent / "mask.png", retain
             )
         else:
-            prepare_catwise_observation(run, args.output_dir, mask_path=args.mask_path)
-    except (DataValidationError, FileNotFoundError, KeyError, ValueError) as error:
+            prepare_catwise_observation(
+                run, args.output_dir, mask_path=args.mask_path
+            )
+    except (
+        DataValidationError,
+        FileNotFoundError,
+        KeyError,
+        ValueError,
+    ) as error:
         raise SystemExit(f"error: {error}") from None
 
 

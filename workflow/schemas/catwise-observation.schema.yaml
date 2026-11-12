@@ -39,6 +39,8 @@ properties:
     - 16
     - 32
     - 64
+  native_pseudo_cl:
+    type: boolean
   native_count_summary:
     const: log_dispersion
   w1_min:

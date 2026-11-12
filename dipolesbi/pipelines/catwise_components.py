@@ -34,6 +34,7 @@ def build_prior(run: Mapping[str, Any]) -> DipolePriorNP:
 def build_catwise_config(run: Mapping[str, Any]) -> CatwiseConfig:
     """Configure a native-resolution simulator; shared processing follows it."""
     model = dict(run['model'])
+    model.pop('glass_lmin', None)
     clustering = model.pop('simulate_clustering')
     if clustering not in ('poisson', None):
         raise ValueError('Clustering must be poisson or null.')
@@ -106,7 +107,7 @@ def build_scenario(
 
 
 def process_native_sample(native_map, native_mask, observation):
-    """Downgrade a native count map and append its log dispersion."""
+    """Downgrade native counts and append the configured native summaries."""
     native_map = np.asarray(native_map)
     native_mask = np.asarray(native_mask, dtype=bool)
     expected = 12 * observation['native_nside'] ** 2
@@ -134,11 +135,17 @@ def process_native_sample(native_map, native_mask, observation):
     coarse = np.asarray(coarse, dtype=np.float32).copy()
     mask = np.asarray(mask, dtype=bool)
     coarse[~mask] = np.nan
+    summaries = [np.array([np.log(dispersion)], dtype=np.float32)]
+    if observation.get('native_pseudo_cl', False):
+        from dipolesbi.pipelines.catwise_pseudo_cl import native_pseudo_cl
+
+        summaries.append(
+            native_pseudo_cl(native_map, native_mask, observation)
+        )
+    summary = np.concatenate(summaries).astype(np.float32)
     return (
-        np.concatenate(
-            (coarse, np.array([np.log(dispersion)], dtype=np.float32))
-        ),
-        np.concatenate((mask, np.ones(1, dtype=bool))),
+        np.concatenate((coarse, summary)),
+        np.concatenate((mask, np.ones(summary.size, dtype=bool))),
     )
 
 

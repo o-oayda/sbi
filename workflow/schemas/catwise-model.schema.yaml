@@ -66,6 +66,9 @@ properties:
     items:
       type: number
       minimum: 0
+  glass_lmin:
+    type: integer
+    minimum: 2
   glass_lmax:
     type: integer
     minimum: 1
